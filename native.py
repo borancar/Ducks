@@ -38,6 +38,7 @@ from unicorn.x86_const import *
 
 import emulation
 from emulation import VgaDos, make_surface, capture, AudioSink
+from nsound import NativeVoices
 
 # Borland large-model layout, as established in emulation.py and analyze.py.
 DGROUP_IMAGE_OFF = 0x18950
@@ -61,7 +62,9 @@ class Native(VgaDos):
     """VgaDos plus a table of game functions serviced natively."""
 
     def __init__(self, *a, profile=False, keep_diagnostics=False,
-                 verify=False, **kw):
+                 verify=False, native_sound=False, **kw):
+        self.native_sound = native_sound
+        self.voices = None
         self.natives = {}            # image offset -> (name, handler, kind)
         self.native_calls = Counter()
         self.profiling = profile
@@ -86,6 +89,14 @@ class Native(VgaDos):
         self.sound_sites = Counter()
         self._sound_hook = None
         self._want_sound_profile = False
+        self.xms_callers = Counter()
+        self.xms_sizes = defaultdict(list)
+        self.call_tracers = defaultdict(Counter)
+        self.call_args = defaultdict(Counter)
+        self.writer_sites = Counter()
+        self.writer_fields = Counter()
+        self.play_calls = 0
+        self.play_samples = Counter()
         self.mark_reads = self.mark_rb = 0
         self.mark_nt = 0.0
         self.verify = verify
@@ -306,6 +317,197 @@ class Native(VgaDos):
         if not rows:
             print("           no native calls in this interval")
 
+    def observe_play_sample(self, off=0x151D2):
+        """Observe play_sample and decode the sample descriptor it is handed.
+
+        The layout was derived by matching what 0x155be reads against the XMS
+        move structure it builds, which implies:
+
+            +0x00 word   XMS handle
+            +0x02 dword  start offset within that handle's block
+            +0x06 dword  length in bytes
+
+        Rather than trust that, check it: the handle should be one we actually
+        allocated, and start+length should fit inside it. A layout error would
+        show up immediately as a bogus handle or an out-of-range extent.
+        """
+        lin = self.image_base + off
+        self.uc.hook_add(UC_HOOK_CODE, self._on_play_sample, None, lin, lin)
+        print(f"  [play] observing play_sample at {off:#07x}")
+
+    def _on_play_sample(self, uc, address, size, user):
+        ss, sp = self._reg(UC_X86_REG_SS), self._reg(UC_X86_REG_SP)
+        try:
+            a = struct.unpack("<4H", uc.mem_read(ss * 16 + sp + 4, 8))
+        except Exception:
+            return
+        desc_off, desc_seg, param, volume = a
+        try:
+            raw = bytes(uc.mem_read(desc_seg * 16 + desc_off, 10))
+        except Exception:
+            return
+        handle = struct.unpack_from("<H", raw, 0)[0]
+        start = struct.unpack_from("<I", raw, 2)[0]
+        length = struct.unpack_from("<I", raw, 6)[0]
+
+        blk = self.xms.handles.get(handle)
+        if blk is None:
+            verdict = f"handle {handle} NOT ALLOCATED"
+        elif start + length > len(blk):
+            verdict = (f"extent {start}+{length} exceeds handle {handle} "
+                       f"({len(blk)} bytes)")
+        else:
+            verdict = f"fits handle {handle} ({len(blk)} bytes) - layout OK"
+        self.play_calls += 1
+        self.play_samples[(handle, start, length)] += 1
+        if self.play_calls <= 12:
+            print(f"  [play] desc {desc_seg:04x}:{desc_off:04x} "
+                  f"handle={handle} start={start} len={length} "
+                  f"param={param:#06x} vol={volume:#06x} raw={raw.hex()} "
+                  f"-> {verdict}")
+
+    def play_report(self):
+        if not self.play_calls:
+            return
+        print(f"\n=== play_sample: {self.play_calls} calls, "
+              f"{len(self.play_samples)} distinct samples ===")
+        for (h, s, n), c in self.play_samples.most_common(12):
+            blk = self.xms.handles.get(h)
+            ok = "ok" if blk is not None and s + n <= len(blk) else "BAD"
+            print(f"  handle {h} start {s:>7} len {n:>7}  x{c:<4} {ok}")
+
+    def watch_writers(self, lo, hi):
+        """Count which functions write to a DGROUP range.
+
+        Finding the routine that starts a sound is easier from the data side
+        than by climbing the call graph: whatever populates a voice slot is the
+        trigger, whichever layer it happens to sit in.
+        """
+        base = self.dgroup_base
+        a, b = base + lo, base + hi
+
+        def on_write(uc, access, address, size, value, user):
+            off = address - base
+            self.writer_sites[(uc.reg_read(UC_X86_REG_CS),
+                               uc.reg_read(UC_X86_REG_IP))] += 1
+            self.writer_fields[off] += 1
+
+        self.uc.hook_add(UC_HOOK_MEM_WRITE, on_write, None, a, b)
+        print(f"  [watch] counting writers of DGROUP {lo:#06x}..{hi:#06x}")
+
+    def writer_report(self, img):
+        if not self.writer_sites:
+            return
+        print("\n=== writers of the watched DGROUP range ===")
+        by_func = defaultdict(int)
+        detail = defaultdict(list)
+        for (cs, ip), n in self.writer_sites.most_common(60):
+            off = cs * 16 + ip - self.image_base
+            fn = find_function_start(img, off)
+            by_func[fn] += n
+            detail[fn].append((off, n))
+        for fn, n in sorted(by_func.items(), key=lambda kv: -kv[1]):
+            name = f"{fn:#07x}" if fn is not None else "  unknown"
+            sites = ", ".join(f"{o:#07x}({c})" for o, c in detail[fn][:5])
+            print(f"  {name:>10}  {n:>7} writes   {sites}")
+        print("  fields touched: " + ", ".join(
+            f"{o:#06x}:{c}" for o, c in
+            sorted(self.writer_fields.items())[:16]))
+
+    def add_call_tracers(self, offsets):
+        """Observe calls to given functions and record who called them.
+
+        Walking the call graph upward is how the real entry point is found: the
+        mixer machinery runs at a steady rate no matter what happens, while the
+        function that actually starts a sound fires sporadically, in step with
+        game events. Comparing call rates separates the two.
+
+        These hooks only observe - the original body still runs.
+        """
+        for off in offsets:
+            lin = self.image_base + off
+            self.uc.hook_add(UC_HOOK_CODE, self._on_traced_call,
+                             None, lin, lin)
+            print(f"  [call] tracing calls to {off:#07x}")
+
+    def _on_traced_call(self, uc, address, size, user):
+        off = address - self.image_base
+        ss, sp = self._reg(UC_X86_REG_SS), self._reg(UC_X86_REG_SP)
+        try:
+            ip, cs = struct.unpack("<HH", uc.mem_read(ss * 16 + sp, 4))
+            caller = cs * 16 + ip - self.image_base
+        except Exception:
+            caller = None
+        self.call_tracers[off][caller] += 1
+        # Capture a few argument words too: the trigger's arguments should
+        # include something identifying which sound to play.
+        try:
+            args = struct.unpack("<4H", uc.mem_read(ss * 16 + sp + 4, 8))
+            self.call_args[(off, caller)][args] += 1
+        except Exception:
+            pass
+
+    def call_report(self, img):
+        if not self.call_tracers:
+            return
+        el = max(self._elapsed(), 1e-6)
+        print("\n=== traced calls (walking up towards the trigger) ===")
+        for off, callers in self.call_tracers.items():
+            total = sum(callers.values())
+            print(f"  {off:#07x}: {total} calls, {total / el:.1f}/s")
+            for caller, n in callers.most_common(6):
+                fn = find_function_start(img, caller) \
+                    if caller is not None else None
+                where = f"{fn:#07x}" if fn is not None else "unknown"
+                at = f"{caller:#07x}" if caller is not None else "?"
+                print(f"      from {where} (call at {at}): {n} "
+                      f"({n / el:.1f}/s)")
+                common = self.call_args.get((off, caller), Counter())
+                for args, c in common.most_common(2):
+                    print(f"          args {[hex(a) for a in args]} x{c}")
+
+    def _xms_call(self):
+        """Record who is calling XMS before servicing it.
+
+        The game reaches XMS through thin wrappers (push bp; mov bp,sp;
+        mov ah,fn; lcall [0x2b46]), so at the point the stub traps, BP still
+        points at the wrapper's frame: [BP+2]/[BP+4] is the return address of
+        whatever called the wrapper. That is the function actually loading or
+        moving sample data, which is what we want to identify.
+        """
+        ah = (self._reg(UC_X86_REG_AX) >> 8) & 0xFF
+        try:
+            ss, bp = self._reg(UC_X86_REG_SS), self._reg(UC_X86_REG_BP)
+            off, seg = struct.unpack("<HH", self.uc.mem_read(ss * 16 + bp + 2, 4))
+            caller = seg * 16 + off - self.image_base
+        except Exception:
+            caller = None
+        size = self._reg(UC_X86_REG_DX) if ah == 0x09 else (
+            self._reg(UC_X86_REG_BX) if ah == 0x0F else None)
+        self.xms_callers[(ah, caller)] += 1
+        if size is not None:
+            self.xms_sizes[(ah, caller)].append(size)
+        return super()._xms_call()
+
+    def xms_report(self, img):
+        if not self.xms_callers:
+            print("  [xms] no XMS calls recorded")
+            return
+        print("\n=== XMS callers (sample loading) ===")
+        FN = {0x00: "version", 0x08: "query free", 0x09: "allocate",
+              0x0A: "free", 0x0B: "move", 0x0F: "realloc"}
+        for (ah, caller), n in self.xms_callers.most_common(20):
+            fn = find_function_start(img, caller) if caller is not None else None
+            where = f"{fn:#07x}" if fn is not None else "unknown"
+            at = f"{caller:#07x}" if caller is not None else "?"
+            sizes = self.xms_sizes.get((ah, caller), [])
+            extra = ""
+            if sizes:
+                extra = (f"  sizes {min(sizes)}..{max(sizes)} KB, "
+                         f"last {sizes[-1]} KB")
+            print(f"  AH={ah:02x}h ({FN.get(ah, '?'):<10}) x{n:<5} "
+                  f"from {where} (call at {at}){extra}")
+
     def profile_sound(self):
         """Attribute writes to the sound DMA buffer to the code that made them.
 
@@ -387,7 +589,10 @@ class Native(VgaDos):
         (image offset, name, handler, return kind), where the handler receives
         this object and the argument base address on the stack.
         """
-        for off, name, fn, kind in NATIVE_TABLE:
+        table = list(NATIVE_TABLE)
+        if self.native_sound:
+            table += SOUND_NATIVES
+        for off, name, fn, kind in table:
             self.natives[off] = (name, fn, kind)
 
     def _on_native(self, uc, address, size, user):
@@ -786,6 +991,40 @@ def native_draw_sprite(m, args):
     return None
 
 
+def native_play_sample(m, args):
+    """play_sample(desc_far, id, loop) at 0x151d2 -> pygame."""
+    desc_off, desc_seg = m.arg16(args, 0), m.arg16(args, 1)
+    sid, loop = m.arg16(args, 2), m.arg16(args, 3)
+    return m.voices.play_sample(desc_off, desc_seg, sid, loop)
+
+
+def native_stop_voice(m, args):
+    """stop_voice(slot) at 0x15176."""
+    m.voices.stop_voice(m.arg16(args, 0))
+    return None
+
+
+def native_stop_by_id(m, args):
+    """stop_sound_by_id(id) at 0x15267."""
+    m.voices.stop_by_id(m.arg16(args, 0))
+    return None
+
+
+def native_is_playing(m, args):
+    """is_sound_playing(id) at 0x15298."""
+    return m.voices.is_playing(m.arg16(args, 0))
+
+
+def native_mix_voice(m, args):
+    """Neutralise the per-voice mixer at 0x156cc.
+
+    pygame is doing the playback now, so this must NOT accumulate into the mix
+    buffer - otherwise the same sample also reaches the DSP path and you hear it
+    twice, slightly out of step.
+    """
+    return None
+
+
 def native_sound_gather(m, args):
     """Native replacement for the sample gather at 0x157c1. Takes no arguments.
 
@@ -1080,6 +1319,17 @@ NATIVE_TABLE = [
     (0x157C1, "sound_gather", native_sound_gather, "far"),
 ]
 
+# Enabled only with --native-sound. The whole family must go together: the game
+# queries and stops sounds by id and reads an active-voice count, so pygame and
+# the guest's voice table have to agree or sounds stop starting.
+SOUND_NATIVES = [
+    (0x151D2, "play_sample", native_play_sample, "far"),
+    (0x15176, "stop_voice", native_stop_voice, "far"),
+    (0x15267, "stop_sound_by_id", native_stop_by_id, "far"),
+    (0x15298, "is_sound_playing", native_is_playing, "far"),
+    (0x156CC, "mix_voice", native_mix_voice, "far"),
+]
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -1091,6 +1341,17 @@ def main():
                     help="report which routines do the drawing, then exit")
     ap.add_argument("--profile-sound", action="store_true",
                     help="profile writes to the sound DMA buffer from the start")
+    ap.add_argument("--native-sound", action="store_true",
+                    help="play voices through pygame instead of the emulated "
+                         "Sound Blaster path")
+    ap.add_argument("--observe-play", action="store_true",
+                    help="decode the descriptor passed to play_sample")
+    ap.add_argument("--watch-writers", default="",
+                    help="DGROUP range lo,hi to count writers of, "
+                         "e.g. 0x3c78,0x3cb0")
+    ap.add_argument("--trace-calls", default="",
+                    help="comma-separated image offsets to trace callers of, "
+                         "e.g. 0x155be,0x157c1")
     ap.add_argument("--verify", action="store_true",
                     help="run each native alongside the code it replaces and "
                          "diff the result (slow; correctness check only)")
@@ -1109,16 +1370,25 @@ def main():
     pygame.font.init()
     m = Native(args.exe, blaster=args.blaster, profile=args.profile,
                keep_diagnostics=args.keep_diagnostics, verify=args.verify,
-               max_insns=1 << 62)
+               native_sound=args.native_sound, max_insns=1 << 62)
+    m.voices = NativeVoices(m) if args.native_sound else None
     # Kept in hand so the profile report can name functions at any moment.
     _d = open(args.unpacked, "rb").read()
     img = _d[struct.unpack_from("<13H", _d, 2)[3] * 16:]
     if args.profile_sound:
         m.profile_sound()
+    if args.observe_play:
+        m.observe_play_sample()
+    if args.watch_writers:
+        _lo, _hi = [int(x, 0) for x in args.watch_writers.split(",")]
+        m.watch_writers(_lo, _hi)
+    if args.trace_calls:
+        m.add_call_tracers([int(x, 0) for x in args.trace_calls.split(",")
+                            if x.strip()])
     print(f"=== native-I/O port: {len(m.natives)} routine(s) serviced "
           f"natively, everything else emulated ===")
     audio = None
-    if args.blaster and not args.no_audio:
+    if args.blaster and not args.no_audio and not args.native_sound:
         audio = AudioSink()
 
     fpath = pygame.font.match_font("dejavusansmono,liberationmono,monospace")
@@ -1160,6 +1430,8 @@ def main():
             addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
         if audio is not None:
             audio.push(m.sb)
+        if m.voices is not None:
+            m.voices.reap()
 
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT or (
@@ -1172,6 +1444,10 @@ def main():
                 elif ev.key == pygame.K_F6:
                     m.profile_report(img)
                     m.sound_report(img)
+                    m.xms_report(img)
+                    m.call_report(img)
+                    m.writer_report(img)
+                    m.play_report()
                 elif ev.key == pygame.K_F3:
                     m.profile_sound()
                 elif ev.key == pygame.K_F7:
@@ -1274,6 +1550,13 @@ def main():
         m.profile_report(img)
     if m.sound_sites:
         m.sound_report(img)
+    m.xms_report(img)
+    m.call_report(img)
+    m.writer_report(img)
+    m.play_report()
+    if m.voices is not None:
+        import json
+        print(f"  native voices   : {json.dumps(m.voices.summary())}")
     pygame.quit()
 
 

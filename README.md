@@ -165,6 +165,52 @@ One structural win worth knowing: the sprite blitter draws only pixels whose
 four times the loop iterations for one sprite's pixels. A native does all planes
 in one pass.
 
+## The game's sound API
+
+```sh
+venv/bin/python native.py --blaster --native-sound
+```
+
+Recovered by disassembly, Ducks' sound layer is eight voices:
+
+| address | function |
+| --- | --- |
+| `0x151d2` | `play_sample(desc_far, id, loop)` -> 1, or 0 if all voices busy |
+| `0x15176` | `stop_voice(slot)` |
+| `0x15267` | `stop_sound_by_id(id)` |
+| `0x15298` | `is_sound_playing(id)` |
+| `0x156cc` | per-voice mix; `0x155be` streams from XMS; `0x157c1` gathers to DMA |
+
+A 12-byte voice slot at `DGROUP:0x3c78`: `+0/+2` descriptor far pointer, `+4`
+caller-supplied sound id (`0xffff` = free), `+6/+8` 32-bit cursor, `+10` loop
+flag. Busy flags at `0x3cd8` (one word per slot), active count at `0x3d1c`.
+A sample descriptor is `+0` XMS handle, `+2` dword start, `+6` dword length -
+confirmed by checking every observed descriptor against the handle it names.
+
+Everything under that API exists only because a real-mode program cannot address
+extended memory: samples live in XMS, get copied down into a conventional
+staging buffer, are additively mixed into a 16-bit accumulator, passed through a
+clip table and fed to the DSP a block at a time. `--native-sound` replaces the
+whole chain with pygame channels, slicing PCM straight out of the XMS bytearray.
+
+Notes for anyone touching this:
+
+- **Intercept the whole family or none of it.** The game queries and stops sounds
+  by id and reads the active count. If pygame owns playback while the guest voice
+  table disagrees, every slot looks busy and sounds stop starting.
+- **Neutralise `mix_voice`**, or the sample also reaches the DSP path and plays
+  twice, slightly out of step.
+- **Samples are signed 8-bit** - the mixer sign-extends with `cbw` before
+  accumulating. Feeding them to an unsigned mixer unconverted gives noise.
+- **`pygame.init()` opens the mixer first**, so it must be `quit()` and reopened
+  at the game's rate. Testing `get_init()` first silently leaves 44100/16/stereo.
+- **Volume is not per-voice.** `play_sample` takes only id and loop; gain lived in
+  the clip table that `--native-sound` bypasses, so AMBIENCE VOLUME currently has
+  no effect on that path. Known gap.
+
+Sound was never a performance problem - 11 KB/s against 4.5 MB/s for graphics -
+so this is architectural, not an optimisation.
+
 ## Files
 
 | file | purpose |
@@ -174,6 +220,7 @@ in one pass.
 | `emulation.py` | DOS + VGA + SDL; runs the game interactively |
 | `sb.py` | Sound Blaster DSP, DMA channel and IRQ model |
 | `xms.py` | XMS / HIMEM.SYS driver; without it the game has no sound |
+| `nsound.py` | the game's 8-voice sound API implemented on pygame |
 | `find_sound_code.py` | finds the code referencing a given string constant |
 | `trace_dos.py` | headless DOS shim; logs interrupts, files, ports |
 | `analyze.py` | static census of interrupts/ports over the unpacked code |
