@@ -1892,6 +1892,13 @@ def main():
     if m.native_file:
         print(f"  native file I/O : {m.file_reads} reads ({m.file_bytes} bytes), "
               f"{m.file_seeks} seeks, {m.native_declined} declined")
+    if m.file_ops:
+        print(f"  file operations ({len(m.file_ops)}):")
+        for op in m.file_ops[-40:]:
+            print(f"    {op}")
+    if m.overlay:
+        print(f"  overlay files   : "
+              f"{ {k: len(v) for k, v in m.overlay.items()} }")
     pygame.quit()
 
 

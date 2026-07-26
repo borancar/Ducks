@@ -90,6 +90,8 @@ class DosMachine:
         self.port_in = Counter()
         self.stdout = bytearray()
         self.handles = {}
+        self.overlay = {}   # DOS path -> bytes, for files the game creates
+        self.file_ops = []  # always recorded, regardless of verbosity
         self.next_handle = 5
         self.dta = (PSP_SEG, 0x80)
         self.finished = None
@@ -178,6 +180,16 @@ class DosMachine:
     def _cf(self, on):
         f = self.uc.reg_read(UC_X86_REG_EFLAGS)
         self.uc.reg_write(UC_X86_REG_EFLAGS, (f | 1) if on else (f & ~1))
+
+    def _fop(self, msg):
+        """Record a file operation unconditionally.
+
+        _note() is silenced when the machine is constructed with verbose=False,
+        which is how the native port runs - so file activity was invisible in
+        exactly the situation where it needed diagnosing.
+        """
+        self.file_ops.append(msg)
+        print(f"    [file] {msg}")      # always: needed for live diagnosis
 
     def _note(self, msg):
         self.log.append(msg)
@@ -389,7 +401,26 @@ class DosMachine:
             self._set(UC_X86_REG_AX, 0x8000)
             self._set(UC_X86_REG_BX, 0x1000)
             return
-        if ah in (0x49, 0x4A, 0x33, 0x38, 0x43, 0x44, 0x0B, 0x62):
+        if ah == 0x43:
+            # Get/set file attributes. Blindly reporting success told the
+            # runtime that a save slot already existed, so its open() never
+            # took the create path and fopen("wb") failed. It must answer
+            # honestly about existence, including for overlay files.
+            name = self._str(ds, dx)
+            key = name.replace("/", "\\").upper()
+            if (ax & 0xFF) == 0:
+                exists = key in self.overlay or os.path.isfile(host_path(name))
+                if exists:
+                    self._set(UC_X86_REG_CX, 0x20)      # archive bit
+                    self._cf(False)
+                else:
+                    self._fop(f"GETATTR {name!r} -> NOT FOUND")
+                    self._cf(True)
+                    self._set(UC_X86_REG_AX, 2)         # ENOENT
+            else:
+                self._cf(False)                         # set attrs: accept
+            return
+        if ah in (0x49, 0x4A, 0x33, 0x38, 0x44, 0x0B, 0x62):
             if ah == 0x62:
                 self._set(UC_X86_REG_BX, PSP_SEG)
             if ah == 0x0B:
@@ -405,32 +436,55 @@ class DosMachine:
             name = self._str(ds, dx)
             hp = host_path(name)
             creating = ah in (0x3C, 0x5B)
+            key = name.replace("/", "\\").upper()
             if creating:
-                self._note(f"INT 21h CREATE {name!r} -> {hp} "
-                           f"(intercepted, not written to disk)")
+                self._fop(f"CREATE {name!r} -> overlay")
+                self.overlay[key] = bytearray()
                 h = Handle(name, b"", True)
+                h.key = key
                 self.files_written.setdefault(name, 0)
             else:
-                if os.path.isfile(hp):
+                if key in self.overlay:
+                    # Served from the overlay so saved games can be loaded back
+                    # within a session, without ever touching the real
+                    # directory. A save that cannot be re-read is not a save.
+                    blob = bytes(self.overlay[key])
+                    self._fop(f"OPEN {name!r} -> overlay ({len(blob)} bytes)")
+                    h = Handle(name, blob, True)
+                    h.key = key
+                elif os.path.isfile(hp):
                     with open(hp, "rb") as f:       # READ-ONLY
                         blob = f.read()
-                    self._note(f"INT 21h OPEN {name!r} -> {hp} "
-                               f"({len(blob)} bytes)")
+                    self._fop(f"OPEN {name!r} -> host ({len(blob)} bytes)")
                     h = Handle(name, blob, False)
                     self.files_read[name] = len(blob)
                 else:
-                    self._note(f"INT 21h OPEN {name!r} -> NOT FOUND")
+                    self._fop(f"OPEN {name!r} -> NOT FOUND")
                     self.files_missing.append(name)
                     self._cf(True)
                     self._set(UC_X86_REG_AX, 2)
                     return
-            hn = self.next_handle
-            self.next_handle += 1
+            # Allocate the LOWEST free handle, as real DOS does. Handing out
+            # ever-increasing numbers eventually exceeds the runtime's file
+            # table (Borland validates every fd against [0x2f6c], typically 20)
+            # and then fopen returns NULL - which looked like a save failure
+            # only after enough levels had been loaded to burn through the
+            # numbers.
+            hn = next((n for n in range(5, 20) if n not in self.handles), None)
+            if hn is None:
+                self._fop(f"OPEN {name!r} -> NO FREE HANDLE")
+                self._cf(True)
+                self._set(UC_X86_REG_AX, 4)      # too many open files
+                return
             self.handles[hn] = h
+            self._fop(f"  -> handle {hn} ({len(self.handles)} open)")
             self._set(UC_X86_REG_AX, hn)
             return
         if ah == 0x3E:
-            self.handles.pop(bx, None)
+            h = self.handles.pop(bx, None)
+            if h is not None and getattr(h, "key", None):
+                self.overlay[h.key] = bytearray(h.data)
+                self._fop(f"CLOSE {h.path!r} -> overlay {len(h.data)} bytes")
             return
         if ah == 0x3F:
             h = self.handles.get(bx)
@@ -450,8 +504,17 @@ class DosMachine:
                 h = self.handles.get(bx)
                 nm = h.path if h else f"handle {bx}"
                 self.files_written[nm] = self.files_written.get(nm, 0) + cx
-                if h:
+                if h is not None:
+                    data = self._rd(ds, dx, cx)
+                    if h.pos + cx > len(h.data):
+                        h.data.extend(b"\x00" * (h.pos + cx - len(h.data)))
+                    h.data[h.pos:h.pos + cx] = data
+                    h.pos += cx
                     h.written += cx
+                    if getattr(h, "key", None):
+                        self.overlay[h.key] = bytearray(h.data)
+                    self._fop(f"WRITE {h.path!r} +{cx} at {h.pos - cx} "
+                              f"(total {len(h.data)})")
             self._set(UC_X86_REG_AX, cx)
             return
         if ah == 0x42:
@@ -469,8 +532,8 @@ class DosMachine:
             return
         if ah == 0x41:
             name = self._str(ds, dx)
-            self._note(f"INT 21h DELETE {name!r} (intercepted, "
-                       f"real file untouched)")
+            self.overlay.pop(name.replace("/", "\\").upper(), None)
+            self._fop(f"DELETE {name!r}")
             return
         if ah in (0x4E, 0x4F):
             self._cf(True)
@@ -490,8 +553,9 @@ class DosMachine:
         if ah in (0x01, 0x06, 0x07, 0x08):    # console input -> supply a space
             self._set(UC_X86_REG_AX, (ax & 0xFF00) | 0x20)
             return
-        self._note(f"unhandled INT 21h AH={ah:02x}h "
-                   f"({DOS_FN.get(ah, '?')}) AX={ax:04x}")
+        self._fop(f"UNHANDLED INT 21h AH={ah:02x}h "
+                  f"({DOS_FN.get(ah, '?')}) AX={ax:04x} -- may be why an "
+                  f"operation failed")
 
     # ------------------------------------------------------------------- run
     def run(self):
