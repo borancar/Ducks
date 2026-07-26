@@ -72,6 +72,9 @@ class Native(VgaDos):
         self.native_file = native_file
         self.native_xms = native_xms
         self.native_setup = native_setup
+        self.native_fp = False       # set by install_native_fp()
+        self.fp_sites = {}           # linear site -> interrupt it replaced
+        self.fp_unknown = Counter()
         self.persist = persist
         self.files_persisted = {}
         self.image_base = 0          # real value after super().__init__
@@ -444,7 +447,106 @@ class Native(VgaDos):
     # number alone identifies the service.
     _INT_HAS_AH = (0x21, 0x2F, 0x10, 0x16, 0x33, 0x13, 0x15)
 
+    # Borland's floating point, and how to undo it. The compiler emits every x87
+    # instruction as FWAIT followed by an ESC opcode (0xD8-0xDF) plus its ModRM
+    # and displacement. Linking against the emulator library overwrites just that
+    # two-byte FWAIT+ESC pair with a two-byte INT, leaving the operand bytes
+    # alone - which is why the interrupt number carries the opcode: INT 34h..3Bh
+    # for D8..DF, and INT 3Dh for a lone FWAIT. Reversing it is a two-byte write.
+    FP_ESC_LO, FP_ESC_HI = 0x34, 0x3B
+    FP_WAIT = 0x3D
+
+    def install_native_fp(self):
+        """Hand the game's floating point to the real FPU.
+
+        Every FP operation currently traps into Borland's software emulator
+        inside the binary - 24207 interrupts in a play session, each running a
+        few hundred emulated instructions to do one multiply. Unicorn implements
+        x87 in real mode, so the instructions the compiler originally wrote can
+        simply be put back and executed.
+
+        Sites patch themselves the first time they execute rather than in a
+        static sweep: a two-byte scan for CD 34..CD 3B across 114 KB of a 16-bit
+        image cannot tell code from data, and a false positive would corrupt
+        whatever it hit. An interrupt that has just fired, by contrast, is proof
+        that those bytes are a real instruction.
+
+        Because patching happens before the emulator's handler ever runs, no
+        operation executes against its in-memory FP stack, so the two
+        representations never coexist.
+        """
+        # A real FPU powers up with control word 0x037f. Unicorn's starts at
+        # zero, which selects single precision and unmasks every exception, so
+        # run one FINIT before the game touches floating point. There is no
+        # control-word register exposed to write it directly.
+        scratch = 0x800
+        saved = bytes(self.uc.mem_read(scratch, 2))
+        cs, ip = self._reg(UC_X86_REG_CS), self._reg(UC_X86_REG_IP)
+        self.uc.reg_write(UC_X86_REG_CS, 0)
+        self.uc.mem_write(scratch, bytes([0xDB, 0xE3]))          # FINIT
+        self.uc.emu_start(scratch, scratch + 2, count=1)
+        self.uc.mem_write(scratch, saved)
+        self.uc.reg_write(UC_X86_REG_CS, cs)
+        self.uc.reg_write(UC_X86_REG_IP, ip)
+        try:
+            self.uc.ctl_remove_cache(scratch, scratch + 2)
+        except Exception:
+            pass
+        self.native_fp = True
+        print("  [fp] x87 enabled; FP sites will patch themselves on first use")
+
+    def _patch_fp_site(self, uc, intno):
+        """Rewrite one emulator interrupt back into the x87 instruction it was."""
+        ip = self._reg(UC_X86_REG_IP)
+        site = self._reg(UC_X86_REG_CS) * 16 + ((ip - 2) & 0xFFFF)
+        if self.FP_ESC_LO <= intno <= self.FP_ESC_HI:
+            repl = bytes([0x9B, 0xD8 + intno - self.FP_ESC_LO])
+        elif intno == self.FP_WAIT:
+            repl = bytes([0x9B, 0x90])
+        else:
+            # INT 3Ch (segment-override prefix plus ESC) and 3Eh, whose encodings
+            # we have never seen execute and so cannot reverse with confidence.
+            # Servicing one through the emulator would be worse than useless: its
+            # FP stack lives in memory while every patched site uses the real
+            # one, so from here the two silently disagree.
+            if not self.fp_unknown[intno]:
+                print(f"  [fp] INT {intno:02x}h at {site:#07x} is not a plain "
+                      f"ESC opcode. Handing it to the emulator MIXES two "
+                      f"floating-point states - results after this are suspect.")
+            self.fp_unknown[intno] += 1
+            return False
+        uc.mem_write(site, repl)
+        try:
+            uc.ctl_remove_cache(site, site + 16)
+        except Exception:
+            pass
+        self._set(UC_X86_REG_IP, (ip - 2) & 0xFFFF)   # rewind onto the new bytes
+        self.fp_sites[site] = intno
+        uc.emu_stop()          # the outer chunk loop resumes at the rewound IP
+        return True
+
+    def fp_report(self, img):
+        if not self.fp_sites and not self.fp_unknown:
+            return
+        print(f"\n=== floating point: {len(self.fp_sites)} sites now run on the "
+              f"real FPU ===")
+        by_fn = Counter()
+        for site, intno in self.fp_sites.items():
+            off = site - self.image_base
+            f = find_function_start(img, off)
+            by_fn[f if f is not None else off] += 1
+        for f, n in by_fn.most_common(12):
+            print(f"  {f:#07x}  {n} instruction(s)")
+        if self.fp_unknown:
+            print(f"  UNHANDLED, FP state mixed: {dict(self.fp_unknown)}")
+
     def _on_intr(self, uc, intno, user):
+        if self.native_fp and 0x34 <= intno <= 0x3E:
+            if self._patch_fp_site(uc, intno):
+                return
+        return self._record_intr(uc, intno, user)
+
+    def _record_intr(self, uc, intno, user):
         """Record where each interrupt is raised, then service it normally.
 
         Counts alone cannot drive removal - the goal is to replace the code that
@@ -1926,6 +2028,9 @@ def main():
     ap.add_argument("--native-setup", action="store_true",
                     help="serve the C runtime's heap-resize and INT 10h wrapper "
                          "natively")
+    ap.add_argument("--native-fp", action="store_true",
+                    help="put Borland's emulated x87 instructions back and let "
+                         "the real FPU run them")
     ap.add_argument("--run-seconds", type=float, default=0.0,
                     help="quit cleanly after N seconds, for measurement runs")
     ap.add_argument("--read-only", action="store_true",
@@ -1953,6 +2058,8 @@ def main():
         m.capture_loader()
     if args.native_xms:
         m.install_native_xms()
+    if args.native_fp:
+        m.install_native_fp()
     m.trace_mouse = args.trace_mouse
     m.trace_keyboard = args.trace_keyboard
     m.trace_file = args.trace_file
@@ -2148,6 +2255,7 @@ def main():
     m.bank.report()
     m.mouse_report(img)
     m.kbd_report(img)
+    m.fp_report(img)
     m.int_report(img)
     m.file_report(img)
     if m.native_file:
