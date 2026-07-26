@@ -62,10 +62,14 @@ class Native(VgaDos):
     """VgaDos plus a table of game functions serviced natively."""
 
     def __init__(self, *a, profile=False, keep_diagnostics=False,
-                 verify=False, native_sound=False, **kw):
+                 verify=False, native_sound=False, native_mouse=False,
+                 **kw):
         self.native_sound = native_sound
+        self.native_mouse = native_mouse
         self.voices = None
         self.bank = SoundBank()
+        self.trace_mouse = False
+        self.mouse_stacks = Counter()
         self.natives = {}            # image offset -> (name, handler, kind)
         self.native_calls = Counter()
         self.profiling = profile
@@ -317,6 +321,52 @@ class Native(VgaDos):
                   f"{per_frame:8.1f}/frame  ({n} calls)")
         if not rows:
             print("           no native calls in this interval")
+
+    def _mouse(self):
+        """Service INT 33h, optionally recording who asked.
+
+        The interrupt number is patched into the instruction at runtime by
+        Borland's int86, so there is no static `CD 33` to search for and the
+        caller cannot be found by disassembly. Walk the BP chain instead:
+        Borland sets up standard frames, so [BP+2]/[BP+4] is a return address
+        and [BP] links to the caller's frame. A few levels of that reaches the
+        game's own mouse code, above the library shim.
+        """
+        if self.trace_mouse:
+            self.mouse_stacks[self._bp_chain(5)] += 1
+        return super()._mouse()
+
+    def _bp_chain(self, depth):
+        frames = []
+        bp = self._reg(UC_X86_REG_BP)
+        ss = self._reg(UC_X86_REG_SS)
+        for _ in range(depth):
+            if not 2 <= bp < 0xFFF0:
+                break
+            try:
+                nxt, ip, cs = struct.unpack(
+                    "<HHH", self.uc.mem_read(ss * 16 + bp, 6))
+            except Exception:
+                break
+            off = cs * 16 + ip - self.image_base
+            if not 0 <= off < 0x20000:
+                break
+            frames.append(off)
+            if nxt <= bp:
+                break
+            bp = nxt
+        return tuple(frames)
+
+    def mouse_report(self, img):
+        if not self.mouse_stacks:
+            return
+        print("\n=== INT 33h callers (BP chain, innermost first) ===")
+        for chain, n in self.mouse_stacks.most_common(8):
+            named = []
+            for off in chain:
+                f = find_function_start(img, off)
+                named.append(f"{f:#07x}" if f is not None else f"?{off:#07x}")
+            print(f"  x{n:<7} {' <- '.join(named)}")
 
     def capture_loader(self, off=0x14F07):
         """Capture each sample into the bank as the loader finishes building it.
@@ -652,6 +702,8 @@ class Native(VgaDos):
         table = list(NATIVE_TABLE)
         if self.native_sound:
             table += SOUND_NATIVES
+        if self.native_mouse:
+            table += MOUSE_NATIVES
         for off, name, fn, kind in table:
             self.natives[off] = (name, fn, kind)
 
@@ -1085,6 +1137,39 @@ def native_mix_voice(m, args):
     return None
 
 
+def native_mouse_motion(m, args):
+    """mouse_motion(int far *dx, int far *dy) at 0x0675b (INT 33h AX=0x0b).
+
+    Reports whole mickeys and carries the remainder, exactly as the INT 33h
+    handler did - the game integrates these to position its own cursor and never
+    asks for an absolute position, so dropping fractions loses fine control.
+    """
+    dx_off, dx_seg = m.arg16(args, 0), m.arg16(args, 1)
+    dy_off, dy_seg = m.arg16(args, 2), m.arg16(args, 3)
+    idx, idy = int(m.mouse_rel[0]), int(m.mouse_rel[1])
+    m.mouse_rel[0] -= idx
+    m.mouse_rel[1] -= idy
+    m.write(dx_seg * 16 + dx_off, struct.pack("<h", max(-32768, min(32767, idx))))
+    m.write(dy_seg * 16 + dy_off, struct.pack("<h", max(-32768, min(32767, idy))))
+    return None
+
+
+def native_mouse_presses(m, args):
+    """mouse_presses(button) at 0x0678e (INT 33h AX=5): count since last asked."""
+    b = min(m.arg16(args, 0), 2)
+    n = m.press_count[b]
+    m.press_count[b] = 0
+    return n
+
+
+def native_mouse_releases(m, args):
+    """mouse_releases(button) at 0x067ba (INT 33h AX=6)."""
+    b = min(m.arg16(args, 0), 2)
+    n = m.release_count[b]
+    m.release_count[b] = 0
+    return n
+
+
 def native_sound_gather(m, args):
     """Native replacement for the sample gather at 0x157c1. Takes no arguments.
 
@@ -1382,6 +1467,15 @@ NATIVE_TABLE = [
 # Enabled only with --native-sound. The whole family must go together: the game
 # queries and stops sounds by id and reads an active-voice count, so pygame and
 # the guest's voice table have to agree or sounds stop starting.
+# Enabled with --native-mouse. These three are the game's entire mouse input:
+# it never asks for an absolute position, so replacing them removes all INT 33h
+# traffic (2.69M calls in one session) and the int86 shim behind it.
+MOUSE_NATIVES = [
+    (0x0675B, "mouse_motion", native_mouse_motion, "far"),
+    (0x0678E, "mouse_presses", native_mouse_presses, "far"),
+    (0x067BA, "mouse_releases", native_mouse_releases, "far"),
+]
+
 SOUND_NATIVES = [
     (0x151D2, "play_sample", native_play_sample, "far"),
     (0x15176, "stop_voice", native_stop_voice, "far"),
@@ -1401,6 +1495,11 @@ def main():
                     help="report which routines do the drawing, then exit")
     ap.add_argument("--profile-sound", action="store_true",
                     help="profile writes to the sound DMA buffer from the start")
+    ap.add_argument("--native-mouse", action="store_true",
+                    help="serve the game's mouse wrappers natively, removing "
+                         "all INT 33h traffic")
+    ap.add_argument("--trace-mouse", action="store_true",
+                    help="record which game functions poll INT 33h")
     ap.add_argument("--sound-bank", action="store_true",
                     help="capture samples into an indexed bank as they load")
     ap.add_argument("--native-sound", action="store_true",
@@ -1432,10 +1531,12 @@ def main():
     pygame.font.init()
     m = Native(args.exe, blaster=args.blaster, profile=args.profile,
                keep_diagnostics=args.keep_diagnostics, verify=args.verify,
-               native_sound=args.native_sound, max_insns=1 << 62)
+               native_sound=args.native_sound,
+               native_mouse=args.native_mouse, max_insns=1 << 62)
     m.voices = NativeVoices(m, bank=m.bank) if args.native_sound else None
     if args.native_sound or args.sound_bank:
         m.capture_loader()
+    m.trace_mouse = args.trace_mouse
     # Kept in hand so the profile report can name functions at any moment.
     _d = open(args.unpacked, "rb").read()
     img = _d[struct.unpack_from("<13H", _d, 2)[3] * 16:]
@@ -1622,6 +1723,7 @@ def main():
         import json
         print(f"  native voices   : {json.dumps(m.voices.summary())}")
     m.bank.report()
+    m.mouse_report(img)
     pygame.quit()
 
 
