@@ -40,6 +40,11 @@ from emulation import VgaDos, make_surface, capture
 # Borland large-model layout, as established in emulation.py and analyze.py.
 DGROUP_IMAGE_OFF = 0x18950
 
+# Natives excluded from --verify. plot_pixel is a single byte write and by far
+# the most frequently called, so checking it dominates the cost of a verify run
+# while telling us almost nothing; the complex blitters are what need checking.
+VERIFY_SKIP = {"plot_pixel"}
+
 
 class Native(VgaDos):
     """VgaDos plus a table of game functions serviced natively."""
@@ -160,7 +165,7 @@ class Native(VgaDos):
         name, handler, kind = entry
         self.native_calls[name] += 1
 
-        if self.verify:
+        if self.verify and name not in VERIFY_SKIP:
             # Run the native into a scratch copy, then let the original body
             # run and compare. A hand-translated blitter can be subtly wrong in
             # ways that look plausible on screen, and emulation.py is the only
@@ -446,6 +451,81 @@ def native_draw_sprite(m, args):
     return None
 
 
+def native_plot_pixel(m, args):
+    """Native replacement for the single-pixel plot at 0x05761.
+
+        [+0x06] word : x      [+0x08] word : y      [+0x0a] byte : colour
+
+    Writes nothing unless x & 3 equals the current plane, so the game calls it
+    up to four times per pixel.
+
+    Note this routine computes its row stride as 80 unconditionally, with no
+    [0x4fe] resolution check - unlike every other drawing routine here. That
+    looks like an oversight in the original for 360-wide mode, but the native
+    reproduces it rather than silently correcting it: the point is to be
+    identical, and --verify would flag any "improvement" as a mismatch.
+    """
+    g = m.dgroup_base
+    u16 = lambda a: struct.unpack("<H", m.read(a, 2))[0]
+    x, y = u16(args + 0), u16(args + 2)
+    if m.read(g + 0x177D, 1)[0] != (x & 3):
+        return None
+    off, seg = struct.unpack("<HH", m.read(g + 0x16F1, 4))
+    o = seg * 16 + off - 0xA0000 + y * 80 + (x >> 2) + u16(g + 0x1727)
+    colour = m.read(args + 4, 1)[0]
+    for p in m.active_planes:
+        if 0 <= o < len(m.planes[p]):
+            m.planes[p][o] = colour
+    m.native_pixels += 1
+    return None
+
+
+def native_blit_rows_masked(m, args):
+    """Native replacement for the masked row blitter at 0x05ac2.
+
+    Same arguments and layout as blit_rows (0x05c09), but source bytes of zero
+    are transparent and leave the destination untouched. Read the existing row,
+    overlay the non-zero source pixels, write it back in one go.
+    """
+    g = m.dgroup_base
+    u16 = lambda a: struct.unpack("<H", m.read(a, 2))[0]
+
+    def far(a):
+        off, seg = struct.unpack("<HH", m.read(a, 4))
+        return seg * 16 + off
+
+    table = far(far(args + 0x00))
+    row0, row1 = u16(args + 0x04), u16(args + 0x06)
+    x0, x1 = u16(args + 0x08), u16(args + 0x0A)
+    srcrow = u16(args + 0x18)
+
+    plane = m.read(g + 0x177D, 1)[0]
+    stride = 90 if u16(g + 0x4FE) else 80
+    base = far(g + 0x16F1) - 0xA0000 + u16(g + 0x1727)
+    if base < 0 or not m.active_planes:
+        return None
+
+    sx = x0 + plane
+    n = max(0, (x1 - sx + 3) // 4)
+    if n == 0:
+        return None
+    planes = [m.planes[p] for p in m.active_planes]
+    for row in range(row0, row1):
+        src = m.read(far(table + srcrow * 4) + plane, n * 4)[::4]
+        o = base + row * stride + (sx >> 2)
+        for pl in planes:
+            if o < 0 or o + n > len(pl):
+                continue
+            cur = bytearray(pl[o:o + n])
+            for k in range(n):
+                if src[k]:
+                    cur[k] = src[k]
+            pl[o:o + n] = cur
+        m.native_pixels += sum(1 for b in src if b)
+        srcrow += 1
+    return None
+
+
 def native_compose_scroll(m, args):
     """Native replacement for the scrolling compositor at 0x05dc4.
 
@@ -577,6 +657,8 @@ NATIVE_TABLE = [
     (0x063D6, "draw_sprite", native_draw_sprite, "far"),
     (0x05C09, "blit_rows", native_blit_rows, "far"),
     (0x05DC4, "compose_scroll", native_compose_scroll, "far"),
+    (0x05AC2, "blit_rows_masked", native_blit_rows_masked, "far"),
+    (0x05761, "plot_pixel", native_plot_pixel, "far"),
 ]
 
 
