@@ -38,7 +38,7 @@ from unicorn.x86_const import *
 
 import emulation
 from emulation import VgaDos, make_surface, capture, AudioSink
-from trace_dos import GAME_DIR, host_path
+from trace_dos import GAME_DIR, host_path, DOS_FN
 from nsound import NativeVoices, SoundBank
 
 # Borland large-model layout, as established in emulation.py and analyze.py.
@@ -64,13 +64,17 @@ class Native(VgaDos):
 
     def __init__(self, *a, profile=False, keep_diagnostics=False,
                  verify=False, native_sound=False, native_mouse=False,
-                 native_keyboard=False, native_file=False, persist=True, **kw):
+                 native_keyboard=False, native_file=False, native_xms=False,
+                 persist=True, **kw):
         self.native_sound = native_sound
         self.native_mouse = native_mouse
         self.native_keyboard = native_keyboard
         self.native_file = native_file
+        self.native_xms = native_xms
         self.persist = persist
         self.files_persisted = {}
+        self.image_base = 0          # real value after super().__init__
+        self.int_sites = Counter()   # (intno, ah, linear site) -> count
         self.voices = None
         self.file_reads = self.file_seeks = self.file_bytes = 0
         self.native_declined = 0
@@ -435,6 +439,52 @@ class Native(VgaDos):
             if getattr(h, "key", None) and h.written:
                 self._persist(h.path, bytes(h.data))
 
+    # Interrupts carrying a meaningful function number in AH; for the rest the
+    # number alone identifies the service.
+    _INT_HAS_AH = (0x21, 0x2F, 0x10, 0x16, 0x33, 0x13, 0x15)
+
+    def _on_intr(self, uc, intno, user):
+        """Record where each interrupt is raised, then service it normally.
+
+        Counts alone cannot drive removal - the goal is to replace the code that
+        raises the interrupt, so we need its address. IP points just past the
+        two-byte INT when the hook fires.
+        """
+        site = (self._reg(UC_X86_REG_CS) * 16 +
+                ((self._reg(UC_X86_REG_IP) - 2) & 0xFFFF))
+        ah = (self._reg(UC_X86_REG_AX) >> 8) & 0xFF
+        self.int_sites[(intno, ah if intno in self._INT_HAS_AH else None,
+                        site)] += 1
+        return super()._on_intr(uc, intno, user)
+
+    def int_report(self, img):
+        """Remaining interrupts, grouped by service and attributed to a caller.
+
+        The inventory of what is left to replace: anything listed here is still
+        going through emulated hardware or an emulated DOS.
+        """
+        if not self.int_sites:
+            return
+        print("\n=== interrupts still executed (site -> enclosing function) ===")
+        by_svc = defaultdict(list)
+        for (intno, ah, site), n in self.int_sites.items():
+            by_svc[(intno, ah)].append((n, site))
+        for (intno, ah), sites in sorted(
+                by_svc.items(), key=lambda kv: -sum(n for n, _ in kv[1])):
+            total = sum(n for n, _ in sites)
+            svc = f"INT {intno:02x}h" + (f" AH={ah:02x}h" if ah is not None else "")
+            desc = DOS_FN.get(ah, "") if intno == 0x21 else ""
+            print(f"  {svc:<16} x{total:<7} {desc}")
+            for n, site in sorted(sites, key=lambda s: -s[0])[:4]:
+                off = site - self.image_base
+                if 0 <= off < len(img):
+                    f = find_function_start(img, off)
+                    where = f"{off:#07x}" + (f" in {f:#07x}" if f is not None
+                                             else " (no prologue found)")
+                else:
+                    where = f"outside image (linear {site:#07x})"
+                print(f"       x{n:<7} at {where}")
+
     def file_report(self, img):
         if not self.file_stacks:
             return
@@ -741,6 +791,36 @@ class Native(VgaDos):
             self.xms_sizes[(ah, caller)].append(size)
         return super()._xms_call()
 
+    def install_native_xms(self):
+        """Service XMS at its entry point directly, with no interrupt at all.
+
+        The driver entry the game far-calls is our own three-byte stub,
+        INT 60h; RETF - so every XMS request cost an interrupt purely because of
+        how the stub was built, 194 of them in a two-level session. The API
+        behind the vector was already pure Python, so hooking the entry address
+        itself removes the interrupts without changing a single semantic: the
+        same _xms_call() services the same registers, and we perform the far
+        return the stub's RETF would have done.
+        """
+        lin = emulation.XMS_STUB_SEG * 16
+        self.uc.hook_add(UC_HOOK_CODE, self._on_xms_entry, None, lin, lin)
+        try:
+            self.uc.ctl_remove_cache(lin, lin + 3)
+        except Exception:
+            pass
+        print(f"  [xms] entry serviced natively at "
+              f"{emulation.XMS_STUB_SEG:04x}:0000 - no INT "
+              f"{emulation.XMS_INT:02x}h")
+
+    def _on_xms_entry(self, uc, address, size, user):
+        self._xms_call()
+        ss, sp = self._reg(UC_X86_REG_SS), self._reg(UC_X86_REG_SP)
+        ip, cs = struct.unpack("<HH", uc.mem_read(ss * 16 + sp, 4))
+        self._set(UC_X86_REG_SP, (sp + 4) & 0xFFFF)
+        uc.reg_write(UC_X86_REG_CS, cs)
+        uc.reg_write(UC_X86_REG_IP, ip)
+        self.native_calls["xms_entry"] += 1
+
     def xms_report(self, img):
         if not self.xms_callers:
             print("  [xms] no XMS calls recorded")
@@ -850,6 +930,8 @@ class Native(VgaDos):
             table += KEYBOARD_NATIVES
         if self.native_file:
             table += FILE_NATIVES
+        if self.native_xms:
+            table += XMS_NATIVES
         for off, name, fn, kind in table:
             self.natives[off] = (name, fn, kind)
 
@@ -1676,6 +1758,27 @@ def native_blit_rows(m, args):
 # Offsets are into the unpacked image; confirmed against the disassembly and
 # ranked by --profile. Anything not listed still runs on the emulated CPU.
 # Verify a new entry with --verify before trusting it.
+def native_xms_present(m, args):
+    """XMS installation check: INT 2Fh AX=4300h, AL=80h if a driver is there.
+
+    We are the driver, so the answer is a constant. Worth keeping rather than
+    returning 0: the game disables sound entirely without XMS.
+    """
+    return 1
+
+
+def native_xms_get_entry(m, args):
+    """Fetch the driver entry point and cache it where the game expects it.
+
+    INT 2Fh AX=4310h returns the far pointer in ES:BX; the original then stores
+    it at DGROUP:0x2b46, and every subsequent XMS request is an lcall through
+    that slot. Writing it directly is the whole function.
+    """
+    m.uc.mem_write(m.dgroup_base + 0x2B46,
+                   struct.pack("<HH", 0, emulation.XMS_STUB_SEG))
+    return None
+
+
 NATIVE_TABLE = [
     (0x05D3A, "compose_layer", native_compose_layer, "far"),
     (0x063D6, "draw_sprite", native_draw_sprite, "far"),
@@ -1693,6 +1796,15 @@ NATIVE_TABLE = [
 # Enabled with --native-file. The raw DOS read/lseek wrappers only; fread
 # buffering, text-mode translation and open() are left to the original, which
 # keeps their semantics without having to model Borland's FILE structure.
+# Enabled with --native-xms, alongside servicing the driver entry as a code hook
+# rather than an interrupt. These two are the only INT 2Fh sites in the binary:
+# the detection pair the game calls once at startup before caching the driver
+# entry at DGROUP:0x2b46, from where every later request is an lcall.
+XMS_NATIVES = [
+    (0x159AE, "xms_present", native_xms_present, "far"),
+    (0x159C7, "xms_get_entry", native_xms_get_entry, "far"),
+]
+
 FILE_NATIVES = [
     (0x014A3, "dos_read", native_dos_read, "far"),
     (0x012EB, "dos_lseek", native_dos_lseek, "far"),
@@ -1766,6 +1878,11 @@ def main():
                     help="keep the inherited per-write instrumentation on")
     ap.add_argument("--sound-slices", type=int, default=32,
                     help="times per display update to service the sound card")
+    ap.add_argument("--native-xms", action="store_true",
+                    help="service XMS with no interrupts: driver entry as a code "
+                         "hook, plus the two INT 2Fh detection sites")
+    ap.add_argument("--run-seconds", type=float, default=0.0,
+                    help="quit cleanly after N seconds, for measurement runs")
     ap.add_argument("--read-only", action="store_true",
                     help="keep saves in memory only, never write the game dir")
     ap.add_argument("--no-audio", action="store_true")
@@ -1782,11 +1899,14 @@ def main():
                native_sound=args.native_sound,
                native_mouse=args.native_mouse,
                native_keyboard=args.native_keyboard,
-               native_file=args.native_file, persist=not args.read_only,
+               native_file=args.native_file, native_xms=args.native_xms,
+               persist=not args.read_only,
                max_insns=1 << 62)
     m.voices = NativeVoices(m, bank=m.bank) if args.native_sound else None
     if args.native_sound or args.sound_bank:
         m.capture_loader()
+    if args.native_xms:
+        m.install_native_xms()
     m.trace_mouse = args.trace_mouse
     m.trace_keyboard = args.trace_keyboard
     m.trace_file = args.trace_file
@@ -1935,6 +2055,9 @@ def main():
         m.frames = frames
         clock.tick(60)
 
+        if args.run_seconds and m._elapsed() >= args.run_seconds:
+            print(f"  [stat] --run-seconds {args.run_seconds} reached, quitting")
+            running = False
         if m._elapsed() >= next_status:
             next_status += args.status_every
             print(f"  [stat] t={m._elapsed():6.1f}s frames={frames} "
@@ -1979,6 +2102,7 @@ def main():
     m.bank.report()
     m.mouse_report(img)
     m.kbd_report(img)
+    m.int_report(img)
     m.file_report(img)
     if m.native_file:
         print(f"  native file I/O : {m.file_reads} reads ({m.file_bytes} bytes), "
