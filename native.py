@@ -65,13 +65,14 @@ class Native(VgaDos):
     def __init__(self, *a, profile=False, keep_diagnostics=False,
                  verify=False, native_sound=False, native_mouse=False,
                  native_keyboard=False, native_file=False, native_xms=False,
-                 native_setup=False, persist=True, **kw):
+                 native_setup=False, skip_natives=(), persist=True, **kw):
         self.native_sound = native_sound
         self.native_mouse = native_mouse
         self.native_keyboard = native_keyboard
         self.native_file = native_file
         self.native_xms = native_xms
         self.native_setup = native_setup
+        self.skip_natives = set(skip_natives)
         self.int_stubs = {}          # linear INT site -> interrupt number
         self.native_secs = defaultdict(float)   # routine -> seconds spent in it
         self.native_rows = Counter()            # routine -> inner iterations
@@ -121,6 +122,7 @@ class Native(VgaDos):
         self._want_sound_profile = False
         self.xms_callers = Counter()
         self.xms_sizes = defaultdict(list)
+        self.traced_natives = set()
         self.call_tracers = defaultdict(Counter)
         self.call_args = defaultdict(Counter)
         self.writer_sites = Counter()
@@ -906,10 +908,38 @@ class Native(VgaDos):
         These hooks only observe - the original body still runs.
         """
         for off in offsets:
+            if off in self.natives:
+                # Serviced natively: record from inside the native dispatcher,
+                # before it returns to the caller.
+                self.traced_natives.add(off)
+                print(f"  [call] tracing calls to {off:#07x} (a native)")
+                continue
             lin = self.image_base + off
             self.uc.hook_add(UC_HOOK_CODE, self._on_traced_call,
                              None, lin, lin)
             print(f"  [call] tracing calls to {off:#07x}")
+
+    def _record_caller(self, off, ss, sp, ret_size):
+        """Attribute a call to whoever made it, given an intact stack frame.
+
+        Split out because tracing a routine that is ALSO a native cannot use a
+        second code hook at the same address: the native hook is registered first,
+        and by the time a later hook runs it has already returned to the caller by
+        advancing SP, so the read lands past the return address and yields
+        nonsense - negative offsets pointing into the interrupt vector table.
+        """
+        try:
+            ip, cs = struct.unpack("<HH", self.uc.mem_read(ss * 16 + sp, 4))
+            caller = cs * 16 + ip - self.image_base
+        except Exception:
+            caller = None
+        self.call_tracers[off][caller] += 1
+        try:
+            args = struct.unpack("<4H",
+                                 self.uc.mem_read(ss * 16 + sp + ret_size, 8))
+            self.call_args[(off, caller)][args] += 1
+        except Exception:
+            pass
 
     def _on_traced_call(self, uc, address, size, user):
         off = address - self.image_base
@@ -1114,6 +1144,8 @@ class Native(VgaDos):
         if self.native_setup:
             table += SETUP_NATIVES
         for off, name, fn, kind in table:
+            if name in self.skip_natives:
+                continue
             self.natives[off] = (name, fn, kind)
 
     def _on_native(self, uc, address, size, user):
@@ -1143,6 +1175,8 @@ class Native(VgaDos):
         # call or the `push cs; call near` idiom, so both look the same here.
         ret_size = 4 if kind == "far" else 2
         args_at = ss * 16 + sp + ret_size
+        if off in self.traced_natives:
+            self._record_caller(off, ss, sp, ret_size)
 
         t0 = time.perf_counter()
         result = handler(self, args_at)
@@ -1563,6 +1597,70 @@ def native_draw_sprite(m, args):
     drawn = int(nz.sum())
     m.rows_done = nrows
     m.native_pixels += drawn
+    return None
+
+
+def native_particles(m, args):
+    """The particle plotter at 0x0ab09, replacing the loop rather than the pixel.
+
+    The original walks an array of 16-byte records and plots each one through the
+    function pointer at [0x53e] - plot_pixel in 320-wide mode, its 360-wide twin
+    otherwise. Called once per Mode X plane, it offers every particle four times
+    and plot_pixel keeps only the quarter whose x & 3 matches the selected plane.
+
+    That is why plot_pixel had 627260 calls a session for ~157000 written bytes,
+    and why replacing plot_pixel itself was the wrong level to work at: there is
+    no work to batch inside it. Replacing the loop turns ~205 emulated iterations
+    per plane into one pass over an array.
+
+        [0x18c1] far ptr : the record array      [0x18cd] : how many
+        rec+0  dword     : x, unsigned 1/8-pixel fixed point
+        rec+4  dword     : y, same
+        rec+0xc byte     : colour
+        [0x1731]/[0x1733], [0x172d]/[0x172f] : viewport left/right, top/bottom
+        [0x1739]/[0x173d]                    : scroll x, y
+
+    Two details of the original's arithmetic are load-bearing. The shift helper at
+    0x1148 is SHR, not SAR, so the fixed-point coordinates are unsigned. And the
+    position arithmetic is 16-bit, with unsigned bounds compares - which is how
+    one comparison rejects both off-left and off-right: a negative x wraps to a
+    huge value and fails the upper bound. So the wrap has to be applied before
+    comparing, not after.
+    """
+    g = m.dgroup_base
+    u16 = lambda a: struct.unpack("<H", m.read(a, 2))[0]
+    count = struct.unpack("<h", m.read(g + 0x18CD, 2))[0]
+    if count <= 0 or not m.active_planes:
+        return None
+    off, seg = struct.unpack("<HH", m.read(g + 0x18C1, 4))
+    # Not cached_read: unlike sprite and tile data, particles move every frame.
+    raw = m.read(seg * 16 + off, count * 16)
+    rec = np.frombuffer(raw, dtype=np.uint8).reshape(count, 16)
+    xf = rec[:, 0:4].copy().view("<u4").ravel()
+    yf = rec[:, 4:8].copy().view("<u4").ravel()
+
+    left, right = u16(g + 0x1731), u16(g + 0x1733)
+    top, bottom = u16(g + 0x172D), u16(g + 0x172F)
+    x = ((xf >> 3) - u16(g + 0x1739) + left) & 0xFFFF
+    y = ((yf >> 3) - u16(g + 0x173D) + top) & 0xFFFF
+    keep = ((x >= left) & (x < right) & (y >= top) & (y < bottom)
+            & ((x & 3) == (m.read(g + 0x177D, 1)[0] & 3)))
+    if not keep.any():
+        m.rows_done = count
+        return None
+
+    dst_off, dst_seg = struct.unpack("<HH", m.read(g + 0x16F1, 4))
+    plane_off = dst_seg * 16 + dst_off - 0xA0000
+    if plane_off < 0:
+        return None
+    stride = 90 if u16(g + 0x4FE) else 80
+    offs = plane_off + ((y * stride + (x >> 2) + u16(g + 0x1727)) & 0xFFFF)
+    offs, vals = offs[keep], rec[:, 12][keep]
+    for pl in (m.planes[p] for p in m.active_planes):
+        inb = offs < len(pl)
+        np.frombuffer(pl, dtype=np.uint8)[offs[inb]] = vals[inb]
+    m.native_pixels += int(keep.sum())
+    m.rows_done = count
     return None
 
 
@@ -2474,6 +2572,7 @@ NATIVE_TABLE = [
     (0x05AC2, "blit_rows_masked", native_blit_rows_masked, "far"),
     (0x05761, "plot_pixel", native_plot_pixel, "far"),
     (0x04D2A, "clear_vram", native_clear_vram, "far"),
+    (0x0AB09, "particles", native_particles, "far"),
     (0x157C1, "sound_gather", native_sound_gather, "far"),
 ]
 
@@ -2592,6 +2691,9 @@ def main():
     ap.add_argument("--native-setup", action="store_true",
                     help="serve the C runtime's heap-resize, INT 10h wrapper "
                          "and one-shot startup interrupts natively")
+    ap.add_argument("--skip-natives", default="",
+                    help="comma-separated natives to leave emulated, to measure "
+                         "whether replacing them actually helps")
     ap.add_argument("--verify-only", default="",
                     help="comma-separated natives to verify even if skipped")
     ap.add_argument("--native-fp", action="store_true",
@@ -2617,6 +2719,8 @@ def main():
                native_keyboard=args.native_keyboard,
                native_file=args.native_file, native_xms=args.native_xms,
                native_setup=args.native_setup,
+               skip_natives={n.strip() for n in args.skip_natives.split(",")
+                             if n.strip()},
                persist=not args.read_only,
                max_insns=1 << 62)
     m.voices = NativeVoices(m, bank=m.bank) if args.native_sound else None
