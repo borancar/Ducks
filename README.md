@@ -78,6 +78,39 @@ Notes on what the emulation has to get right:
 - INT 34h-3Eh must be dispatched to the program's own handlers: that is
   Borland's 80x87 floating-point emulation.
 - The game refuses to start without an INT 33h mouse driver.
+- Mouse input arrives entirely through INT 33h `0x0b` (relative motion) and
+  `0x05`/`0x06` (per-button press/release counts). It never calls `0x03`, so
+  absolute position is irrelevant. `0x05`/`0x06` take **BX as the button being
+  queried** (0=left, 1=right, 2=middle) and must return that button's count and
+  then clear it; ignoring BX makes every button behave as one, and per-button
+  actions never fire. The button mask must be tracked from the SDL events
+  themselves — `pygame.mouse.get_pressed()` lags a press behind.
+
+## Sound
+
+```sh
+venv/bin/python play.py --blaster        # advertise BLASTER=A220 I5 D1
+```
+
+`sb.py` models the DSP, the 8237 DMA channel and the IRQ. Ducks drives it in a
+completely standard way: reset, get version, time constant `0xd3` (22222 Hz),
+speaker on, block size 256, then auto-init 8-bit DMA output over a 512-byte
+buffer. Note the two periods are independent — the DMA controller wraps every
+`count+1` bytes while the DSP interrupts every `block_size` bytes, which is what
+makes the double buffer work; conflating them halves the refill rate.
+
+Captured PCM is written to a WAV on exit, which is the only trustworthy way to
+tell a broken card model from a broken host playback path.
+
+Status: the card works end-to-end — the game refills the buffer on schedule and
+IRQ5 is delivered — but every byte it mixes is `0x80`, i.e. silence, so no audio
+has been heard yet. That is now a question of game state (no effect triggered, or
+samples not loaded from the egg) rather than emulation plumbing.
+
+Two host-side traps worth remembering: `pygame.init()` initialises the mixer
+before `pygame.mixer.pre_init()` can take effect, so the mixer must be explicitly
+`quit()` and reopened at the game's rate; and a mixer channel holds only one
+queued sound, so overflow must be buffered rather than dropped.
 
 ## Files
 
@@ -86,6 +119,7 @@ Notes on what the emulation has to get right:
 | `unpack_ducks.py` | emulates DIET's stub, writes a plain EXE |
 | `validate.py` | verifies the unpack, incl. the round-trip check |
 | `play.py` | DOS + VGA + SDL; runs the game interactively |
+| `sb.py` | Sound Blaster DSP, DMA channel and IRQ model |
 | `trace_dos.py` | headless DOS shim; logs interrupts, files, ports |
 | `analyze.py` | static census of interrupts/ports over the unpacked code |
 | `modex_probe.py` | re-renders captured planes under candidate layouts |

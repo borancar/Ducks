@@ -34,6 +34,7 @@ import pygame
 from unicorn import *
 from unicorn.x86_const import *
 from trace_dos import DosMachine
+from sb import SoundBlaster
 
 PIT_HZ = 1193182.0
 VGA_A000 = 0xA0000
@@ -93,12 +94,22 @@ class VgaDos(DosMachine):
         self.mouse_pos = (160, 100)
         self.mouse_btn = 0
         self.mouse_rel = [0, 0]
+        # Indexed the way INT 33h numbers buttons: 0=left, 1=right, 2=middle.
+        self.press_count = [0, 0, 0]
+        self.release_count = [0, 0, 0]
+        self.press_pos = [(160, 100)] * 3
+        self.release_pos = [(160, 100)] * 3
         self.pit_latch_toggle = {}
         self.pit_initial = 0xFFFF
         self.t0 = time.perf_counter()
         self.palette_writes = 0
         self.int10_fn = Counter()
         self.text_mode = True             # DOS hands us mode 03h
+        self.sb = SoundBlaster(base=0x220, irq=5, dma=1,
+                              log=print, verbose=True) if blaster else None
+        self.sb_last_tick = None
+        self.sb_irqs = 0
+        self._dma_hook = None
         self.vidwrites = Counter()
         self.vidrange = {}
         super().__init__(exe, blaster=blaster, verbose=False, **kw)
@@ -128,6 +139,12 @@ class VgaDos(DosMachine):
     def _on_out(self, uc, port, size, value, user):
         self.port_out[port] += 1
         v = value & 0xFF
+        # Sound card and its DMA channel take priority over the VGA decoding
+        # below; note 0x20/0x21 (PIC) are shared, so the SB only observes them.
+        if self.sb is not None and self.sb.owns(port):
+            self.sb.write(port, v)
+            if port not in (0x20, 0x21):
+                return
         if port == 0x3C8:                     # DAC write index
             self.dac_index = v
             self.dac_phase = 0
@@ -228,6 +245,10 @@ class VgaDos(DosMachine):
             return 0x20
         if port == 0x201:
             return 0xFF
+        if self.sb is not None:
+            r = self.sb.read(port)
+            if r is not None:
+                return r
         if port == 0x22A:
             return 0xAA
         if port == 0x22C:
@@ -235,6 +256,56 @@ class VgaDos(DosMachine):
         if port == 0x22E:
             return 0x80
         return 0x00
+
+    def _watch_dma_buffer(self):
+        """Hook guest writes to the DMA buffer once the card tells us where it is.
+
+        This distinguishes "the game mixed silence because nothing is playing"
+        from "the game never wrote any samples at all" - which look identical in
+        the captured PCM.
+        """
+        sb = self.sb
+        if sb is None or self._dma_hook is not None or not sb.dma_active:
+            return
+        lo = (sb.dma_page << 16) | sb.dma_addr
+        hi = lo + max(512, sb.dma_len) - 1
+
+        def on_write(uc, access, address, size, value, user):
+            sb.buf_writes += size
+            for i in range(size):
+                sb.buf_write_values[(value >> (8 * i)) & 0xFF] += 1
+
+        self._dma_hook = self.uc.hook_add(UC_HOOK_MEM_WRITE, on_write,
+                                         None, lo, hi)
+        print(f"  [sb] watching guest writes to DMA buffer "
+              f"{lo:#07x}..{hi:#07x}")
+
+    # ------------------------------------------------------------- sound IRQ
+    def service_sound(self):
+        """Advance DMA playback and deliver IRQ5 to the game's handler."""
+        if self.sb is None:
+            return
+        now = self._elapsed()
+        if self.sb_last_tick is None:
+            self.sb_last_tick = now
+            return
+        dt = now - self.sb_last_tick
+        self.sb_last_tick = now
+        if dt <= 0:
+            return
+        self._watch_dma_buffer()
+        self.sb.tick(self.uc, min(dt, 0.25))
+        if not self.sb.irq_pending:
+            return
+        if not self.sb.irq_enabled():
+            return
+        # Only deliver when the guest has interrupts enabled and has installed a
+        # handler; IRQ5 is INT 0dh on the master PIC.
+        if not (self.uc.reg_read(UC_X86_REG_EFLAGS) & 0x200):
+            return
+        if self._dispatch_to_guest(0x0D):
+            self.sb_irqs += 1
+            self.sb.irq_pending = False
 
     # ------------------------------------------------------------- input
     def _bios_kbd(self):
@@ -290,6 +361,8 @@ class VgaDos(DosMachine):
         if ax == 0x0000:
             self._set(UC_X86_REG_AX, 0xFFFF)
             self._set(UC_X86_REG_BX, 3)
+            self.press_count = [0, 0, 0]
+            self.release_count = [0, 0, 0]
             return
         if ax == 0x0003:
             x, y = self.mouse_pos
@@ -298,11 +371,21 @@ class VgaDos(DosMachine):
             self._set(UC_X86_REG_BX, self.mouse_btn)
             return
         if ax in (0x0005, 0x0006):
-            x, y = self.mouse_pos
+            # BX selects WHICH button is being asked about (0=left, 1=right,
+            # 2=middle). The reply is that button's press/release count since
+            # the last query, which must then be cleared, plus the cursor
+            # position at that event. Ignoring BX makes every button look like
+            # the same button, so per-button actions - Ducks assigns walk / use
+            # tool / cycle tool to separate buttons - never fire correctly.
+            idx = min(self._reg(UC_X86_REG_BX) & 0xFFFF, 2)
+            counts = self.press_count if ax == 0x0005 else self.release_count
+            positions = self.press_pos if ax == 0x0005 else self.release_pos
             self._set(UC_X86_REG_AX, self.mouse_btn)
-            self._set(UC_X86_REG_BX, 1 if self.mouse_btn else 0)
-            self._set(UC_X86_REG_CX, x)
-            self._set(UC_X86_REG_DX, y)
+            self._set(UC_X86_REG_BX, counts[idx])
+            counts[idx] = 0
+            px, py = positions[idx]
+            self._set(UC_X86_REG_CX, px)
+            self._set(UC_X86_REG_DX, py)
             return
         if ax == 0x000B:
             dx, dy = self.mouse_rel
@@ -502,6 +585,82 @@ def make_surface(m, font=None, cell=(8, 16)):
     return surf
 
 
+class AudioSink:
+    """Stream the card's PCM to the host speakers via SDL.
+
+    The Sound Blaster produces unsigned 8-bit mono at whatever rate the game
+    programmed. We consume whatever has accumulated since the last call and
+    queue it on a dedicated mixer channel.
+    """
+
+    def __init__(self, verbose=True):
+        self.pos = 0
+        self.rate = None
+        self.ok = False
+        self.queued = 0
+        self.dropped = 0
+        self.pending = deque()
+        self.chan = None
+        self.verbose = verbose
+
+    def ensure_rate(self, rate):
+        """Open (or reopen) the mixer at the rate the game actually programmed.
+
+        Raw bytes handed to pygame are interpreted at the mixer's frequency, so
+        a mismatch plays the sample at the wrong speed and pitch. Ducks selects
+        22222 Hz via the DSP time constant, which we only learn at runtime.
+        """
+        if self.ok and self.rate == rate:
+            return
+        try:
+            if pygame.mixer.get_init():
+                pygame.mixer.quit()
+            pygame.mixer.init(frequency=rate, size=8, channels=1, buffer=2048)
+            pygame.mixer.set_num_channels(4)
+            self.chan = pygame.mixer.Channel(0)
+            self.rate, self.ok = rate, True
+            print(f"  [audio] mixer at {rate} Hz: {pygame.mixer.get_init()}")
+        except Exception as e:
+            self.ok = False
+            print(f"  [audio] mixer unavailable ({e}); "
+                  f"PCM still captured to WAV")
+
+    def push(self, sb, chunk=4096):
+        if sb is None:
+            return
+        if sb.sample_rate and sb.sample_rate != self.rate:
+            self.ensure_rate(sb.sample_rate)
+        if not self.ok:
+            return
+        # Slice off whole chunks; never advance past data we failed to queue.
+        while len(sb.pcm) - self.pos >= chunk:
+            self.pending.append(bytes(sb.pcm[self.pos:self.pos + chunk]))
+            self.pos += chunk
+        try:
+            # A mixer channel holds one playing plus one queued sound, so keep
+            # both slots fed every iteration rather than dropping the overflow.
+            while self.pending:
+                if not self.chan.get_busy():
+                    self.chan.play(
+                        pygame.mixer.Sound(buffer=self.pending.popleft()))
+                elif self.chan.get_queue() is None:
+                    self.chan.queue(
+                        pygame.mixer.Sound(buffer=self.pending.popleft()))
+                else:
+                    break
+                self.queued += 1
+        except Exception as e:
+            if self.verbose:
+                print(f"  [audio] push failed: {e}")
+                self.verbose = False
+        # If we fall a long way behind realtime, drop the backlog rather than
+        # growing without bound - and say so instead of hiding it.
+        if len(self.pending) > 120:
+            self.dropped += len(self.pending) - 40
+            while len(self.pending) > 40:
+                self.pending.popleft()
+
+
 def capture(m, screen, tag, outdir="debug"):
     """Dump everything needed to debug the display off-line."""
     import json
@@ -552,6 +711,12 @@ def main():
                     help="seconds between saved frames")
     ap.add_argument("--shot-dir", default="shots")
     ap.add_argument("--status-every", type=float, default=5.0)
+    ap.add_argument("--wav", default="ducks_audio.wav",
+                    help="dump captured PCM here on exit")
+    ap.add_argument("--no-audio", action="store_true",
+                    help="emulate the card but do not open the host mixer")
+    ap.add_argument("--mouse-debug", action="store_true",
+                    help="log every mouse button event and INT 33h query")
     args = ap.parse_args()
 
     headless = args.shots > 0
@@ -561,6 +726,9 @@ def main():
 
     pygame.init()
     m = VgaDos(args.exe, blaster=args.blaster, max_insns=1 << 62)
+    audio = None
+    if args.blaster and not args.no_audio and not headless:
+        audio = AudioSink()
     print(f"=== running {args.exe} "
           f"(BLASTER {'set' if args.blaster else 'unset'}) ===")
     print("    host filesystem READ-ONLY; writes intercepted in memory")
@@ -607,6 +775,10 @@ def main():
                 print(f"  [dos] program exited: {m.finished}")
                 running = False
             addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
+            m.service_sound()
+            addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
+            if audio is not None:
+                audio.push(m.sb)
 
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
@@ -643,9 +815,30 @@ def main():
                 m.mouse_rel[0] += ev.rel[0]
                 m.mouse_rel[1] += ev.rel[1]
             elif ev.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
-                b = pygame.mouse.get_pressed()
-                m.mouse_btn = (1 if b[0] else 0) | (2 if b[2] else 0) \
-                    | (4 if b[1] else 0)
+                # pygame numbers buttons 1=left, 2=middle, 3=right; INT 33h
+                # numbers them 0=left, 1=right, 2=middle. Wheel and extra
+                # buttons are not part of the mouse driver interface.
+                idx = {1: 0, 3: 1, 2: 2}.get(ev.button)
+                if idx is not None:
+                    # Track the mask from the events themselves. Reading
+                    # pygame.mouse.get_pressed() here returns state that has not
+                    # caught up with the event being handled, so the mask lags
+                    # by one press - and INT 33h 05h/06h report it in AX.
+                    # Bits are INT 33h order: 0=left, 1=right, 2=middle.
+                    bit = 1 << idx
+                    if ev.type == pygame.MOUSEBUTTONDOWN:
+                        m.mouse_btn |= bit
+                        m.press_count[idx] += 1
+                        m.press_pos[idx] = m.mouse_pos
+                    else:
+                        m.mouse_btn &= ~bit
+                        m.release_count[idx] += 1
+                        m.release_pos[idx] = m.mouse_pos
+                    if args.mouse_debug:
+                        names = ("left", "right", "middle")
+                        print(f"  [mouse] {names[idx]} "
+                              f"{'down' if ev.type == pygame.MOUSEBUTTONDOWN else 'up'}"
+                              f" at {m.mouse_pos} mask={m.mouse_btn:#03x}")
 
         # File-based control, so a capture can be requested from outside the
         # window: `touch capture.request` / `touch pause.request`.
@@ -745,6 +938,12 @@ def main():
           f"{[f'{a:#07x}..{b:#07x}' for a, b in runs] or 'none'}")
     print(f"  OUT ports       : "
           f"{{{', '.join(f'{p:#05x}:{c}' for p, c in m.port_out.most_common(14))}}}")
+    if m.sb is not None:
+        import json
+        print(f"  sound blaster   : {json.dumps(m.sb.summary(), indent=2)}")
+        print(f"  IRQ5 delivered  : {m.sb_irqs}")
+        path = m.sb.write_wav(args.wav)
+        print(f"  audio written   : {path or 'nothing - no PCM produced'}")
     print(f"  files read      : {m.files_read}")
     print(f"  files written   : {m.files_written} (intercepted)")
     print(f"  files missing   : {m.files_missing}")
