@@ -38,6 +38,7 @@ from unicorn.x86_const import *
 
 import emulation
 from emulation import VgaDos, make_surface, capture, AudioSink
+from trace_dos import GAME_DIR, host_path
 from nsound import NativeVoices, SoundBank
 
 # Borland large-model layout, as established in emulation.py and analyze.py.
@@ -63,11 +64,13 @@ class Native(VgaDos):
 
     def __init__(self, *a, profile=False, keep_diagnostics=False,
                  verify=False, native_sound=False, native_mouse=False,
-                 native_keyboard=False, native_file=False, **kw):
+                 native_keyboard=False, native_file=False, persist=True, **kw):
         self.native_sound = native_sound
         self.native_mouse = native_mouse
         self.native_keyboard = native_keyboard
         self.native_file = native_file
+        self.persist = persist
+        self.files_persisted = {}
         self.voices = None
         self.file_reads = self.file_seeks = self.file_bytes = 0
         self.native_declined = 0
@@ -338,6 +341,11 @@ class Native(VgaDos):
         The game never uses INT 16h - it reaches the keyboard through DOS
         check-stdin and read-char, i.e. Borland's kbhit()/getch(). Same BP-chain
         trick as the mouse, since these are library calls too.
+
+        Also the point where writes become real. The tracer deliberately keeps
+        the host filesystem read-only, so saves lived in its overlay and died
+        with the process. Here a close flushes to the game directory instead,
+        which is what makes a save survive a restart.
         """
         ah = (self._reg(UC_X86_REG_AX) >> 8) & 0xFF
         if self.trace_keyboard and ah in (0x01, 0x06, 0x07, 0x08, 0x0B):
@@ -346,7 +354,86 @@ class Native(VgaDos):
             self.file_stacks[(ah,) + self._bp_chain(6)] += 1
             if ah in (0x3F, 0x40):
                 self.file_io[ah] += self._reg(UC_X86_REG_CX)
-        return super()._dos()
+        # Capture what the call is about to consume: the parent pops the handle
+        # on close and drops the overlay entry on delete, so both are gone by
+        # the time it returns.
+        closing = deleting = None
+        if self.persist and ah == 0x3E:
+            h = self.handles.get(self._reg(UC_X86_REG_BX))
+            if h is not None and getattr(h, "key", None):
+                closing = h
+        elif self.persist and ah == 0x41:
+            deleting = self._str(self._reg(UC_X86_REG_DS),
+                                 self._reg(UC_X86_REG_DX))
+        r = super()._dos()
+        if closing is not None:
+            self._persist(closing.path, bytes(closing.data))
+        if deleting is not None:
+            self._unpersist(deleting)
+        return r
+
+    def _writable_host_path(self, name):
+        """Resolve a DOS path for writing, or None if it is out of bounds.
+
+        Two guards. Writes must land inside GAME_DIR - the game only ever names
+        bare filenames, so anything escaping it means we misread the path. And
+        the game has no business rewriting its own code or data: per the
+        analysis plan's negative checks, a write to an .exe or .egg is a finding,
+        not something to quietly perform.
+        """
+        hp = os.path.abspath(host_path(name))
+        root = os.path.abspath(GAME_DIR)
+        if os.path.commonpath([hp, root]) != root:
+            self._fop(f"REFUSED write outside game dir: {name!r} -> {hp}")
+            return None
+        if os.path.splitext(hp)[1].lower() in (".exe", ".egg", ".com"):
+            self._fop(f"REFUSED write to program/data file: {name!r}")
+            return None
+        return hp
+
+    def _persist(self, name, data):
+        """Write a closed file out for real, atomically."""
+        hp = self._writable_host_path(name)
+        if hp is None:
+            return
+        tmp = hp + ".part"
+        try:
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, hp)
+        except OSError as e:
+            self._fop(f"SAVE FAILED {name!r}: {e}")
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            return
+        self.files_persisted[name] = len(data)
+        self._fop(f"SAVED {name!r} -> {hp} ({len(data)} bytes)")
+
+    def _unpersist(self, name):
+        hp = self._writable_host_path(name)
+        if hp is None or not os.path.isfile(hp):
+            return
+        try:
+            os.unlink(hp)
+            self._fop(f"DELETED {name!r} -> {hp}")
+            self.files_persisted.pop(name, None)
+        except OSError as e:
+            self._fop(f"DELETE FAILED {name!r}: {e}")
+
+    def flush_open_files(self):
+        """Write out anything still open, for a quit mid-write.
+
+        The game closes its saves properly, so this only matters when the window
+        is closed at the wrong moment - but losing a save to that would be a
+        confusing way to find out.
+        """
+        if not self.persist:
+            return
+        for h in list(self.handles.values()):
+            if getattr(h, "key", None) and h.written:
+                self._persist(h.path, bytes(h.data))
 
     def file_report(self, img):
         if not self.file_stacks:
@@ -1679,6 +1766,8 @@ def main():
                     help="keep the inherited per-write instrumentation on")
     ap.add_argument("--sound-slices", type=int, default=32,
                     help="times per display update to service the sound card")
+    ap.add_argument("--read-only", action="store_true",
+                    help="keep saves in memory only, never write the game dir")
     ap.add_argument("--no-audio", action="store_true")
     ap.add_argument("--wav", default="ducks_native.wav")
     ap.add_argument("--status-every", type=float, default=30.0)
@@ -1693,7 +1782,8 @@ def main():
                native_sound=args.native_sound,
                native_mouse=args.native_mouse,
                native_keyboard=args.native_keyboard,
-               native_file=args.native_file, max_insns=1 << 62)
+               native_file=args.native_file, persist=not args.read_only,
+               max_insns=1 << 62)
     m.voices = NativeVoices(m, bank=m.bank) if args.native_sound else None
     if args.native_sound or args.sound_bank:
         m.capture_loader()
@@ -1850,6 +1940,7 @@ def main():
             print(f"  [stat] t={m._elapsed():6.1f}s frames={frames} "
                   f"mode={m.mode:#04x} natives={dict(m.native_calls)}")
 
+    m.flush_open_files()
     print(f"\n=== finished after {frames} frames, {m._elapsed():.1f}s ===")
     if m.native_calls:
         print(f"  native calls    : {dict(m.native_calls)}")
@@ -1896,9 +1987,11 @@ def main():
         print(f"  file operations ({len(m.file_ops)}):")
         for op in m.file_ops[-40:]:
             print(f"    {op}")
-    if m.overlay:
+    if m.files_persisted:
+        print(f"  saved to disk   : {m.files_persisted}")
+    elif m.overlay:
         print(f"  overlay files   : "
-              f"{ {k: len(v) for k, v in m.overlay.items()} }")
+              f"{ {k: len(v) for k, v in m.overlay.items()} } (not persisted)")
     pygame.quit()
 
 
