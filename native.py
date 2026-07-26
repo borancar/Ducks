@@ -430,12 +430,64 @@ def native_draw_sprite(m, args):
     return None
 
 
+def native_blit_rows(m, args):
+    """Native replacement for the row blitter at 0x05c09.
+
+        [+0x06] far ptr -> far ptr -> array of far row pointers
+        [+0x0a] word    : first destination row
+        [+0x0c] word    : last destination row (exclusive)
+        [+0x0e] word    : first x
+        [+0x10] word    : last x (exclusive)
+        [+0x1e] word    : first source row index
+
+    No transparency test - it copies unconditionally. Source steps 4 bytes per
+    pixel (staying within one plane) while the destination steps 1, so each row
+    is a strided gather into a contiguous run, which Python slicing does in one
+    go instead of one emulated iteration per pixel.
+    """
+    g = m.dgroup_base
+    u16 = lambda a: struct.unpack("<H", m.read(a, 2))[0]
+
+    def far(a):
+        off, seg = struct.unpack("<HH", m.read(a, 4))
+        return seg * 16 + off
+
+    table = far(far(args + 0x06 - 6))
+    row0, row1 = u16(args + 0x0A - 6), u16(args + 0x0C - 6)
+    x0, x1 = u16(args + 0x0E - 6), u16(args + 0x10 - 6)
+    srcrow = u16(args + 0x1E - 6)
+
+    plane = m.read(g + 0x177D, 1)[0]
+    stride = 90 if u16(g + 0x4FE) else 80
+    dst_lin = far(g + 0x16F1)
+    plane_off = dst_lin - 0xA0000 + u16(g + 0x1727)
+    if plane_off < 0 or not m.active_planes:
+        return None
+
+    sx = x0 + plane
+    n = max(0, (x1 - sx + 3) // 4)
+    if n == 0:
+        return None
+    planes = [m.planes[p] for p in m.active_planes]
+    for row in range(row0, row1):
+        src = far(table + srcrow * 4) + plane
+        data = m.read(src, n * 4)[::4]
+        o = plane_off + row * stride + (sx >> 2)
+        for pl in planes:
+            if 0 <= o and o + len(data) <= len(pl):
+                pl[o:o + len(data)] = data
+        m.native_pixels += len(data)
+        srcrow += 1
+    return None
+
+
 # Offsets are into the unpacked image; confirmed against the disassembly and
 # ranked by --profile. Anything not listed still runs on the emulated CPU.
 # Verify a new entry with --verify before trusting it.
 NATIVE_TABLE = [
     (0x05D3A, "compose_layer", native_compose_layer, "far"),
     (0x063D6, "draw_sprite", native_draw_sprite, "far"),
+    (0x05C09, "blit_rows", native_blit_rows, "far"),
 ]
 
 
