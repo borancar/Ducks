@@ -1863,6 +1863,105 @@ def native_blit_rows(m, args):
 # Offsets are into the unpacked image; confirmed against the disassembly and
 # ranked by --profile. Anything not listed still runs on the emulated CPU.
 # Verify a new entry with --verify before trusting it.
+def _errno(m, dos_err):
+    """Reproduce the runtime's DOS-error-to-errno mapping, function 0x011ed.
+
+    Without this, a native that hits a failure has to decline and let the
+    original body raise the interrupt after all - and for the save-slot scan
+    failure is the common case, since four of five slots are usually empty. The
+    helper stores the DOS code in _doserrno at DGROUP:0x2f9c, translates it
+    through the byte table at 0x2f9e, stores that in errno at DGROUP:0x7f, and
+    returns 0xFFFF, which is also what its callers return.
+    """
+    if dos_err > 0x58:
+        dos_err = 0x57
+    m.uc.mem_write(m.dgroup_base + 0x2F9C, struct.pack("<H", dos_err))
+    e = m.uc.mem_read(m.dgroup_base + 0x2F9E + dos_err, 1)[0]
+    m.uc.mem_write(m.dgroup_base + 0x007F, struct.pack("<H", e))
+    return 0xFFFF
+
+
+def _dos_via_shim(m, ax, **regs):
+    """Run one DOS function through the shim and report whether it failed.
+
+    The natives below deliberately do not reimplement what trace_dos.py already
+    does - handle allocation, the save overlay, write-back on close. Duplicating
+    that logic is how the two drift apart, and its last bug was subtle enough to
+    cost a debugging session. So they set up the registers the interrupt would
+    have carried and call the same servicing code.
+    """
+    m._set(UC_X86_REG_AX, ax)
+    for name, val in regs.items():
+        m._set({"bx": UC_X86_REG_BX, "cx": UC_X86_REG_CX,
+                "dx": UC_X86_REG_DX}[name], val)
+    m._dos()
+    failed = bool(m.uc.reg_read(UC_X86_REG_EFLAGS) & 1)
+    return failed, m._reg(UC_X86_REG_AX)
+
+
+def native_dos_close(m, args):
+    """close(handle): INT 21h AH=3Eh, then clear the runtime's flags entry.
+
+    The original returns 0 on success and 0xFFFF with errno set on failure, and
+    on success zeroes this handle's word in the file-flags table at
+    DGROUP:0x2f6e - the same table write() consults to reject a read-only
+    handle, so it has to be maintained.
+    """
+    h = struct.unpack("<H", m.uc.mem_read(args, 2))[0]
+    if h not in m.handles:
+        return _errno(m, 6)                      # invalid handle
+    _dos_via_shim(m, 0x3E00, bx=h)
+    m.uc.mem_write(m.dgroup_base + 0x2F6E + 2 * h, b"\x00\x00")
+    return 0
+
+
+def native_dos_getattr(m, args):
+    """_dos_getfileattr(path, func, attr): INT 21h AH=43h.
+
+    Only the query direction (func 0) is served; setting attributes declines,
+    having never been observed. On success the original returns the attribute
+    word from CX, which is why it ends in "xchg cx,ax".
+    """
+    func = struct.unpack("<H", m.uc.mem_read(args + 4, 2))[0] & 0xFF
+    if func != 0:
+        return DECLINE
+    off, seg = struct.unpack("<HH", m.uc.mem_read(args, 4))
+    ds = m._reg(UC_X86_REG_DS)
+    m.uc.reg_write(UC_X86_REG_DS, seg)
+    failed, ax = _dos_via_shim(m, 0x4300, dx=off)
+    m.uc.reg_write(UC_X86_REG_DS, ds)
+    if failed:
+        return _errno(m, ax)
+    return m._reg(UC_X86_REG_CX)
+
+
+def _device_info(handle):
+    """The device-information word DOS returns for AH=44h AL=00h.
+
+    Bit 7 marks a character device. The shim ignores AH=44h entirely, so today
+    the game reads whatever happened to be in DX - it works only because the
+    answer is used to pick stream buffering. Answering properly is both
+    deterministic and correct: the three standard handles are the console, and
+    everything the game opens is a file.
+    """
+    return 0x80 if handle in (0, 1, 2) else 0x00
+
+
+def native_isatty(m, args):
+    """isatty(handle): AH=44h AL=00h, returning the device bit from DX."""
+    h = struct.unpack("<H", m.uc.mem_read(args, 2))[0]
+    return _device_info(h) & 0x80
+
+
+def native_ioctl(m, args):
+    """ioctl(handle, func, ...): AH=44h. Only get-device-info is served."""
+    h = struct.unpack("<H", m.uc.mem_read(args, 2))[0]
+    func = struct.unpack("<H", m.uc.mem_read(args + 2, 2))[0] & 0xFF
+    if func != 0:
+        return DECLINE
+    return _device_info(h)
+
+
 def native_dos_setblock(m, args):
     """Borland's _dos_setblock: resize the DOS memory block the heap lives in.
 
@@ -1952,6 +2051,14 @@ XMS_NATIVES = [
 FILE_NATIVES = [
     (0x014A3, "dos_read", native_dos_read, "far"),
     (0x012EB, "dos_lseek", native_dos_lseek, "far"),
+    # The DOS layer underneath the native fopen/fread. Thin wrappers: set up
+    # registers, one INT 21h, map the result, route failures through the errno
+    # helper at 0x011ed - which _errno() reproduces so a failure need not fall
+    # back to the interrupt.
+    (0x02F72, "dos_close", native_dos_close, "far"),
+    (0x02F2D, "dos_getattr", native_dos_getattr, "far"),
+    (0x01238, "isatty", native_isatty, "far"),
+    (0x029D3, "ioctl", native_ioctl, "far"),
 ]
 
 # Enabled with --native-keyboard. One entry covers all key polling: every call
