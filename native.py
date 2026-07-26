@@ -35,7 +35,7 @@ from unicorn import *
 from unicorn.x86_const import *
 
 import emulation
-from emulation import VgaDos, make_surface, capture
+from emulation import VgaDos, make_surface, capture, AudioSink
 
 # Borland large-model layout, as established in emulation.py and analyze.py.
 DGROUP_IMAGE_OFF = 0x18950
@@ -722,6 +722,10 @@ def main():
                          "diff the result (slow; correctness check only)")
     ap.add_argument("--keep-diagnostics", action="store_true",
                     help="keep the inherited per-write instrumentation on")
+    ap.add_argument("--sound-slices", type=int, default=32,
+                    help="times per display update to service the sound card")
+    ap.add_argument("--no-audio", action="store_true")
+    ap.add_argument("--wav", default="ducks_native.wav")
     ap.add_argument("--status-every", type=float, default=30.0)
     ap.add_argument("--unpacked", default="Ducks.unpacked.exe",
                     help="unpacked image, used to name functions when profiling")
@@ -737,6 +741,9 @@ def main():
     img = _d[struct.unpack_from("<13H", _d, 2)[3] * 16:]
     print(f"=== native-I/O port: {len(m.natives)} routine(s) serviced "
           f"natively, everything else emulated ===")
+    audio = None
+    if args.blaster and not args.no_audio:
+        audio = AudioSink()
 
     fpath = pygame.font.match_font("dejavusansmono,liberationmono,monospace")
     font = pygame.font.Font(fpath, 13) if fpath else pygame.font.SysFont(None, 16)
@@ -754,18 +761,29 @@ def main():
     addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
     running, frames, next_status = True, 0, args.status_every
     while running:
-        try:
-            m.uc.emu_start(addr, 0, count=args.chunk)
-        except UcError as e:
-            print(f"  [cpu] {e} at {m._reg(UC_X86_REG_CS):04x}:"
-                  f"{m._reg(UC_X86_REG_IP):04x}")
-            running = False
-        if m.finished:
-            print(f"  [dos] program exited: {m.finished}")
-            running = False
-        addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
-        m.service_sound()
-        addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
+        # Run the chunk in slices, servicing the sound card between each. One
+        # service per chunk leaves the sound IRQ hundreds of thousands of
+        # instructions late, and the game then refills its DMA buffer too
+        # slowly to produce continuous audio.
+        slices = max(1, args.sound_slices if m.sb is not None else 1)
+        step = max(1000, args.chunk // slices)
+        for _ in range(slices):
+            try:
+                m.uc.emu_start(addr, 0, count=step)
+            except UcError as e:
+                print(f"  [cpu] {e} at {m._reg(UC_X86_REG_CS):04x}:"
+                      f"{m._reg(UC_X86_REG_IP):04x}")
+                running = False
+                break
+            if m.finished:
+                print(f"  [dos] program exited: {m.finished}")
+                running = False
+                break
+            addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
+            m.service_sound()
+            addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
+        if audio is not None:
+            audio.push(m.sb)
 
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT or (
@@ -858,6 +876,11 @@ def main():
         if never:
             print(f"                    never called, so unverified: "
                   f"{', '.join(never)}")
+    if audio is not None:
+        print(f"  audio streaming : {audio.queued} chunks queued, "
+              f"{audio.dropped} dropped")
+    if m.sb is not None:
+        print(f"  audio written   : {m.sb.write_wav(args.wav) or 'no PCM'}")
     if m.draw_sites:
         m.profile_report(img)
     pygame.quit()
