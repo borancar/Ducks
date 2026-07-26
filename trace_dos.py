@@ -504,6 +504,21 @@ class DosMachine:
                 h = self.handles.get(bx)
                 nm = h.path if h else f"handle {bx}"
                 self.files_written[nm] = self.files_written.get(nm, 0) + cx
+                if h is not None and cx == 0:
+                    # A zero-length DOS write truncates the file at the current
+                    # position. The runtime uses it to empty a save slot before
+                    # rewriting it, and ignoring it looked harmless only because
+                    # the rewrite usually covers the whole file - but saves are
+                    # not a fixed size (61 to 66 bytes observed), so writing a
+                    # shorter save over a longer one left the old tail behind.
+                    if len(h.data) > h.pos:
+                        self._fop(f"TRUNCATE {h.path!r} {len(h.data)} -> {h.pos}")
+                        del h.data[h.pos:]
+                        h.written += 1      # dirty, so an abnormal exit flushes
+                        if getattr(h, "key", None):
+                            self.overlay[h.key] = bytearray(h.data)
+                    self._set(UC_X86_REG_AX, 0)
+                    return
                 if h is not None:
                     data = self._rd(ds, dx, cx)
                     if h.pos + cx > len(h.data):
