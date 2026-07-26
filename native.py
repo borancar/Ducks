@@ -65,12 +65,13 @@ class Native(VgaDos):
     def __init__(self, *a, profile=False, keep_diagnostics=False,
                  verify=False, native_sound=False, native_mouse=False,
                  native_keyboard=False, native_file=False, native_xms=False,
-                 persist=True, **kw):
+                 native_setup=False, persist=True, **kw):
         self.native_sound = native_sound
         self.native_mouse = native_mouse
         self.native_keyboard = native_keyboard
         self.native_file = native_file
         self.native_xms = native_xms
+        self.native_setup = native_setup
         self.persist = persist
         self.files_persisted = {}
         self.image_base = 0          # real value after super().__init__
@@ -932,6 +933,8 @@ class Native(VgaDos):
             table += FILE_NATIVES
         if self.native_xms:
             table += XMS_NATIVES
+        if self.native_setup:
+            table += SETUP_NATIVES
         for off, name, fn, kind in table:
             self.natives[off] = (name, fn, kind)
 
@@ -1758,6 +1761,38 @@ def native_blit_rows(m, args):
 # Offsets are into the unpacked image; confirmed against the disassembly and
 # ranked by --profile. Anything not listed still runs on the emulated CPU.
 # Verify a new entry with --verify before trusting it.
+def native_dos_setblock(m, args):
+    """Borland's _dos_setblock: resize the DOS memory block the heap lives in.
+
+    INT 21h AH=4Ah with ES=segment, BX=new size in paragraphs; on success the
+    original returns 0xFFFF, on failure it routes DOS's error code through the
+    runtime's errno helper. Our DOS never fails this call - it grants whatever is
+    asked - so success is the only reachable answer, and 799 interrupts in a
+    session collapse to a constant.
+    """
+    return 0xFFFF
+
+
+def native_bios_video(m, args):
+    """Borland's INT 10h wrapper, which takes its function number in AH.
+
+    The wrapper exists to work around video-BIOS quirks: it special-cases mode
+    setting (AH=00h) and mode query (AH=0Fh), and passes everything else
+    straight through. Those two paths read and write BIOS data-area variables
+    and chain several INT 10h calls, so they are declined and left to run.
+
+    Everything else - 990 get-cursor and 496 set-cursor calls in one session -
+    reaches an INT 10h that our shim deliberately ignores, since the game draws
+    its own text in Mode X and the BIOS cursor means nothing. Returning without
+    touching a register is therefore exactly what the interrupt did, minus the
+    interrupt.
+    """
+    ah = (m._reg(UC_X86_REG_AX) >> 8) & 0xFF
+    if ah in (0x00, 0x0F):
+        return DECLINE
+    return None
+
+
 def native_xms_present(m, args):
     """XMS installation check: INT 2Fh AX=4300h, AL=80h if a driver is there.
 
@@ -1800,6 +1835,13 @@ NATIVE_TABLE = [
 # rather than an interrupt. These two are the only INT 2Fh sites in the binary:
 # the detection pair the game calls once at startup before caching the driver
 # entry at DGROUP:0x2b46, from where every later request is an lcall.
+# Enabled with --native-setup. Runtime helpers that raise interrupts for
+# services our machine either grants unconditionally or ignores outright.
+SETUP_NATIVES = [
+    (0x02E07, "dos_setblock", native_dos_setblock, "far"),
+    (0x02067, "bios_video", native_bios_video, "near"),
+]
+
 XMS_NATIVES = [
     (0x159AE, "xms_present", native_xms_present, "far"),
     (0x159C7, "xms_get_entry", native_xms_get_entry, "far"),
@@ -1881,6 +1923,9 @@ def main():
     ap.add_argument("--native-xms", action="store_true",
                     help="service XMS with no interrupts: driver entry as a code "
                          "hook, plus the two INT 2Fh detection sites")
+    ap.add_argument("--native-setup", action="store_true",
+                    help="serve the C runtime's heap-resize and INT 10h wrapper "
+                         "natively")
     ap.add_argument("--run-seconds", type=float, default=0.0,
                     help="quit cleanly after N seconds, for measurement runs")
     ap.add_argument("--read-only", action="store_true",
@@ -1900,6 +1945,7 @@ def main():
                native_mouse=args.native_mouse,
                native_keyboard=args.native_keyboard,
                native_file=args.native_file, native_xms=args.native_xms,
+               native_setup=args.native_setup,
                persist=not args.read_only,
                max_insns=1 << 62)
     m.voices = NativeVoices(m, bank=m.bank) if args.native_sound else None
