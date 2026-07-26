@@ -2222,6 +2222,56 @@ def native_dos_write(m, args):
     return ax
 
 
+# Which interrupts int86 may raise that we can service without building code.
+# Deliberately a whitelist: anything else declines and lets the original stub run,
+# because these handlers are the ones we know read only the general registers.
+# An interrupt wanting ES:BP (a font pointer, say) would need the segment struct
+# threading through as well.
+_INT86_NATIVE = {
+    0x33: lambda m: m._mouse(),
+    0x10: lambda m: m._bios_video(),
+}
+_INT86_REGS = (UC_X86_REG_AX, UC_X86_REG_BX, UC_X86_REG_CX, UC_X86_REG_DX,
+               UC_X86_REG_SI, UC_X86_REG_DI)
+
+
+def native_int86(m, args):
+    """The worker behind int86/int86x, at 0x293a.
+
+    It exists because x86 has no INT with a register operand, so the runtime
+    assembles one: "push bp; int nn; pop bp; retf" - the bytes 55 CD nn 5D CB -
+    into its own stack frame and calls it. That is why the last interrupts in a
+    session came from an address outside the image with nothing to hook: the
+    instruction is on the stack, written moments before it executes.
+
+    Replacing the function that builds it is the right level to work at. The
+    arguments are the interrupt number and far pointers to the input, output and
+    segment register structs, each of the latter being ax, bx, cx, dx, si, di,
+    cflag, flags.
+
+    SI and DI are restored afterwards because the original saves them; AX to DX
+    are left as the interrupt returned them, also as the original does.
+    """
+    intno = struct.unpack("<H", m.uc.mem_read(args, 2))[0] & 0xFF
+    handler = _INT86_NATIVE.get(intno)
+    if handler is None:
+        return DECLINE
+    in_off, in_seg, out_off, out_seg = struct.unpack("<4H",
+                                                    m.uc.mem_read(args + 2, 8))
+    regs = struct.unpack("<8H", m.uc.mem_read(in_seg * 16 + in_off, 16))
+    keep_si, keep_di = m._reg(UC_X86_REG_SI), m._reg(UC_X86_REG_DI)
+    for reg, val in zip(_INT86_REGS, regs):
+        m._set(reg, val)
+    handler(m)
+    out = [m._reg(r) for r in _INT86_REGS]
+    flags = m.uc.reg_read(UC_X86_REG_EFLAGS) & 0xFFFF
+    m.uc.mem_write(out_seg * 16 + out_off,
+                   struct.pack("<8H", *out, flags & 1, flags))
+    m._set(UC_X86_REG_SI, keep_si)
+    m._set(UC_X86_REG_DI, keep_di)
+    return out[0]
+
+
 def _device_info(handle):
     """The device-information word DOS returns for AH=44h AL=00h.
 
@@ -2270,14 +2320,18 @@ def native_bios_video(m, args):
     and chain several INT 10h calls, so they are declined and left to run.
 
     Everything else - 990 get-cursor and 496 set-cursor calls in one session -
-    reaches an INT 10h that our shim deliberately ignores, since the game draws
-    its own text in Mode X and the BIOS cursor means nothing. Returning without
-    touching a register is therefore exactly what the interrupt did, minus the
-    interrupt.
+    is delegated to the same handler the interrupt would have reached. That
+    handler is NOT a no-op, which an earlier version of this native assumed after
+    reading only trace_dos.py: emulation.py overrides it to track the cursor for
+    real, because Ducks calls AH=03h to find out where to write and then pokes
+    0xb8000 itself. Returning without setting DX made every message compute row 0
+    and overwrite the last one - a bug that had already been found and fixed once
+    before this native briefly reintroduced it.
     """
     ah = (m._reg(UC_X86_REG_AX) >> 8) & 0xFF
     if ah in (0x00, 0x0F):
         return DECLINE
+    m._bios_video()
     return None
 
 
@@ -2328,6 +2382,7 @@ NATIVE_TABLE = [
 SETUP_NATIVES = [
     (0x02E07, "dos_setblock", native_dos_setblock, "far"),
     (0x02067, "bios_video", native_bios_video, "near"),
+    (0x0293A, "int86", native_int86, "far"),
 ]
 
 XMS_NATIVES = [

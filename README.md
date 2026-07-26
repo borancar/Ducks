@@ -273,7 +273,26 @@ startup reads ticks to seed the random number generator, so freezing it would
 make every session play out identically - a larger behavioural change than any
 interrupt removed here.
 
-What remains is **30** interrupts: `open` (14) and `write` (9), which maintain
+**int86, and the last two.** x86 has no INT with a register operand, so when the
+number is a variable the runtime assembles one: `0x293a` writes
+`55 CD nn 5D CB` - `push bp; int nn; pop bp; retf` - into its own stack frame and
+calls it. That is why the final interrupts came from an address outside the image
+with nothing to disassemble: the instruction is on the stack, written moments
+before it runs. Nothing static finds this; the stack does. At the interrupt, the
+frame chain leads back through `int86` to its caller, which `find_int86.py`
+prints - it found `0x293a` from the mouse reset in one run.
+
+Replacing that worker covers both `int86` and `int86x`. It takes the interrupt
+number and far pointers to the input, output and segment register structs
+(`ax, bx, cx, dx, si, di, cflag, flags`), so the native loads the registers,
+dispatches to the same handler the interrupt would have reached, and writes the
+results back. Only a whitelist of interrupts is served - the handlers known to
+read just the general registers - and anything else declines and lets the stub
+run.
+
+With that, a session executes **no interrupts at all**.
+
+Superseded, for the record: `open` (14) and `write` (9), which maintain
 the file-flags table at DGROUP:`0x2f6e` on success and so were left alone rather
 than risk the save path; the console read behind `getch` (3), which sits 0xa2
 bytes inside a function rather than behind a wrapper; the two `INT 10h AH=0Fh`
