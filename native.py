@@ -83,6 +83,9 @@ class Native(VgaDos):
         self._cache_pages = {}
         self._cache_hooks = {}
         self.cache_hits = self.cache_misses = self.cache_drops = 0
+        self.sound_sites = Counter()
+        self._sound_hook = None
+        self._want_sound_profile = False
         self.mark_reads = self.mark_rb = 0
         self.mark_nt = 0.0
         self.verify = verify
@@ -124,6 +127,8 @@ class Native(VgaDos):
 
     def _watch_dma_buffer(self):
         """Suppress the sound-buffer write watch; it is diagnostics only."""
+        if getattr(self, "_want_sound_profile", False):
+            self.profile_sound()
         if getattr(self, "_diagnostics_off", False):
             return
         return super()._watch_dma_buffer()
@@ -300,6 +305,57 @@ class Native(VgaDos):
                   f"{per_frame:8.1f}/frame  ({n} calls)")
         if not rows:
             print("           no native calls in this interval")
+
+    def profile_sound(self):
+        """Attribute writes to the sound DMA buffer to the code that made them.
+
+        The same discovery step that found the drawing routines: we cannot
+        replace the mixer without knowing which function it is. The buffer
+        address is only known once the game programmes the DMA controller, so
+        this arms itself when that has happened.
+        """
+        sb = self.sb
+        if self._sound_hook is not None:
+            return False
+        # Remember the request: the DMA buffer address is not known until the
+        # game programmes the controller, which happens after the sound check,
+        # so arming has to be able to wait rather than silently doing nothing.
+        if sb is None or not sb.dma_active:
+            if not self._want_sound_profile:      # announce once, not per slice
+                print("  [snd] sound profiling requested; will arm once the "
+                      "game starts DMA playback")
+            self._want_sound_profile = True
+            return False
+        self._want_sound_profile = True
+        lo = (sb.dma_page << 16) | sb.dma_addr
+        hi = lo + max(512, getattr(sb, "dma_len", 512)) - 1
+
+        def on_write(uc, access, address, size, value, user):
+            self.sound_sites[(uc.reg_read(UC_X86_REG_CS),
+                              uc.reg_read(UC_X86_REG_IP))] += size
+
+        self._sound_hook = self.uc.hook_add(UC_HOOK_MEM_WRITE, on_write,
+                                           None, lo, hi)
+        print(f"  [snd] profiling writes to the DMA buffer "
+              f"{lo:#07x}..{hi:#07x}")
+        return True
+
+    def sound_report(self, img):
+        if not self.sound_sites:
+            print("  [snd] no writes to the DMA buffer recorded yet")
+            return
+        print("\n=== sound DMA-buffer write sites (the mixer) ===")
+        by_func = defaultdict(int)
+        detail = defaultdict(list)
+        for (cs, ip), n in self.sound_sites.most_common(40):
+            off = cs * 16 + ip - self.image_base
+            fn = find_function_start(img, off)
+            by_func[fn] += n
+            detail[fn].append((off, n))
+        for fn, n in sorted(by_func.items(), key=lambda kv: -kv[1]):
+            name = f"{fn:#07x}" if fn is not None else "  unknown"
+            sites = ", ".join(f"{o:#07x}({c})" for o, c in detail[fn][:4])
+            print(f"  {name:>10}  {n:>10} bytes  {sites}")
 
     def _on_draw_write(self, uc, access, address, size, value, user):
         self.draw_sites[(uc.reg_read(UC_X86_REG_CS),
@@ -730,6 +786,44 @@ def native_draw_sprite(m, args):
     return None
 
 
+def native_sound_gather(m, args):
+    """Native replacement for the sample gather at 0x157c1. Takes no arguments.
+
+    Not a mixer despite appearances: for each of 256 output bytes it reads a
+    16-bit offset from a table and copies that byte of the sample buffer, which
+    is how pitch and looping are expressed. Volume and voice mixing happen
+    elsewhere.
+
+    The original is careful with segments and the native has to match:
+
+        mov ss, ds          -> SS = DGROUP, so [bp] reads the offset table
+        lds si, [0x2b42]    -> DS:SI = sample base; DS is NOT DGROUP after this
+        les di, [0x3969]    -> read through the NEW DS, i.e. the sample segment
+        mov al, [bx + si]   -> 16-bit offset arithmetic, wraps in the segment
+
+    Note this is ~43 calls/second writing 11 KB/s, against 4.5 MB/s for
+    graphics, so it is converted for consistency rather than for speed.
+    """
+    g = m.dgroup_base
+    soff, sseg = struct.unpack("<HH", m.read(g + 0x2B42, 4))
+    sbase = sseg * 16
+
+    # The table encodes the current playback position, so it changes every call
+    # and must not be cached.
+    tbl = np.frombuffer(m.read(g + 0x3977, 512), dtype=np.uint16)
+
+    # Destination pointer is read through the sample segment, as above.
+    doff, dseg = struct.unpack("<HH", m.read(sbase + 0x3969, 4))
+    dest = dseg * 16 + doff
+
+    idx = (tbl.astype(np.uint32) + soff) & 0xFFFF
+    lo, hi = int(idx.min()), int(idx.max())
+    src = np.frombuffer(m.read(sbase + lo, hi - lo + 1), dtype=np.uint8)
+    m.write(dest, src[idx - lo].tobytes())
+    m.native_pixels += 0                 # not pixels; keep the counter honest
+    return None
+
+
 def native_clear_vram(m, args):
     """Native replacement for the full-screen clear at 0x04d2a. Takes no args.
 
@@ -983,6 +1077,7 @@ NATIVE_TABLE = [
     (0x05AC2, "blit_rows_masked", native_blit_rows_masked, "far"),
     (0x05761, "plot_pixel", native_plot_pixel, "far"),
     (0x04D2A, "clear_vram", native_clear_vram, "far"),
+    (0x157C1, "sound_gather", native_sound_gather, "far"),
 ]
 
 
@@ -994,6 +1089,8 @@ def main():
     ap.add_argument("--blaster", action="store_true")
     ap.add_argument("--profile", action="store_true",
                     help="report which routines do the drawing, then exit")
+    ap.add_argument("--profile-sound", action="store_true",
+                    help="profile writes to the sound DMA buffer from the start")
     ap.add_argument("--verify", action="store_true",
                     help="run each native alongside the code it replaces and "
                          "diff the result (slow; correctness check only)")
@@ -1016,6 +1113,8 @@ def main():
     # Kept in hand so the profile report can name functions at any moment.
     _d = open(args.unpacked, "rb").read()
     img = _d[struct.unpack_from("<13H", _d, 2)[3] * 16:]
+    if args.profile_sound:
+        m.profile_sound()
     print(f"=== native-I/O port: {len(m.natives)} routine(s) serviced "
           f"natively, everything else emulated ===")
     audio = None
@@ -1072,6 +1171,9 @@ def main():
                     print(f"  [trace] {'ON (counters reset)' if m.profiling else 'OFF'}")
                 elif ev.key == pygame.K_F6:
                     m.profile_report(img)
+                    m.sound_report(img)
+                elif ev.key == pygame.K_F3:
+                    m.profile_sound()
                 elif ev.key == pygame.K_F7:
                     m.set_verify(not m.verify)
                 elif ev.key == pygame.K_F8:
@@ -1170,6 +1272,8 @@ def main():
         print(f"  audio written   : {m.sb.write_wav(args.wav) or 'no PCM'}")
     if m.draw_sites:
         m.profile_report(img)
+    if m.sound_sites:
+        m.sound_report(img)
     pygame.quit()
 
 
