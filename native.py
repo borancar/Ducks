@@ -1181,7 +1181,10 @@ def native_kbhit(m, args):
     """
     if m.read(m.dgroup_base + 0x30C6, 1)[0] != 0:
         return 1
-    return 0xFFFF if m.key_buf else 0
+    # Must also report ready while the scancode half of an extended key is
+    # still pending, or the game stops asking before collecting it.
+    ready = bool(m.key_buf) or m.pending_scan is not None
+    return 0xFFFF if ready else 0
 
 
 def native_mouse_motion(m, args):

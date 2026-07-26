@@ -99,6 +99,7 @@ class VgaDos(DosMachine):
         self.mode = 0x03
         self.width, self.height = 320, 200
         self.key_buf = deque()
+        self.pending_scan = None   # second half of a DOS extended-key read
         self.last_scancode = 0
         self.mouse_pos = (160, 100)
         self.mouse_btn = 0
@@ -461,15 +462,26 @@ class VgaDos(DosMachine):
         ah = ax >> 8
         if ah == 0x0B:
             self.dos_counts[ah] += 1
-            self._set(UC_X86_REG_AX, (ax & 0xFF00) |
-                      (0xFF if self.key_buf else 0x00))
+            ready = bool(self.key_buf) or self.pending_scan is not None
+            self._set(UC_X86_REG_AX, (ax & 0xFF00) | (0xFF if ready else 0x00))
             self._cf(False)
             return
         if ah in (0x01, 0x06, 0x07, 0x08):
             self.dos_counts[ah] += 1
-            if self.key_buf:
+            # DOS delivers extended keys (arrows, function keys) as TWO reads:
+            # a 0x00 prefix, then the scancode. Returning only the prefix and
+            # dropping the key makes every extended key look like a null
+            # character, which is why arrow keys did nothing.
+            if self.pending_scan is not None:
+                sc, self.pending_scan = self.pending_scan, None
+                self._set(UC_X86_REG_AX, (ax & 0xFF00) | sc)
+            elif self.key_buf:
                 sc, asc = self.key_buf.popleft()
-                self._set(UC_X86_REG_AX, (ax & 0xFF00) | asc)
+                if asc == 0:
+                    self.pending_scan = sc
+                    self._set(UC_X86_REG_AX, ax & 0xFF00)
+                else:
+                    self._set(UC_X86_REG_AX, (ax & 0xFF00) | asc)
             else:
                 self._set(UC_X86_REG_AX, ax & 0xFF00)
             self._cf(False)
