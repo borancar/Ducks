@@ -63,13 +63,16 @@ class Native(VgaDos):
 
     def __init__(self, *a, profile=False, keep_diagnostics=False,
                  verify=False, native_sound=False, native_mouse=False,
-                 **kw):
+                 native_keyboard=False, **kw):
         self.native_sound = native_sound
         self.native_mouse = native_mouse
+        self.native_keyboard = native_keyboard
         self.voices = None
         self.bank = SoundBank()
         self.trace_mouse = False
         self.mouse_stacks = Counter()
+        self.trace_keyboard = False
+        self.kbd_stacks = Counter()
         self.natives = {}            # image offset -> (name, handler, kind)
         self.native_calls = Counter()
         self.profiling = profile
@@ -321,6 +324,31 @@ class Native(VgaDos):
                   f"{per_frame:8.1f}/frame  ({n} calls)")
         if not rows:
             print("           no native calls in this interval")
+
+    def _dos(self):
+        """Service DOS calls, optionally recording who polls the keyboard.
+
+        The game never uses INT 16h - it reaches the keyboard through DOS
+        check-stdin and read-char, i.e. Borland's kbhit()/getch(). Same BP-chain
+        trick as the mouse, since these are library calls too.
+        """
+        if self.trace_keyboard:
+            ah = (self._reg(UC_X86_REG_AX) >> 8) & 0xFF
+            if ah in (0x01, 0x06, 0x07, 0x08, 0x0B):
+                self.kbd_stacks[(ah,) + self._bp_chain(5)] += 1
+        return super()._dos()
+
+    def kbd_report(self, img):
+        if not self.kbd_stacks:
+            return
+        print("\n=== keyboard pollers (DOS fn, then BP chain) ===")
+        for chain, n in self.kbd_stacks.most_common(10):
+            ah, frames = chain[0], chain[1:]
+            named = []
+            for off in frames:
+                f = find_function_start(img, off)
+                named.append(f"{f:#07x}" if f is not None else f"?{off:#07x}")
+            print(f"  AH={ah:02x}h x{n:<7} {' <- '.join(named)}")
 
     def _mouse(self):
         """Service INT 33h, optionally recording who asked.
@@ -704,6 +732,8 @@ class Native(VgaDos):
             table += SOUND_NATIVES
         if self.native_mouse:
             table += MOUSE_NATIVES
+        if self.native_keyboard:
+            table += KEYBOARD_NATIVES
         for off, name, fn, kind in table:
             self.natives[off] = (name, fn, kind)
 
@@ -1137,6 +1167,23 @@ def native_mix_voice(m, args):
     return None
 
 
+def native_kbhit(m, args):
+    """Borland kbhit() at 0x029fc - the single choke point for key polling.
+
+    The game reaches the keyboard only through DOS check-stdin (no INT 16h, no
+    INT 09h hook), from many different call sites, so there is no wrapper worth
+    replacing - but they all funnel through this one library routine, called
+    ~308k times a session.
+
+    Faithful to two details: the pushback buffer at [0x30c6] is consulted first
+    and returns 1, and the DOS path sign-extends AL so "key available" is 0xffff
+    rather than 1. The routine is frameless and takes no arguments.
+    """
+    if m.read(m.dgroup_base + 0x30C6, 1)[0] != 0:
+        return 1
+    return 0xFFFF if m.key_buf else 0
+
+
 def native_mouse_motion(m, args):
     """mouse_motion(int far *dx, int far *dy) at 0x0675b (INT 33h AX=0x0b).
 
@@ -1467,6 +1514,12 @@ NATIVE_TABLE = [
 # Enabled only with --native-sound. The whole family must go together: the game
 # queries and stops sounds by id and reads an active-voice count, so pygame and
 # the guest's voice table have to agree or sounds stop starting.
+# Enabled with --native-keyboard. One entry covers all key polling: every call
+# site reaches the keyboard through this library routine.
+KEYBOARD_NATIVES = [
+    (0x029FC, "kbhit", native_kbhit, "far"),
+]
+
 # Enabled with --native-mouse. These three are the game's entire mouse input:
 # it never asks for an absolute position, so replacing them removes all INT 33h
 # traffic (2.69M calls in one session) and the int86 shim behind it.
@@ -1495,9 +1548,14 @@ def main():
                     help="report which routines do the drawing, then exit")
     ap.add_argument("--profile-sound", action="store_true",
                     help="profile writes to the sound DMA buffer from the start")
+    ap.add_argument("--native-keyboard", action="store_true",
+                    help="serve kbhit() natively, removing all key polling "
+                         "through DOS")
     ap.add_argument("--native-mouse", action="store_true",
                     help="serve the game's mouse wrappers natively, removing "
                          "all INT 33h traffic")
+    ap.add_argument("--trace-keyboard", action="store_true",
+                    help="record which game functions poll the keyboard")
     ap.add_argument("--trace-mouse", action="store_true",
                     help="record which game functions poll INT 33h")
     ap.add_argument("--sound-bank", action="store_true",
@@ -1532,11 +1590,13 @@ def main():
     m = Native(args.exe, blaster=args.blaster, profile=args.profile,
                keep_diagnostics=args.keep_diagnostics, verify=args.verify,
                native_sound=args.native_sound,
-               native_mouse=args.native_mouse, max_insns=1 << 62)
+               native_mouse=args.native_mouse,
+               native_keyboard=args.native_keyboard, max_insns=1 << 62)
     m.voices = NativeVoices(m, bank=m.bank) if args.native_sound else None
     if args.native_sound or args.sound_bank:
         m.capture_loader()
     m.trace_mouse = args.trace_mouse
+    m.trace_keyboard = args.trace_keyboard
     # Kept in hand so the profile report can name functions at any moment.
     _d = open(args.unpacked, "rb").read()
     img = _d[struct.unpack_from("<13H", _d, 2)[3] * 16:]
@@ -1724,6 +1784,7 @@ def main():
         print(f"  native voices   : {json.dumps(m.voices.summary())}")
     m.bank.report()
     m.mouse_report(img)
+    m.kbd_report(img)
     pygame.quit()
 
 
