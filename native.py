@@ -2103,6 +2103,73 @@ def native_dos_getattr(m, args):
     return m._reg(UC_X86_REG_CX)
 
 
+# The runtime's per-handle flags, one word each, indexed by file descriptor.
+# open() fills a slot, write() consults and updates it, close() clears it - so a
+# native replacing any one of them has to maintain it or the others misbehave.
+FLAGS_TABLE = 0x2F6E        # DGROUP offset of the table
+FLAGS_COUNT = 0x2F6C        # DGROUP offset of its length
+
+
+def native_dos_open(m, args):
+    """_open(path, oflags): INT 21h AH=3Dh, then record the handle's flags.
+
+    The access mode DOS wants is derived from the O_ bits - bit 1 write-only,
+    bit 2 read/write, neither read-only - with the sharing bits in 0xf0 passed
+    straight through. On success the original stores (oflags & 0xb8ff) | 0x8000
+    in this handle's flags word, which is what write() later tests to reject a
+    read-only handle, and returns the descriptor.
+    """
+    off, seg = struct.unpack("<HH", m.uc.mem_read(args, 4))
+    flags = struct.unpack("<H", m.uc.mem_read(args + 4, 2))[0]
+    mode = 1 if flags & 2 else (2 if flags & 4 else 0)
+    mode |= flags & 0xF0
+    ds = m._reg(UC_X86_REG_DS)
+    m.uc.reg_write(UC_X86_REG_DS, seg)
+    failed, ax = _dos_via_shim(m, 0x3D00 | mode, dx=off)
+    m.uc.reg_write(UC_X86_REG_DS, ds)
+    if failed:
+        return _errno(m, ax)
+    fd = ax
+    limit = struct.unpack("<H", m.uc.mem_read(m.dgroup_base + FLAGS_COUNT, 2))[0]
+    if fd >= limit:
+        # The original writes regardless and would corrupt whatever follows the
+        # table. Our handle allocator caps below the limit so this cannot happen;
+        # say so rather than silently scribbling if that ever changes.
+        print(f"  [file] handle {fd} is past the {limit}-entry flags table")
+        return fd
+    m.uc.mem_write(m.dgroup_base + FLAGS_TABLE + 2 * fd,
+                   struct.pack("<H", (flags & 0xB8FF) | 0x8000))
+    return fd
+
+
+def native_dos_write(m, args):
+    """_write(handle, buf, count): INT 21h AH=40h, guarded by the flags table.
+
+    A handle opened read-only - bit 0 of its flags word - is refused with DOS
+    error 5 before any call is made, exactly as the original does. On success the
+    original sets bit 0x1000 to mark the handle written to.
+    """
+    h = struct.unpack("<H", m.uc.mem_read(args, 2))[0]
+    off, seg = struct.unpack("<HH", m.uc.mem_read(args + 2, 4))
+    count = struct.unpack("<H", m.uc.mem_read(args + 6, 2))[0]
+    slot = m.dgroup_base + FLAGS_TABLE + 2 * h
+    flags = struct.unpack("<H", m.uc.mem_read(slot, 2))[0]
+    if flags & 1:
+        # Worth announcing: a wrong flags-table address would refuse every write
+        # here while the original happily performed it, and the failure would
+        # otherwise be invisible - the runtime just gets EACCES back.
+        m._fop(f"WRITE REFUSED handle {h}, flags {flags:#06x} says read-only")
+        return _errno(m, 5)                     # access denied
+    ds = m._reg(UC_X86_REG_DS)
+    m.uc.reg_write(UC_X86_REG_DS, seg)
+    failed, ax = _dos_via_shim(m, 0x4000, bx=h, cx=count, dx=off)
+    m.uc.reg_write(UC_X86_REG_DS, ds)
+    if failed:
+        return _errno(m, ax)
+    m.uc.mem_write(slot, struct.pack("<H", flags | 0x1000))
+    return ax
+
+
 def _device_info(handle):
     """The device-information word DOS returns for AH=44h AL=00h.
 
@@ -2227,6 +2294,11 @@ FILE_NATIVES = [
     (0x02F2D, "dos_getattr", native_dos_getattr, "far"),
     (0x01238, "isatty", native_isatty, "far"),
     (0x029D3, "ioctl", native_ioctl, "far"),
+    (0x03AFE, "dos_open", native_dos_open, "far"),
+    (0x04B10, "dos_write", native_dos_write, "far"),
+    # creat (0x03962) is left emulated: it ends in "ret 6", the Pascal
+    # convention where the callee pops its own arguments, which the native
+    # dispatcher does not model. One call per session.
 ]
 
 # Enabled with --native-keyboard. One entry covers all key polling: every call
@@ -2542,6 +2614,10 @@ def main():
         print(f"  file operations ({len(m.file_ops)}):")
         for op in m.file_ops[-40:]:
             print(f"    {op}")
+    if m.stdout:
+        print("  program console output:")
+        for line in m.stdout.decode("latin1").replace("\r\n", "\n").split("\n"):
+            print(f"    | {line}")
     if m.files_persisted:
         print(f"  saved to disk   : {m.files_persisted}")
     elif m.overlay:
