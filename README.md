@@ -51,7 +51,7 @@ byte-for-byte.
 ## Running the game
 
 ```sh
-venv/bin/python play.py --scale 3
+venv/bin/python emulation.py --scale 3
 ```
 
 Controls: **F9** pause/resume, **F10** capture, **F11** cycle the Mode X start
@@ -89,7 +89,7 @@ Notes on what the emulation has to get right:
 ## Sound
 
 ```sh
-venv/bin/python play.py --blaster        # advertise BLASTER=A220 I5 D1
+venv/bin/python emulation.py --blaster        # advertise BLASTER=A220 I5 D1
 ```
 
 `sb.py` models the DSP, the 8237 DMA channel and the IRQ. Ducks drives it in a
@@ -129,13 +129,49 @@ before `pygame.mixer.pre_init()` can take effect, so the mixer must be explicitl
 `quit()` and reopened at the game's rate; and a mixer channel holds only one
 queued sound, so overflow must be buffered rather than dropped.
 
+## Native-I/O port
+
+```sh
+venv/bin/python native.py --scale 3 --blaster
+venv/bin/python native.py --profile        # rank the drawing routines
+venv/bin/python native.py --verify         # check a native against the original
+```
+
+`native.py` subclasses `emulation.py`. The game logic still runs on the emulated
+CPU, but recognised I/O routines are intercepted at their entry: the handler
+reads the arguments off the stack, does the work natively, puts the result in AX
+and returns to the caller, skipping the original body. Anything not in
+`NATIVE_TABLE` falls through to full emulation, so the port converts one routine
+at a time and is never in a half-working state.
+
+Ducks is Borland Turbo C++, so its I/O sits behind ordinary C functions with a
+regular calling convention, which is what makes this practical.
+
+**Find targets before writing any native.** `--profile` attributes every write to
+video memory to the instruction that made it, then walks back to the enclosing
+function via its `push bp; mov bp,sp` prologue, giving a ranked list of what
+actually does the drawing. Tracing is off by default and toggleable at runtime —
+**F5** on/off, **F6** report, or `touch trace.on` / `trace.off` / `trace.report`
+— so a specific slow moment can be measured without paying for the whole session
+or replaying to reach it.
+
+**Verify before trusting.** `--verify` runs the native into a snapshot, restores
+it, lets the original body run, and diffs the planes on return. A hand-translated
+blitter can be wrong in ways that still look plausible on screen; this is what
+`emulation.py` is kept for.
+
+One structural win worth knowing: the sprite blitter draws only pixels whose
+`x & 3` matches the current plane, so the game calls it four times per sprite —
+four times the loop iterations for one sprite's pixels. A native does all planes
+in one pass.
+
 ## Files
 
 | file | purpose |
 | --- | --- |
 | `unpack_ducks.py` | emulates DIET's stub, writes a plain EXE |
 | `validate.py` | verifies the unpack, incl. the round-trip check |
-| `play.py` | DOS + VGA + SDL; runs the game interactively |
+| `emulation.py` | DOS + VGA + SDL; runs the game interactively |
 | `sb.py` | Sound Blaster DSP, DMA channel and IRQ model |
 | `xms.py` | XMS / HIMEM.SYS driver; without it the game has no sound |
 | `find_sound_code.py` | finds the code referencing a given string constant |

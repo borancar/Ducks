@@ -16,10 +16,10 @@ writes to settings.dat and save files are intercepted in memory. Nothing in the
 game directory is modified.
 
 Usage:
-    python play.py                        # interactive window
-    python play.py --scale 3
-    python play.py --shots 6 --shot-every 2.0   # save PNGs and exit
-    python play.py --blaster              # advertise a Sound Blaster
+    python emulation.py                        # interactive window
+    python emulation.py --scale 3
+    python emulation.py --shots 6 --shot-every 2.0   # save PNGs and exit
+    python emulation.py --blaster              # advertise a Sound Blaster
 """
 import argparse
 import os
@@ -129,8 +129,10 @@ class VgaDos(DosMachine):
         super().__init__(exe, blaster=blaster, verbose=False, **kw)
         # Watch the video apertures so we can tell where the game actually
         # draws: 0xa0000 (graphics) vs 0xb8000 (colour text) vs 0xb0000 (mono).
-        self.uc.hook_add(UC_HOOK_MEM_WRITE, self._on_vidwrite,
-                         None, 0xA0000, 0xBFFFF)
+        # Handle kept so a subclass can drop this one: it is diagnostics only,
+        # but it fires on every single write to video memory.
+        self._vidwrite_hook = self.uc.hook_add(
+            UC_HOOK_MEM_WRITE, self._on_vidwrite, None, 0xA0000, 0xBFFFF)
         self.uc.hook_add(UC_HOOK_MEM_WRITE, self._on_plane_write,
                          None, 0xA0000, 0xAFFFF)
         # The guest reaches XMS by far-calling this stub: INT 60h services the
