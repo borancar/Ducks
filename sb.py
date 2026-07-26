@@ -119,6 +119,7 @@ class SoundBlaster:
         self.sample_values = Counter()
         self.buf_writes = 0
         self.buf_write_values = Counter()
+        self.saw_signal = False        # has anything but 0x80 (silence) landed?
 
     # ------------------------------------------------------------------ log
     def note(self, msg):

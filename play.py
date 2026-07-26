@@ -65,6 +65,8 @@ KEYMAP[pygame.K_0] = (0x0B, ord("0"))
 for i in range(1, 11):
     KEYMAP[getattr(pygame, f"K_F{i}")] = (0x3A + i - 1, 0x00)
 
+TRACE_TEXT = False          # set by --text-trace
+
 MODE_GEOM = {0x13: (320, 200), 0x00: (320, 200), 0x01: (320, 200),
              0x04: (320, 200), 0x05: (320, 200), 0x0D: (320, 200),
              0x0E: (640, 200), 0x10: (640, 350), 0x12: (640, 480)}
@@ -105,6 +107,9 @@ class VgaDos(DosMachine):
         self.palette_writes = 0
         self.int10_fn = Counter()
         self.text_mode = True             # DOS hands us mode 03h
+        self.cursor = [(0, 0)] * 8
+        self.active_page = 0
+        self._trun = None
         self.sb = SoundBlaster(base=0x220, irq=5, dma=1,
                               log=print, verbose=True) if blaster else None
         self.sb_last_tick = None
@@ -119,6 +124,33 @@ class VgaDos(DosMachine):
                          None, 0xA0000, 0xBFFFF)
         self.uc.hook_add(UC_HOOK_MEM_WRITE, self._on_plane_write,
                          None, 0xA0000, 0xAFFFF)
+        if TRACE_TEXT:
+            self.uc.hook_add(UC_HOOK_MEM_WRITE, self._on_textwrite,
+                             None, 0xB8000, 0xB8FA0)
+
+    def _flush_text_run(self):
+        """Emit the pending run of characters poked straight into 0xb8000."""
+        if not self._trun:
+            return
+        start, chars = self._trun
+        row, col = divmod(start, 80)
+        text = "".join(chr(c) if 32 <= c < 127 else "." for c in chars)
+        print(f"  [txt] wrote {len(chars):>3} chars at row {row} col {col}: "
+              f"{text[:72]!r}")
+        self._trun = None
+
+    def _on_textwrite(self, uc, access, address, size, value, user):
+        """Coalesce direct text-buffer writes into runs, for --text-trace."""
+        off = address - 0xB8000
+        if off < 0 or off >= 80 * 25 * 2 or off & 1:
+            return                              # attribute byte, or off-screen
+        cell = off // 2
+        ch = value & 0xFF
+        if self._trun and self._trun[0] + len(self._trun[1]) == cell:
+            self._trun[1].append(ch)
+        else:
+            self._flush_text_run()
+            self._trun = (cell, [ch])
 
     def _on_vidwrite(self, uc, access, address, size, value, user):
         if address >= 0xB8000:
@@ -273,7 +305,16 @@ class VgaDos(DosMachine):
         def on_write(uc, access, address, size, value, user):
             sb.buf_writes += size
             for i in range(size):
-                sb.buf_write_values[(value >> (8 * i)) & 0xFF] += 1
+                b = (value >> (8 * i)) & 0xFF
+                sb.buf_write_values[b] += 1
+                # Announce the instant real audio first appears. Without this,
+                # confirming "the game mixed an actual sound" means trawling a
+                # megabyte of capture for the one moment it happened.
+                if not sb.saw_signal and b != 0x80:
+                    sb.saw_signal = True
+                    print(f"  [sb] *** FIRST NON-SILENT SAMPLE {b:#04x} at "
+                          f"t={self._elapsed():.1f}s - the game is mixing "
+                          f"real audio ***")
 
         self._dma_hook = self.uc.hook_add(UC_HOOK_MEM_WRITE, on_write,
                                          None, lo, hi)
@@ -330,6 +371,16 @@ class VgaDos(DosMachine):
             self._set(UC_X86_REG_AX, 0)
             return
 
+    def _on_intr(self, uc, intno, user):
+        if intno == 0x29:
+            # DOS fast console output: write AL at the cursor and advance it.
+            # Real DOS always provides this vector; dropping it silently loses
+            # every character and newline emitted through it.
+            self.int_counts[intno] += 1
+            self._tty(self._reg(UC_X86_REG_AX) & 0xFF)
+            return
+        return super()._on_intr(uc, intno, user)
+
     def _dos(self):
         """Feed real keystrokes to the DOS console-input calls too.
 
@@ -351,6 +402,36 @@ class VgaDos(DosMachine):
                 self._set(UC_X86_REG_AX, (ax & 0xFF00) | asc)
             else:
                 self._set(UC_X86_REG_AX, ax & 0xFF00)
+            self._cf(False)
+            return
+
+        # DOS console output: render it to the screen and advance the cursor,
+        # rather than only capturing the text.
+        ds = self.uc.reg_read(UC_X86_REG_DS)
+        dx = self._reg(UC_X86_REG_DX)
+        if ah == 0x02:
+            self.dos_counts[ah] += 1
+            ch = dx & 0xFF
+            self.stdout.append(ch)
+            self._tty(ch)
+            self._cf(False)
+            return
+        if ah == 0x09:
+            self.dos_counts[ah] += 1
+            s = self._rd(ds, dx, 256).split(b"$")[0]
+            self.stdout += s
+            for ch in s:
+                self._tty(ch)
+            self._cf(False)
+            return
+        if ah == 0x40 and self._reg(UC_X86_REG_BX) in (1, 2):
+            self.dos_counts[ah] += 1
+            cx = self._reg(UC_X86_REG_CX)
+            s = self._rd(ds, dx, cx)
+            self.stdout += s
+            for ch in s:
+                self._tty(ch)
+            self._set(UC_X86_REG_AX, cx)
             self._cf(False)
             return
         return super()._dos()
@@ -399,10 +480,113 @@ class VgaDos(DosMachine):
             return
         return
 
+    def _scroll(self, r1, c1, r2, c2, lines, attr):
+        """Scroll a text window up, filling the vacated rows with `attr`."""
+        base = 0xB8000
+        blank = bytes([0x20, attr]) * max(0, c2 - c1 + 1)
+        if lines == 0 or lines > (r2 - r1):
+            for r in range(r1, r2 + 1):
+                self.uc.mem_write(base + (r * 80 + c1) * 2, blank)
+            return
+        for r in range(r1, r2 + 1 - lines):
+            src = base + ((r + lines) * 80 + c1) * 2
+            row = bytes(self.uc.mem_read(src, (c2 - c1 + 1) * 2))
+            self.uc.mem_write(base + (r * 80 + c1) * 2, row)
+        for r in range(r2 + 1 - lines, r2 + 1):
+            self.uc.mem_write(base + (r * 80 + c1) * 2, blank)
+
+    def _tty(self, ch, page=0, attr=0x07):
+        """Write one character at the cursor and advance it, like the BIOS.
+
+        Used for both INT 10h 0eh and DOS console output. DOS output MUST move
+        the cursor: Ducks mixes DOS writes with glyphs it pokes into 0xb8000
+        itself, positioning those by asking INT 10h 03h where the cursor is. If
+        console output leaves the cursor behind, the game's own text lands at
+        stale columns - which is what makes its 80-column rules start mid-line
+        and wrap.
+        """
+        row, col = self.cursor[page & 7]
+        if ch == 0x0D:
+            col = 0
+        elif ch == 0x0A:
+            row += 1
+        elif ch == 0x08:
+            col = max(0, col - 1)
+        elif ch == 0x09:
+            col = (col + 8) & ~7
+        elif ch == 0x07:
+            pass                              # bell: nothing to draw
+        else:
+            self.uc.mem_write(0xB8000 + (row * 80 + col) * 2,
+                              bytes([ch, attr]))
+            col += 1
+        if col >= 80:
+            col, row = 0, row + 1
+        if row > 24:
+            self._scroll(0, 0, 24, 79, 1, attr)
+            row = 24
+        self._set_cursor(page & 7, row, col)
+
+    def _set_cursor(self, page, row, col):
+        self.cursor[page & 7] = (row, col)
+        # The BIOS keeps the cursor position in the BDA at 0x450 (col, row per
+        # page); programs read it directly as often as they call INT 10h.
+        self.uc.mem_write(0x450 + (page & 7) * 2,
+                          bytes([col & 0xFF, row & 0xFF]))
+
     def _bios_video(self):
         ax = self._reg(UC_X86_REG_AX)
         ah, al = ax >> 8, ax & 0xFF
+        bx = self._reg(UC_X86_REG_BX)
+        page = (bx >> 8) & 7
         self.int10_fn[ah] += 1
+
+        # Cursor position must be real state: Ducks calls 03h to find out where
+        # to write, then pokes 0xb8000 itself. Returning nothing made every
+        # message compute row 0 and overwrite the previous one.
+        if ah == 0x02:
+            dx = self._reg(UC_X86_REG_DX)
+            if TRACE_TEXT:
+                self._flush_text_run()
+                print(f"  [txt] set cursor -> row {(dx >> 8) & 0xFF} "
+                      f"col {dx & 0xFF}")
+            self._set_cursor(page, (dx >> 8) & 0xFF, dx & 0xFF)
+            return
+        if ah == 0x03:
+            row, col = self.cursor[page]
+            if TRACE_TEXT:
+                self._flush_text_run()
+                print(f"  [txt] get cursor -> row {row} col {col}")
+            self._set(UC_X86_REG_DX, ((row & 0xFF) << 8) | (col & 0xFF))
+            self._set(UC_X86_REG_CX, 0x0607)
+            return
+        if ah == 0x05:
+            self.active_page = al & 7
+            return
+        if ah in (0x06, 0x07):
+            cx, dx = self._reg(UC_X86_REG_CX), self._reg(UC_X86_REG_DX)
+            self._scroll((cx >> 8) & 0xFF, cx & 0xFF,
+                         min((dx >> 8) & 0xFF, 24), min(dx & 0xFF, 79),
+                         al, (bx >> 8) & 0xFF or 0x07)
+            return
+        if ah == 0x08:
+            row, col = self.cursor[page]
+            ch, at = bytes(self.uc.mem_read(0xB8000 + (row * 80 + col) * 2, 2))
+            self._set(UC_X86_REG_AX, (at << 8) | ch)
+            return
+        if ah in (0x09, 0x0A):
+            row, col = self.cursor[page]
+            cnt = max(1, self._reg(UC_X86_REG_CX))
+            attr = bx & 0xFF
+            off = 0xB8000 + (row * 80 + col) * 2
+            for i in range(min(cnt, 80 * 25)):
+                self.uc.mem_write(off + i * 2,
+                                  bytes([al, attr]) if ah == 0x09
+                                  else bytes([al]))
+            return
+        if ah == 0x0E:
+            self._tty(al, page)
+            return
         if ah == 0x00:
             self.mode = al & 0x7F
             self.video_modes.append(self.mode)
@@ -715,9 +899,14 @@ def main():
                     help="dump captured PCM here on exit")
     ap.add_argument("--no-audio", action="store_true",
                     help="emulate the card but do not open the host mixer")
+    ap.add_argument("--text-trace", action="store_true",
+                    help="log cursor moves and direct text-buffer writes")
     ap.add_argument("--mouse-debug", action="store_true",
                     help="log every mouse button event and INT 33h query")
     args = ap.parse_args()
+
+    global TRACE_TEXT
+    TRACE_TEXT = args.text_trace
 
     headless = args.shots > 0
     if headless:
@@ -912,6 +1101,8 @@ def main():
           f"{m._elapsed():.1f}s ===")
     print(f"  video modes set : {[hex(v) for v in m.video_modes]}")
     print(f"  DAC palette sets: {m.palette_writes}")
+    print(f"  interrupts used : "
+          f"{{{', '.join(f'{n:02x}h:{c}' for n, c in sorted(m.int_counts.items()))}}}")
     print(f"  INT 10h funcs   : "
           f"{{{', '.join(f'AH={a:02x}h:{c}' for a, c in m.int10_fn.most_common(12))}}}")
     print(f"  INT 21h funcs   : "
