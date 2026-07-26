@@ -28,8 +28,10 @@ import argparse
 import os
 import struct
 import sys
+import time
 from collections import Counter, defaultdict
 
+import numpy as np
 import pygame
 from unicorn import *
 from unicorn.x86_const import *
@@ -66,6 +68,19 @@ class Native(VgaDos):
         self.draw_sites = Counter()  # CS:IP -> bytes written to video memory
         self.native_pixels = 0
         self.warp_calls = 0
+        self.rate_mark = (0.0, {}, 0)
+        self.frames = 0
+        self.buckets = {}
+        self.sprite_census = defaultdict(Counter)
+        self.active_label = None
+        self.mark_t, self.mark_f, self.mark_c = 0.0, 0, {}
+        self.mark_px = 0
+        self.mark_in = self.mark_out = self.mark_3da = 0
+        self.reads = 0
+        self.read_bytes = 0
+        self.native_time = 0.0
+        self.mark_reads = self.mark_rb = 0
+        self.mark_nt = 0.0
         self.verify = verify
         self.verify_calls = 0
         self.verify_bad = 0
@@ -134,6 +149,147 @@ class Native(VgaDos):
         self.profiling = False
         return True
 
+    def _close_bucket(self, now):
+        """Fold the open interval into its bucket, if one is open."""
+        if self.active_label is None:
+            return
+        b = self.buckets.setdefault(
+            self.active_label, {"t": 0.0, "f": 0, "c": Counter()})
+        b["t"] += now - self.mark_t
+        b["f"] += self.frames - self.mark_f
+        b["px"] = b.get("px", 0) + (self.native_pixels - self.mark_px)
+        # Port reads and emulated video writes are the two per-callback costs
+        # that can slow the emulator down without the native call count moving.
+        b["in"] = b.get("in", 0) + (sum(self.port_in.values()) - self.mark_in)
+        b["out"] = b.get("out", 0) + (sum(self.port_out.values()) - self.mark_out)
+        b["3da"] = b.get("3da", 0) + (self.port_in.get(0x3DA, 0) - self.mark_3da)
+        b["rd"] = b.get("rd", 0) + (self.reads - self.mark_reads)
+        b["rb"] = b.get("rb", 0) + (self.read_bytes - self.mark_rb)
+        b["nt"] = b.get("nt", 0.0) + (self.native_time - self.mark_nt)
+        for k, v in self.native_calls.items():
+            b["c"][k] += v - self.mark_c.get(k, 0)
+
+    def mark(self, label):
+        """Start or stop sampling into a named bucket.
+
+        Each key toggles its own label: press once to start measuring, again to
+        stop. While nothing is active no time is attributed at all, so the gaps
+        spent navigating between measurements cannot contaminate either bucket.
+        Pressing the other key stops the current one and starts that one.
+        """
+        now = self._elapsed()
+        if self.active_label == label:
+            self._close_bucket(now)
+            self.active_label = None
+            print(f"  [rate] stopped measuring: {label}")
+            self.report_buckets()
+            return
+        self._close_bucket(now)
+        self.active_label = label
+        self.mark_t, self.mark_f = now, self.frames
+        self.mark_c = dict(self.native_calls)
+        self.mark_px = self.native_pixels
+        self.mark_in = sum(self.port_in.values())
+        self.mark_out = sum(self.port_out.values())
+        self.mark_3da = self.port_in.get(0x3DA, 0)
+        self.mark_reads, self.mark_rb = self.reads, self.read_bytes
+        self.mark_nt = self.native_time
+        print(f"  [rate] started measuring: {label}")
+
+    def reset_buckets(self):
+        self.buckets = {}
+        self.sprite_census = defaultdict(Counter)
+        self.active_label = None
+        print("  [rate] buckets cleared")
+
+    def report_buckets(self):
+        if not self.buckets:
+            return
+        for label, b in self.buckets.items():
+            t, f = b["t"], b["f"]
+            if t <= 0:
+                continue
+            calls = sum(b["c"].values())
+            px = b.get("px", 0)
+            print(f"  [rate] {label}: {t:.1f}s, {f} frames = {f / t:.1f} fps, "
+                  f"{px} px = {px / t / 1e6:.2f} Mpx/s, "
+                  f"{px / calls if calls else 0:.0f} px/call")
+            print(f"           port IN {b.get('in', 0) / t / 1000:8.1f}k/s "
+                  f"(0x3da {b.get('3da', 0) / t / 1000:8.1f}k/s), "
+                  f"OUT {b.get('out', 0) / t / 1000:.1f}k/s")
+            # The decisive split: how much of the wall clock is actually inside
+            # the natives, and how many guest-memory round-trips they make.
+            nt = b.get("nt", 0.0)
+            rd = b.get("rd", 0)
+            print(f"           native time {nt:6.2f}s of {t:6.2f}s "
+                  f"({100 * nt / t:4.1f}%), "
+                  f"guest reads {rd / t / 1000:7.1f}k/s "
+                  f"({rd / calls if calls else 0:5.1f}/call, "
+                  f"{b.get('rb', 0) / t / 1e6:.2f} MB/s)")
+            for name, n in b["c"].most_common():
+                if not n:
+                    continue
+                print(f"           {name:<18} {n / t:9.1f}/s  "
+                      f"{(n / f if f else 0):8.1f}/frame")
+        # The comparison that actually answers "why is it slower": same work per
+        # frame at a lower frame rate is a different problem from more work per
+        # frame.
+        for label, cen in self.sprite_census.items():
+            f = self.buckets.get(label, {}).get("f", 0)
+            if not cen or not f:
+                continue
+            print(f"  [rate] {label}: {len(cen)} distinct sprites, "
+                  f"{sum(cen.values()) / f / 4:.1f} sprites/frame (per plane)")
+            for (idx, w, h), n in cen.most_common(8):
+                print(f"           sprite #{idx:<5} {w:3}x{h:<3} "
+                      f"{n / f / 4:7.2f}/frame  ({n} draws)")
+
+        labels = [l for l, b in self.buckets.items() if b["t"] > 0 and b["f"]]
+        if len(labels) >= 2:
+            a, c = self.buckets[labels[0]], self.buckets[labels[1]]
+            fa, fc = a["f"] / a["t"], c["f"] / c["t"]
+            print(f"  [rate] {labels[0]} {fa:.1f} fps vs "
+                  f"{labels[1]} {fc:.1f} fps")
+            for name in set(a["c"]) | set(c["c"]):
+                pa = a["c"][name] / a["f"] if a["f"] else 0
+                pc = c["c"][name] / c["f"] if c["f"] else 0
+                if pa or pc:
+                    print(f"           {name:<18} {pa:7.2f} vs {pc:7.2f} "
+                          f"calls/frame")
+
+    def report_rates(self):
+        """Report calls per second for each native since the last report.
+
+        Cheap enough to leave always available: it just differences the call
+        counters against a timestamp, so it can be triggered at the moment
+        something feels slow and compared against a moment that feels fine.
+        """
+        now = self._elapsed()
+        prev_t, prev, prev_f = self.rate_mark
+        dt = now - prev_t
+        df = self.frames - prev_f
+        self.rate_mark = (now, dict(self.native_calls), self.frames)
+        if dt <= 0:
+            return
+        rows = []
+        for name in sorted(set(self.native_calls) | set(prev)):
+            n = self.native_calls.get(name, 0) - prev.get(name, 0)
+            if n:
+                rows.append((n / dt, n, name))
+        rows.sort(reverse=True)
+        fps = df / dt
+        print(f"  [rate] over {dt:.1f}s: {df} frames = {fps:.1f} fps, "
+              f"{sum(r[1] for r in rows)} calls")
+        # Report per-frame as well as per-second: a higher call rate can mean
+        # either more work per frame or more frames, and only the per-frame
+        # figure tells those apart.
+        for per_sec, n, name in rows:
+            per_frame = n / df if df else 0.0
+            print(f"           {name:<18} {per_sec:9.1f}/s  "
+                  f"{per_frame:8.1f}/frame  ({n} calls)")
+        if not rows:
+            print("           no native calls in this interval")
+
     def _on_draw_write(self, uc, access, address, size, value, user):
         self.draw_sites[(uc.reg_read(UC_X86_REG_CS),
                          uc.reg_read(UC_X86_REG_IP))] += size
@@ -190,7 +346,9 @@ class Native(VgaDos):
         ret_size = 4 if kind == "far" else 2
         args_at = ss * 16 + sp + ret_size
 
+        t0 = time.perf_counter()
         result = handler(self, args_at)
+        self.native_time += time.perf_counter() - t0
 
         if result is not None:
             if isinstance(result, tuple):
@@ -279,10 +437,46 @@ class Native(VgaDos):
         return struct.unpack("<I", self.uc.mem_read(base + i * 2, 4))[0]
 
     def read(self, addr, n):
+        # Counted so guest-memory round-trips can be compared against pixel
+        # work: each one is a ctypes call into Unicorn, and a routine that
+        # reads per row pays it hundreds of times per call.
+        self.reads += 1
+        self.read_bytes += n
         return bytes(self.uc.mem_read(addr, n))
 
     def write(self, addr, data):
         self.uc.mem_write(addr, bytes(data))
+
+
+def read_row_table(m, table, n):
+    """Resolve n far row pointers with ONE guest read instead of n.
+
+    Measurement showed ~417 uc.mem_read calls per native call, four per row,
+    accounting for essentially all the time spent in the natives. Reading the
+    table in one go removes half of them.
+    """
+    raw = m.read(table, n * 4)
+    vals = struct.unpack_from(f"<{n * 2}H", raw)
+    return [vals[i * 2 + 1] * 16 + vals[i * 2] for i in range(n)]
+
+
+def bulk_rows(m, rows, start, span):
+    """Fetch `span` bytes from each row, in one read when rows are contiguous.
+
+    Sprite and tile data is normally one image buffer with a constant row
+    stride, so the whole region can come back in a single read; fall back to
+    per-row reads when it is not.
+    """
+    n = len(rows)
+    if n == 0:
+        return []
+    if n > 1:
+        stride = rows[1] - rows[0]
+        if stride > 0 and all(rows[i + 1] - rows[i] == stride
+                              for i in range(n - 1)) and stride >= span:
+            blob = m.read(rows[0] + start, (n - 1) * stride + span)
+            return [blob[i * stride:i * stride + span] for i in range(n)]
+    return [m.read(r + start, span) for r in rows]
 
 
 def find_function_start(img, off, limit=0x600):
@@ -356,22 +550,24 @@ def native_compose_layer(m, args):
     if plane_off < 0 or not m.active_planes:
         return None                       # not drawing into the Mode X aperture
 
+    # Resolve both row tables and fetch all source rows up front: the guest
+    # memory round-trips, not the pixel arithmetic, are what cost the time.
+    span = max(0, width - x0)
+    fg_rows = read_row_table(m, fg_table, height)
+    bg_rows = read_row_table(m, bg_table, mask_y + 1)
+    fg_data = bulk_rows(m, fg_rows, x0, span)
+    bg_cache = {}
+    idx = (np.arange(x0, width, 4, dtype=np.int32) & mask_x)
+
     out = bytearray()
     for row in range(height):
         by = (row + y0) & mask_y
-        fg_row_ptr = struct.unpack(
-            "<HH", m.read(fg_table + row * 4, 4))
-        fg_lin = fg_row_ptr[1] * 16 + fg_row_ptr[0]
-        bg_row_ptr = struct.unpack("<HH", m.read(bg_table + by * 4, 4))
-        bg_lin = bg_row_ptr[1] * 16 + bg_row_ptr[0]
-        cols = list(range(x0, width, 4))
-        fg = m.read(fg_lin + x0, max(0, width - x0))
-        bg = m.read(bg_lin, mask_x + 1)
-        for sx in cols:
-            v = fg[sx - x0]
-            if v == 0:
-                v = bg[sx & mask_x]
-            out.append(v)
+        bg = bg_cache.get(by)
+        if bg is None:
+            bg = np.frombuffer(m.read(bg_rows[by], mask_x + 1), dtype=np.uint8)
+            bg_cache[by] = bg
+        fg = np.frombuffer(fg_data[row], dtype=np.uint8)[::4]
+        out += np.where(fg == 0, bg[idx[:len(fg)]], fg).tobytes()
 
     for p in m.active_planes:
         m.planes[p][plane_off:plane_off + len(out)] = out
@@ -415,6 +611,12 @@ def native_draw_sprite(m, args):
     pixels = far(desc + 0x0A)
     colour = m.read(args + 0x18 - 6, 1)[0]
 
+    # While a rate bucket is open, record what is being drawn. Knowing the
+    # count is not enough to explain a redraw storm; the sprite identity and
+    # size say whether it is one big image, a row of letters, or a whole scene.
+    if m.active_label is not None:
+        m.sprite_census[m.active_label][(index, w, h)] += 1
+
     x = s16(args + 0x0A - 6) - ox
     y = struct.unpack("<i", m.read(args + 0x0C - 6, 4))[0] + s16(clip + 0) - oy
 
@@ -450,22 +652,29 @@ def native_draw_sprite(m, args):
 
     plane = m.read(g + 0x177D, 1)[0] & 3
     data = m.read(pixels, w * h + src + 1) if w and h else b""
+    buf = np.frombuffer(data, dtype=np.uint8)
     planes = [m.planes[p] for p in m.active_planes]
+    # Only columns where x & 3 == plane are written, so step the row by 4 from
+    # the first such column instead of testing every pixel.
+    first = x + ((plane - x) & 3)
     drawn = 0
     for row in range(y, y_end):
         rowbase = plane_off + base + row * stride
-        i = src
-        for sx in range(x, x_end):
-            if i < len(data):
-                v = data[i]
-                if v and (sx & 3) == plane:
-                    o = rowbase + (sx >> 2)
-                    for pl in planes:
-                        if 0 <= o < len(pl):
-                            pl[o] = (v + colour) & 0xFF
-                    drawn += 1
-            i += 1
-        src = i + row_extra
+        lo = src + (first - x)
+        sel = buf[lo:src + (x_end - x):4]
+        if not len(sel):
+            src += (x_end - x) + row_extra
+            continue
+        nz = sel != 0
+        if nz.any():
+            vals = ((sel[nz].astype(np.uint16) + colour) & 0xFF).astype(np.uint8)
+            offs = rowbase + ((first + np.nonzero(nz)[0] * 4) >> 2)
+            for pl in planes:
+                for o, v in zip(offs.tolist(), vals.tolist()):
+                    if 0 <= o < len(pl):
+                        pl[o] = v
+            drawn += int(nz.sum())
+        src += (x_end - x) + row_extra
     m.native_pixels += drawn
     return None
 
@@ -566,17 +775,17 @@ def native_blit_rows_masked(m, args):
         return None
     planes = [m.planes[p] for p in m.active_planes]
     for row in range(row0, row1):
-        src = m.read(far(table + srcrow * 4) + plane, n * 4)[::4]
+        src = np.frombuffer(m.read(far(table + srcrow * 4) + plane, n * 4),
+                            dtype=np.uint8)[::4]
         o = base + row * stride + (sx >> 2)
+        nz = src != 0
         for pl in planes:
             if o < 0 or o + n > len(pl):
                 continue
-            cur = bytearray(pl[o:o + n])
-            for k in range(n):
-                if src[k]:
-                    cur[k] = src[k]
-            pl[o:o + n] = cur
-        m.native_pixels += sum(1 for b in src if b)
+            cur = np.frombuffer(bytes(pl[o:o + n]), dtype=np.uint8).copy()
+            cur[nz] = src[nz]
+            pl[o:o + n] = cur.tobytes()
+        m.native_pixels += int(nz.sum())
         srcrow += 1
     return None
 
@@ -629,20 +838,28 @@ def native_compose_scroll(m, args):
     shift = base_x
     di, cur = argy, row0
 
+    # One read each for the row tables, and cache background rows: the wrap
+    # mask means the same few rows recur, and each re-read was a ctypes call.
+    nrows = max(0, row_end - row0)
+    fg_rows = read_row_table(m, fg_table, di + nrows) if nrows else []
+    bg_rows = read_row_table(m, bg_table, mask_y + 1)
+    fg_data = bulk_rows(m, fg_rows[di:di + nrows], argx + plane, span * 4)
+    bg_cache = {}
+    cols = np.arange(span, dtype=np.int32) * 4 + plane
+
     while cur < row_end:
         by = (((argy >> 1) + y0 + cur) & mask_y)
         if warp_on:
             phase &= 0x1F
             shift = base_x + u8(g + 0x179F + phase)
             phase = (phase + step) & 0xFF
-        fg_row = far(fg_table + di * 4)
-        bg_row = far(bg_table + by * 4)
-        fg = m.read(fg_row + argx + plane, span * 4)[::4]
-        bg = m.read(bg_row, mask_x + 1)
-        out = bytearray(fg)
-        for k in range(len(out)):
-            if out[k] == 0:
-                out[k] = bg[(plane + k * 4 + shift) & mask_x]
+        bg = bg_cache.get(by)
+        if bg is None:
+            bg = np.frombuffer(m.read(bg_rows[by], mask_x + 1), dtype=np.uint8)
+            bg_cache[by] = bg
+        fg = np.frombuffer(fg_data[cur - row0], dtype=np.uint8)[::4]
+        idx = (cols[:len(fg)] + shift) & mask_x
+        out = np.where(fg == 0, bg[idx], fg).tobytes()
         for pl in planes:
             if 0 <= dst and dst + len(out) <= len(pl):
                 pl[dst:dst + len(out)] = out
@@ -806,6 +1023,12 @@ def main():
                     m.profile_report(img)
                 elif ev.key == pygame.K_F7:
                     m.set_verify(not m.verify)
+                elif ev.key == pygame.K_F8:
+                    m.mark("hover")
+                elif ev.key == pygame.K_F9:
+                    m.mark("no-hover")
+                elif ev.key == pygame.K_F4:
+                    m.reset_buckets()
                 else:
                     mapped = emulation.KEYMAP.get(ev.key)
                     if mapped:
@@ -835,7 +1058,8 @@ def main():
         # Shell-side control, so tracing can be driven without window focus.
         for name, action in (("trace.on", "on"), ("trace.off", "off"),
                              ("trace.report", "report"),
-                             ("verify.on", "von"), ("verify.off", "voff")):
+                             ("verify.on", "von"), ("verify.off", "voff"),
+                             ("rate.report", "rate")):
             if os.path.exists(name):
                 os.remove(name)
                 if action == "on":
@@ -848,6 +1072,8 @@ def main():
                     m.set_verify(True)
                 elif action == "voff":
                     m.set_verify(False)
+                elif action == "rate":
+                    m.report_rates()
                 else:
                     m.profile_report(img)
 
@@ -859,6 +1085,7 @@ def main():
         pygame.transform.scale(surf, screen.get_size(), screen)
         pygame.display.flip()
         frames += 1
+        m.frames = frames
         clock.tick(60)
 
         if m._elapsed() >= next_status:
