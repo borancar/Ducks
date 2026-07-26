@@ -78,6 +78,12 @@ Notes on what the emulation has to get right:
 - INT 34h-3Eh must be dispatched to the program's own handlers: that is
   Borland's 80x87 floating-point emulation.
 - The game refuses to start without an INT 33h mouse driver.
+- There is **no `INT 33h` instruction in the image**: Borland's `int86` patches
+  the vector number in at runtime, so a static search finds nothing and cannot
+  locate the callers. Walking the BP chain at interrupt time does, giving
+  `int86 <- {0x0675b motion, 0x0678e presses, 0x067ba releases} <- 0x06869 poll`.
+  Confirmed identical in menus and gameplay, so those three wrappers are the
+  game's entire mouse input and `--native-mouse` replaces all of it.
 - Mouse input arrives entirely through INT 33h `0x0b` (relative motion) and
   `0x05`/`0x06` (per-button press/release counts). It never calls `0x03`, so
   absolute position is irrelevant. `0x05`/`0x06` take **BX as the button being
