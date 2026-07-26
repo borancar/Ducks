@@ -1524,28 +1524,44 @@ def native_draw_sprite(m, args):
     plane = m.read(g + 0x177D, 1)[0] & 3
     data = m.cached_read(pixels, w * h + src + 1) if w and h else b""
     buf = np.frombuffer(data, dtype=np.uint8)
-    planes = [m.planes[p] for p in m.active_planes]
-    # Only columns where x & 3 == plane are written, so step the row by 4 from
-    # the first such column instead of testing every pixel.
+
+    # Only columns where x & 3 == plane are written, so the row is stepped by 4
+    # from the first such column instead of testing every pixel.
     first = x + ((plane - x) & 3)
-    drawn = 0
-    for row in range(y, y_end):
-        rowbase = plane_off + base + row * stride
-        lo = src + (first - x)
-        sel = buf[lo:src + (x_end - x):4]
-        if not len(sel):
-            src += (x_end - x) + row_extra
+    ncols = max(0, (x_end - first + 3) // 4)
+    nrows = y_end - y
+    if ncols == 0 or nrows <= 0:
+        return None
+
+    # Source rows are a constant stride apart and the selected pixels are every
+    # fourth byte, so the whole sprite is one strided 2D view - no copy, no loop.
+    rowstride = (x_end - x) + row_extra
+    lo = src + (first - x)
+    need = (nrows - 1) * rowstride + (ncols - 1) * 4 + 1
+    if lo < 0 or rowstride <= 0 or lo + need > len(buf):
+        return None
+
+    sel = np.lib.stride_tricks.as_strided(buf[lo:], shape=(nrows, ncols),
+                                          strides=(rowstride, 4))
+    nz = sel != 0
+    vals = (sel.astype(np.uint16) + colour).astype(np.uint8)
+
+    # first & 3 equals plane & 3, so (first + 4 * col) >> 2 is exactly
+    # (first >> 2) + col: the destination is a plain strided block, one byte per
+    # selected pixel, and needs no scatter indices at all.
+    dst = plane_off + base + y * stride + (first >> 2)
+    if dst < 0:
+        return None
+    for pl in (m.planes[p] for p in m.active_planes):
+        fit = min(nrows, (len(pl) - dst - ncols) // stride + 1)
+        if fit <= 0:
             continue
-        nz = sel != 0
-        if nz.any():
-            vals = ((sel[nz].astype(np.uint16) + colour) & 0xFF).astype(np.uint8)
-            offs = rowbase + ((first + np.nonzero(nz)[0] * 4) >> 2)
-            for pl in planes:
-                for o, v in zip(offs.tolist(), vals.tolist()):
-                    if 0 <= o < len(pl):
-                        pl[o] = v
-            drawn += int(nz.sum())
-        src += (x_end - x) + row_extra
+        view = np.frombuffer(pl, dtype=np.uint8)
+        out = np.lib.stride_tricks.as_strided(view[dst:], shape=(fit, ncols),
+                                              strides=(stride, 1))
+        np.copyto(out, vals[:fit], where=nz[:fit])
+    drawn = int(nz.sum())
+    m.rows_done = nrows
     m.native_pixels += drawn
     return None
 
