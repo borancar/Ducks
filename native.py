@@ -51,6 +51,7 @@ class Native(VgaDos):
         self.profiling = profile
         self.draw_sites = Counter()  # CS:IP -> bytes written to video memory
         self.native_pixels = 0
+        self.warp_calls = 0
         self.verify = verify
         self.verify_calls = 0
         self.verify_bad = 0
@@ -71,6 +72,21 @@ class Native(VgaDos):
             for off in self.natives:
                 lin = self.image_base + off
                 self.uc.hook_add(UC_HOOK_CODE, self._on_native, None, lin, lin)
+
+    def set_verify(self, on, reset=True):
+        """Turn native-vs-original checking on or off mid-run.
+
+        Verification runs both paths on every call, so it is far too slow to
+        leave on; being able to switch it on for a few seconds when something
+        looks wrong is what makes it usable.
+        """
+        if on and reset:
+            self.verify_calls = 0
+            self.verify_bad = 0
+        self.verify = on
+        print(f"  [verify] {'ON (counters reset)' if on else 'OFF'} - "
+              f"{self.verify_calls} compared, {self.verify_bad} mismatched")
+        return on
 
     def _watch_dma_buffer(self):
         """Suppress the sound-buffer write watch; it is diagnostics only."""
@@ -430,6 +446,78 @@ def native_draw_sprite(m, args):
     return None
 
 
+def native_compose_scroll(m, args):
+    """Native replacement for the scrolling compositor at 0x05dc4.
+
+        [+0x06] word : x scroll
+        [+0x08] word : y scroll
+
+    Like compose_layer, but scrolled and with the optional background warp the
+    changelog describes: when [0x2022] is set, each row's x displacement comes
+    from a 32-entry table at [0x179f], stepped by [0x17c0] per row. Foreground
+    pixel wins unless it is zero, in which case the wrapped background shows
+    through. Column steps 4, so one call fills a single Mode X plane.
+    """
+    g = m.dgroup_base
+    u8 = lambda a: m.read(a, 1)[0]
+    u16 = lambda a: struct.unpack("<H", m.read(a, 2))[0]
+    s16 = lambda a: struct.unpack("<h", m.read(a, 2))[0]
+
+    def far(a):
+        off, seg = struct.unpack("<HH", m.read(a, 4))
+        return seg * 16 + off
+
+    argx, argy = u16(args + 0), u16(args + 2)
+    base_x = (argx >> 1) + u8(g + 0x177E)
+    row_adv = (s16(g + 0x538) - s16(g + 0x1735)) >> 2
+    row0, row_end = u16(g + 0x172D), u16(g + 0x172F)
+    right = u16(g + 0x1735)
+    mask_x, mask_y = u16(g + 0x1729), u16(g + 0x172B)
+    plane = u8(g + 0x177D)
+    warp_on = u16(g + 0x2022) != 0
+    phase = u8(g + 0x17BF)
+    step = u8(g + 0x17C0)
+    if warp_on:
+        phase = (phase + ((argy >> 1) * step)) & 0xFF
+        m.warp_calls += 1        # so we can tell whether this path was tested
+
+    stride = 90 if u16(g + 0x4FE) else 80
+    dst = (far(g + 0x16F1) - 0xA0000 + row0 * stride
+           + u16(g + 0x1727) + (s16(g + 0x1731) >> 2))
+    if dst < 0 or not m.active_planes:
+        return None
+
+    fg_table, bg_table = far(g + 0x16F5), far(g + 0x170B)
+    planes = [m.planes[p] for p in m.active_planes]
+    span = max(0, (right - plane + 3) // 4)
+    y0 = u8(g + 0x177F)
+    shift = base_x
+    di, cur = argy, row0
+
+    while cur < row_end:
+        by = (((argy >> 1) + y0 + cur) & mask_y)
+        if warp_on:
+            phase &= 0x1F
+            shift = base_x + u8(g + 0x179F + phase)
+            phase = (phase + step) & 0xFF
+        fg_row = far(fg_table + di * 4)
+        bg_row = far(bg_table + by * 4)
+        fg = m.read(fg_row + argx + plane, span * 4)[::4]
+        bg = m.read(bg_row, mask_x + 1)
+        out = bytearray(fg)
+        for k in range(len(out)):
+            if out[k] == 0:
+                out[k] = bg[(plane + k * 4 + shift) & mask_x]
+        for pl in planes:
+            if 0 <= dst and dst + len(out) <= len(pl):
+                pl[dst:dst + len(out)] = out
+        m.native_pixels += len(out)
+        dst += len(out) + row_adv
+        di += 1
+        cur += 1
+    return None
+
+
 def native_blit_rows(m, args):
     """Native replacement for the row blitter at 0x05c09.
 
@@ -488,6 +576,7 @@ NATIVE_TABLE = [
     (0x05D3A, "compose_layer", native_compose_layer, "far"),
     (0x063D6, "draw_sprite", native_draw_sprite, "far"),
     (0x05C09, "blit_rows", native_blit_rows, "far"),
+    (0x05DC4, "compose_scroll", native_compose_scroll, "far"),
 ]
 
 
@@ -559,6 +648,8 @@ def main():
                     print(f"  [trace] {'ON (counters reset)' if m.profiling else 'OFF'}")
                 elif ev.key == pygame.K_F6:
                     m.profile_report(img)
+                elif ev.key == pygame.K_F7:
+                    m.set_verify(not m.verify)
                 else:
                     mapped = emulation.KEYMAP.get(ev.key)
                     if mapped:
@@ -587,7 +678,8 @@ def main():
 
         # Shell-side control, so tracing can be driven without window focus.
         for name, action in (("trace.on", "on"), ("trace.off", "off"),
-                             ("trace.report", "report")):
+                             ("trace.report", "report"),
+                             ("verify.on", "von"), ("verify.off", "voff")):
             if os.path.exists(name):
                 os.remove(name)
                 if action == "on":
@@ -596,6 +688,10 @@ def main():
                 elif action == "off":
                     m.disable_profiling()
                     print("  [trace] OFF")
+                elif action == "von":
+                    m.set_verify(True)
+                elif action == "voff":
+                    m.set_verify(False)
                 else:
                     m.profile_report(img)
 
@@ -618,6 +714,8 @@ def main():
     if m.native_calls:
         print(f"  native calls    : {dict(m.native_calls)}")
         print(f"  pixels drawn natively: {m.native_pixels}")
+        print(f"  background-warp path : {m.warp_calls} calls"
+              + ("" if m.warp_calls else "  <-- NOT exercised, so unverified"))
     if m.verify:
         print(f"  verify          : {m.verify_calls} calls compared, "
               f"{m.verify_bad} MISMATCHED")
