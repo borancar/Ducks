@@ -73,6 +73,9 @@ class Native(VgaDos):
         self.native_xms = native_xms
         self.native_setup = native_setup
         self.int_stubs = {}          # linear INT site -> interrupt number
+        self.native_secs = defaultdict(float)   # routine -> seconds spent in it
+        self.native_rows = Counter()            # routine -> inner iterations
+        self.rows_done = 0                      # set by a handler, then banked
         self.native_fp = False       # set by install_native_fp()
         self.fp_sites = {}           # linear site -> interrupt it replaced
         self.fp_unknown = Counter()
@@ -127,6 +130,7 @@ class Native(VgaDos):
         self.mark_reads = self.mark_rb = 0
         self.mark_nt = 0.0
         self.verify = verify
+        self.verify_only = set()
         self.verify_calls = 0
         self.verify_bad = 0
         self.verify_pending = 0
@@ -575,6 +579,27 @@ class Native(VgaDos):
         self.fp_sites[site] = intno
         uc.emu_stop()          # the outer chunk loop resumes at the rewound IP
         return True
+
+    def native_time_report(self):
+        """Rank the natives by wall time, with what each call actually did.
+
+        Calls per second cannot explain a stutter on its own: a routine called
+        rarely but looping over 200 rows costs more than one called constantly
+        over a handful of pixels. Rows per call separates those two.
+        """
+        if not self.native_secs:
+            return
+        el = max(1e-6, self._elapsed())
+        print(f"\n=== time in natives, ranked ({self.native_time:.2f}s of "
+              f"{el:.1f}s elapsed) ===")
+        for name, secs in sorted(self.native_secs.items(), key=lambda kv: -kv[1]):
+            n = self.native_calls.get(name, 0)
+            if not n:
+                continue
+            rows = self.native_rows.get(name, 0)
+            print(f"  {name:<18} {secs:7.2f}s {100 * secs / el:5.1f}% of run "
+                  f"{n:>7} calls {1e6 * secs / n:8.1f} us/call"
+                  + (f" {rows / n:6.1f} rows/call" if rows else ""))
 
     def fp_report(self, img):
         if not self.fp_sites and not self.fp_unknown:
@@ -1099,7 +1124,12 @@ class Native(VgaDos):
         name, handler, kind = entry
         self.native_calls[name] += 1
 
-        if self.verify and name not in VERIFY_SKIP:
+        # --verify-only names a subset to check even though it is in the skip
+        # list, so a routine can be verified right after it is rewritten without
+        # turning verification back on for everything.
+        wanted = (name in self.verify_only if self.verify_only
+                  else name not in VERIFY_SKIP)
+        if self.verify and wanted:
             # Run the native into a scratch copy, then let the original body
             # run and compare. A hand-translated blitter can be subtly wrong in
             # ways that look plausible on screen, and emulation.py is the only
@@ -1116,7 +1146,14 @@ class Native(VgaDos):
 
         t0 = time.perf_counter()
         result = handler(self, args_at)
-        self.native_time += time.perf_counter() - t0
+        dt = time.perf_counter() - t0
+        self.native_time += dt
+        # Per-routine, not just the total: the total only says natives cost
+        # something, which was never the question. Both perf_counter calls
+        # already happen, so this is a dict add.
+        self.native_secs[name] += dt
+        self.native_rows[name] += self.rows_done
+        self.rows_done = 0
         if result is DECLINE:
             # Hand back to the original body: some cases (error paths that set
             # errno through the runtime's own helper) must not be faked.
@@ -1273,6 +1310,33 @@ def read_row_table(m, table, n):
     return [vals[i * 2 + 1] * 16 + vals[i * 2] for i in range(n)]
 
 
+def compose_rows(m, fg_data, bg_rows, by, idx, mask_x):
+    """Composite every row at once: the foreground wins unless it is zero.
+
+    Done a row at a time this cost 7.4us for 80 pixels - six numpy operations on
+    an 80-element array, where the per-call overhead dwarfs the arithmetic. As one
+    2D operation the same work is a handful of calls for the whole region,
+    measured at 12x on the compositing alone.
+
+    `idx` is the background column for each output column: 1D when every row uses
+    the same displacement, 2D when the background warp gives each row its own.
+    """
+    nrows = len(fg_data)
+    fg = np.frombuffer(b"".join(fg_data), dtype=np.uint8).reshape(nrows, -1)[:, ::4]
+    ncols = fg.shape[1]
+    # Only the distinct background rows are read: the wrap mask means the same
+    # few recur down the region, and each is a cached guest read.
+    uniq, inv = np.unique(np.asarray(by, dtype=np.int32), return_inverse=True)
+    bg = np.stack([np.frombuffer(m.cached_read(bg_rows[b], mask_x + 1),
+                                 dtype=np.uint8) for b in uniq])
+    rows = bg[inv]
+    if idx.ndim == 1:
+        sel = rows[:, idx[:ncols]]
+    else:
+        sel = np.take_along_axis(rows, idx[:, :ncols], axis=1)
+    return np.where(fg == 0, sel, fg)
+
+
 def bulk_rows(m, rows, start, span):
     """Fetch `span` bytes from each row, in one read when rows are contiguous.
 
@@ -1369,22 +1433,16 @@ def native_compose_layer(m, args):
     fg_rows = read_row_table(m, fg_table, height)
     bg_rows = read_row_table(m, bg_table, mask_y + 1)
     fg_data = bulk_rows(m, fg_rows, x0, span)
-    bg_cache = {}
     idx = (np.arange(x0, width, 4, dtype=np.int32) & mask_x)
 
-    out = bytearray()
-    for row in range(height):
-        by = (row + y0) & mask_y
-        bg = bg_cache.get(by)
-        if bg is None:
-            bg = np.frombuffer(m.cached_read(bg_rows[by], mask_x + 1), dtype=np.uint8)
-            bg_cache[by] = bg
-        fg = np.frombuffer(fg_data[row], dtype=np.uint8)[::4]
-        out += np.where(fg == 0, bg[idx[:len(fg)]], fg).tobytes()
-
+    if not fg_data or span == 0:
+        return None
+    by = (np.arange(height, dtype=np.int32) + y0) & mask_y
+    out = compose_rows(m, fg_data, bg_rows, by, idx, mask_x).tobytes()
     for p in m.active_planes:
         m.planes[p][plane_off:plane_off + len(out)] = out
     m.native_pixels += len(out)
+    m.rows_done = height
     return None
 
 
@@ -1828,35 +1886,51 @@ def native_compose_scroll(m, args):
     shift = base_x
     di, cur = argy, row0
 
-    # One read each for the row tables, and cache background rows: the wrap
-    # mask means the same few rows recur, and each re-read was a ctypes call.
     nrows = max(0, row_end - row0)
-    fg_rows = read_row_table(m, fg_table, di + nrows) if nrows else []
+    if nrows == 0 or span == 0:
+        return None
+    fg_rows = read_row_table(m, fg_table, di + nrows)
     bg_rows = read_row_table(m, bg_table, mask_y + 1)
     fg_data = bulk_rows(m, fg_rows[di:di + nrows], argx + plane, span * 4)
-    bg_cache = {}
+    if len(fg_data) < nrows:
+        return None
+
+    rows_i = np.arange(row0, row_end, dtype=np.int32)
+    by = ((argy >> 1) + y0 + rows_i) & mask_y
     cols = np.arange(span, dtype=np.int32) * 4 + plane
 
-    while cur < row_end:
-        by = (((argy >> 1) + y0 + cur) & mask_y)
-        if warp_on:
-            phase &= 0x1F
-            shift = base_x + u8(g + 0x179F + phase)
-            phase = (phase + step) & 0xFF
-        bg = bg_cache.get(by)
-        if bg is None:
-            bg = np.frombuffer(m.cached_read(bg_rows[by], mask_x + 1), dtype=np.uint8)
-            bg_cache[by] = bg
-        fg = np.frombuffer(fg_data[cur - row0], dtype=np.uint8)[::4]
-        idx = (cols[:len(fg)] + shift) & mask_x
-        out = np.where(fg == 0, bg[idx], fg).tobytes()
-        for pl in planes:
-            if 0 <= dst and dst + len(out) <= len(pl):
-                pl[dst:dst + len(out)] = out
-        m.native_pixels += len(out)
-        dst += len(out) + row_adv
-        di += 1
-        cur += 1
+    if warp_on:
+        # Each row takes its x displacement from a 32-entry table, stepped per
+        # row. Built here as a column so the composite still happens in one go;
+        # the phase is advanced in Python because it is re-masked to 0x1f every
+        # row, which is not a plain arithmetic progression.
+        warp = m.read(g + 0x179F, 32)
+        shifts = np.empty(nrows, dtype=np.int32)
+        ph = phase
+        for r in range(nrows):
+            ph &= 0x1F
+            shifts[r] = base_x + warp[ph]
+            ph = (ph + step) & 0xFF
+        idx = (cols[None, :] + shifts[:, None]) & mask_x
+    else:
+        idx = (cols + shift) & mask_x
+
+    out = compose_rows(m, fg_data, bg_rows, by, idx, mask_x)
+    ncols = out.shape[1]
+    stride = ncols + row_adv
+    if stride <= 0:
+        return None
+    for pl in planes:
+        # Write the rows that fit, as the row-at-a-time version did, rather than
+        # dropping the whole region when the last one runs past the plane.
+        fit = min(nrows, (len(pl) - dst - ncols) // stride + 1)
+        if fit <= 0:
+            continue
+        view = np.frombuffer(pl, dtype=np.uint8)
+        np.lib.stride_tricks.as_strided(
+            view[dst:], shape=(fit, ncols), strides=(stride, 1))[:] = out[:fit]
+    m.native_pixels += nrows * ncols
+    m.rows_done = nrows
     return None
 
 
@@ -2482,6 +2556,8 @@ def main():
     ap.add_argument("--native-setup", action="store_true",
                     help="serve the C runtime's heap-resize, INT 10h wrapper "
                          "and one-shot startup interrupts natively")
+    ap.add_argument("--verify-only", default="",
+                    help="comma-separated natives to verify even if skipped")
     ap.add_argument("--native-fp", action="store_true",
                     help="put Borland's emulated x87 instructions back and let "
                          "the real FPU run them")
@@ -2516,6 +2592,10 @@ def main():
         m.install_native_xms()
     if args.native_fp:
         m.install_native_fp()
+    if args.verify_only:
+        m.verify_only = {n.strip() for n in args.verify_only.split(",") if n.strip()}
+        m.verify = True
+        print(f"  [verify] checking only {sorted(m.verify_only)}")
     m.trace_mouse = args.trace_mouse
     m.trace_keyboard = args.trace_keyboard
     m.trace_file = args.trace_file
@@ -2711,6 +2791,7 @@ def main():
     m.bank.report()
     m.mouse_report(img)
     m.kbd_report(img)
+    m.native_time_report()
     m.fp_report(img)
     m.int_report(img)
     m.file_report(img)
