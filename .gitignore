@@ -1,0 +1,24 @@
+# Python virtualenv (113 MB, recreate with: python -m venv venv &&
+# venv/bin/pip install capstone unicorn pygame-ce)
+venv/
+
+# Captures and generated images from debugging sessions
+debug/
+shots/
+*.png
+*.bin
+
+# Run logs
+*.log
+
+# Runtime control triggers used by play.py
+capture.request
+pause.request
+
+# Build artifact: derived from the original (copyrighted) game binary, so it is
+# reproducible with unpack_ducks.py rather than tracked here.
+Ducks.unpacked.exe
+*.unpacked
+
+__pycache__/
+*.pyc
