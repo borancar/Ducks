@@ -103,6 +103,9 @@ class SoundBlaster:
         self.dma_masked = True
         self.cur_addr = 0
         self.cur_remaining = 0
+        self.dma_len = 0
+        self.irq_period = 0
+        self.irq_countdown = 0
 
         # IRQ / PIC
         self.irq_pending = False
@@ -346,7 +349,13 @@ class SoundBlaster:
             return False
         fired = False
         while n > 0 and self.dma_active:
-            take = min(n, self.cur_remaining)
+            # Consume up to whichever comes first: the end of the DMA buffer or
+            # the next interrupt boundary. These are different periods - the
+            # controller wraps every dma_len bytes while the DSP interrupts
+            # every block_size - and treating them as one means the game is
+            # told to refill only half as often as it should, so half the
+            # buffer replays stale audio.
+            take = min(n, self.cur_remaining, self.irq_countdown)
             if take > 0:
                 try:
                     chunk = bytes(uc.mem_read(self.cur_addr, take))
@@ -364,13 +373,16 @@ class SoundBlaster:
                 self.bytes_played += take
                 self.cur_addr += take
                 self.cur_remaining -= take
+                self.irq_countdown -= take
                 n -= take
-            if self.cur_remaining <= 0:
+            if self.irq_countdown <= 0:
                 self.blocks_completed += 1
                 fired = True
+                self.irq_countdown = self.irq_period
+            if self.cur_remaining <= 0:
                 if self.autoinit:
                     self.cur_addr = (self.dma_page << 16) | self.dma_addr
-                    self.cur_remaining = (self.dma_count + 1) or self.block_size
+                    self.cur_remaining = self.dma_len
                 else:
                     self.dma_active = False
                     break

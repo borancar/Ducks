@@ -102,10 +102,27 @@ makes the double buffer work; conflating them halves the refill rate.
 Captured PCM is written to a WAV on exit, which is the only trustworthy way to
 tell a broken card model from a broken host playback path.
 
-Status: the card works end-to-end — the game refills the buffer on schedule and
-IRQ5 is delivered — but every byte it mixes is `0x80`, i.e. silence, so no audio
-has been heard yet. That is now a question of game state (no effect triggered, or
-samples not loaded from the egg) rather than emulation plumbing.
+**Sound requires XMS.** Ducks keeps its samples in extended memory, and its
+startup sound check refuses to enable audio without HIMEM.SYS — it prints
+"HIMEM.SYS not installed" and disables the whole audio subsystem, which also
+greys out the AUDIO SETTINGS menu. Without `xms.py` the mixer runs but emits
+nothing except `0x80` silence, no matter how correct the card emulation is.
+
+Two subtleties that each cost a debugging round:
+
+- The DMA wrap period and the DSP interrupt period are **different**. The
+  controller wraps every `count+1` bytes while the DSP interrupts every
+  `block_size`; Ducks uses 512 and 256 respectively. Firing the interrupt on
+  the wrap instead makes the game refill half as often as it should, so half the
+  buffer replays stale audio — audible as choppiness, with the give-away that
+  guest writes come to exactly half the bytes consumed.
+- XMS `AH=0Fh` takes `BX` = new size and `DX` = handle. Reversed, every
+  reallocation fails, the sample block stays at its initial zero size, and every
+  sample transfer is rejected on bounds — silently, unless failures are logged.
+
+The rate the game selects is 22222 Hz at startup and 11111 Hz in play. Those are
+exact Sound Blaster time constants (`0xd3`, `0xa6`); 22050 is not representable,
+so it is not a bug.
 
 Two host-side traps worth remembering: `pygame.init()` initialises the mixer
 before `pygame.mixer.pre_init()` can take effect, so the mixer must be explicitly
@@ -120,6 +137,8 @@ queued sound, so overflow must be buffered rather than dropped.
 | `validate.py` | verifies the unpack, incl. the round-trip check |
 | `play.py` | DOS + VGA + SDL; runs the game interactively |
 | `sb.py` | Sound Blaster DSP, DMA channel and IRQ model |
+| `xms.py` | XMS / HIMEM.SYS driver; without it the game has no sound |
+| `find_sound_code.py` | finds the code referencing a given string constant |
 | `trace_dos.py` | headless DOS shim; logs interrupts, files, ports |
 | `analyze.py` | static census of interrupts/ports over the unpacked code |
 | `modex_probe.py` | re-renders captured planes under candidate layouts |

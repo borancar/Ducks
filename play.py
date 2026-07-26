@@ -871,7 +871,7 @@ class AudioSink:
         try:
             if pygame.mixer.get_init():
                 pygame.mixer.quit()
-            pygame.mixer.init(frequency=rate, size=8, channels=1, buffer=2048)
+            pygame.mixer.init(frequency=rate, size=8, channels=1, buffer=4096)
             pygame.mixer.set_num_channels(4)
             self.chan = pygame.mixer.Channel(0)
             self.rate, self.ok = rate, True
@@ -881,7 +881,7 @@ class AudioSink:
             print(f"  [audio] mixer unavailable ({e}); "
                   f"PCM still captured to WAV")
 
-    def push(self, sb, chunk=4096):
+    def push(self, sb, chunk=8192):
         if sb is None:
             return
         if sb.sample_rate and sb.sample_rate != self.rate:
@@ -1230,6 +1230,13 @@ def main():
           f"{{{', '.join(f'{p:#05x}:{c}' for p, c in m.port_out.most_common(14))}}}")
     import json
     print(f"  XMS             : {json.dumps(m.xms.summary(), indent=2)}")
+    if audio is not None:
+        # Distinguish "the emulator could not keep up" from "the card model is
+        # wrong": queued vs dropped says whether the host starved, while the
+        # WAV says whether the samples themselves were good.
+        print(f"  audio streaming : {audio.queued} chunks queued, "
+              f"{audio.dropped} dropped, {len(audio.pending)} still pending "
+              f"at exit")
     if m.sb is not None:
         print(f"  sound blaster   : {json.dumps(m.sb.summary(), indent=2)}")
         print(f"  IRQ5 delivered  : {m.sb_irqs}")
