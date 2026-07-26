@@ -300,6 +300,32 @@ mode queries the video wrapper deliberately declines; and the mouse reset and
 mode set that Borland's `int86` builds at runtime, patching the interrupt number
 into a buffer - self-modifying by construction, and one call each.
 
+## The background warp: never seen, so never verified
+
+The v1.2 changelog mentions a warped background, and `compose_scroll` has the
+code for it: when `[0x2022]` is set, each row's x displacement comes from a
+32-entry table at `[0x179f]`, starting at phase `[0x17bf]` and stepped by
+`[0x17c0]` per row.
+
+**It has never executed.** Every session reports `background-warp path: 0 calls`.
+So that branch has only ever been read out of the disassembly - unlike the rest
+of `compose_scroll`, which is byte-compared against the original body. If it ever
+runs, the game prints a warning saying so and naming what to check.
+
+Two things to know if that warning ever appears:
+
+- Verify it before trusting the screen: `--verify-only compose_scroll` byte-compares
+  the native against the original on every call, even though the compositors are
+  in `VERIFY_SKIP`.
+- If it mismatches, doubt the phase sequence first. The original re-masks the
+  phase to `0x1f` **every row**, so it is not an arithmetic progression and cannot
+  be flattened to `table[(phase + row * step) & 0x1f]`. That is why the vectorised
+  version still builds the per-row displacements in a Python loop before
+  compositing in one go.
+
+It is also the one part of the drawing code where an error would be easy to miss:
+a wrong displacement gives a plausible-looking background, not a broken screen.
+
 ## The game's sound API
 
 ```sh

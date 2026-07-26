@@ -1872,6 +1872,20 @@ def native_compose_scroll(m, args):
     if warp_on:
         phase = (phase + ((argy >> 1) * step)) & 0xFF
         m.warp_calls += 1        # so we can tell whether this path was tested
+        if m.warp_calls == 1:
+            # This has never once executed, across every session so far, so the
+            # code below is UNVERIFIED - written from the disassembly and never
+            # compared against it. Say so the moment it does run, rather than
+            # letting a wrong background go unnoticed.
+            print("  [warp] the background warp is running for the first time. "
+                  "This path has never been exercised and is UNVERIFIED.\n"
+                  "  [warp] check it before trusting the screen:\n"
+                  "  [warp]   --verify-only compose_scroll   (byte-compares "
+                  "against the original body)\n"
+                  "  [warp] if it mismatches, the phase sequence is the thing to "
+                  "doubt: the original re-masks to 0x1f every row, so it is not "
+                  "an arithmetic progression, and 0x179f/0x17bf/0x17c0 are the "
+                  "table, start phase and per-row step.")
 
     stride = 90 if u16(g + 0x4FE) else 80
     dst = (far(g + 0x16F1) - 0xA0000 + row0 * stride
@@ -1903,7 +1917,13 @@ def native_compose_scroll(m, args):
         # Each row takes its x displacement from a 32-entry table, stepped per
         # row. Built here as a column so the composite still happens in one go;
         # the phase is advanced in Python because it is re-masked to 0x1f every
-        # row, which is not a plain arithmetic progression.
+        # row, which is not a plain arithmetic progression - the reason this is
+        # not simply base_x + table[(phase + r * step) & 0x1f].
+        #
+        # UNVERIFIED. The warp has never executed in any session, so this branch
+        # has only ever been read out of the disassembly, never compared against
+        # it. The vectorised version above it has been checked byte-for-byte;
+        # this one has not, and shares none of that confidence.
         warp = m.read(g + 0x179F, 32)
         shifts = np.empty(nrows, dtype=np.int32)
         ph = phase
