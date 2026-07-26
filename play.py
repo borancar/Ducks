@@ -35,6 +35,12 @@ from unicorn import *
 from unicorn.x86_const import *
 from trace_dos import DosMachine
 from sb import SoundBlaster
+from xms import XMS
+
+# Where the XMS entry-point stub lives: low memory, above the BIOS data area
+# and below the PSP, so it collides with nothing the program uses.
+XMS_STUB_SEG = 0x0090
+XMS_INT = 0x60              # spare vector the stub traps through
 
 PIT_HZ = 1193182.0
 VGA_A000 = 0xA0000
@@ -66,6 +72,7 @@ for i in range(1, 11):
     KEYMAP[getattr(pygame, f"K_F{i}")] = (0x3A + i - 1, 0x00)
 
 TRACE_TEXT = False          # set by --text-trace
+WATCH_DGROUP = []           # set by --watch-dgroup
 
 MODE_GEOM = {0x13: (320, 200), 0x00: (320, 200), 0x01: (320, 200),
              0x04: (320, 200), 0x05: (320, 200), 0x0D: (320, 200),
@@ -95,7 +102,8 @@ class VgaDos(DosMachine):
         self.last_scancode = 0
         self.mouse_pos = (160, 100)
         self.mouse_btn = 0
-        self.mouse_rel = [0, 0]
+        self.mouse_rel = [0.0, 0.0]
+        self.mouse_sens = 1.0
         # Indexed the way INT 33h numbers buttons: 0=left, 1=right, 2=middle.
         self.press_count = [0, 0, 0]
         self.release_count = [0, 0, 0]
@@ -115,6 +123,7 @@ class VgaDos(DosMachine):
         self.sb_last_tick = None
         self.sb_irqs = 0
         self._dma_hook = None
+        self.xms = XMS(log=print, verbose=True)
         self.vidwrites = Counter()
         self.vidrange = {}
         super().__init__(exe, blaster=blaster, verbose=False, **kw)
@@ -124,9 +133,30 @@ class VgaDos(DosMachine):
                          None, 0xA0000, 0xBFFFF)
         self.uc.hook_add(UC_HOOK_MEM_WRITE, self._on_plane_write,
                          None, 0xA0000, 0xAFFFF)
+        # The guest reaches XMS by far-calling this stub: INT 60h services the
+        # request, then RETF returns to the caller. Written after the machine
+        # exists, since it lives in emulated memory.
+        self.uc.mem_write(XMS_STUB_SEG * 16, bytes([0xCD, XMS_INT, 0xCB]))
         if TRACE_TEXT:
             self.uc.hook_add(UC_HOOK_MEM_WRITE, self._on_textwrite,
                              None, 0xB8000, 0xB8FA0)
+        for off in WATCH_DGROUP:
+            # DGROUP sits at image offset 0x18950; the image loads at
+            # load_seg<<4. Watching a variable there shows exactly when and
+            # from where the game changes it.
+            lin = self.load_seg * 16 + 0x18950 + off
+            self.uc.hook_add(UC_HOOK_MEM_WRITE, self._make_watch(off),
+                             None, lin, lin + 1)
+            print(f"  [watch] DGROUP {off:#06x} -> linear {lin:#07x}")
+
+    def _make_watch(self, off):
+        def on_write(uc, access, address, size, value, user):
+            print(f"  [watch] DGROUP {off:#06x} = {value:#06x} "
+                  f"(size {size}) written from "
+                  f"{uc.reg_read(UC_X86_REG_CS):04x}:"
+                  f"{uc.reg_read(UC_X86_REG_IP):04x} "
+                  f"at t={self._elapsed():.1f}s")
+        return on_write
 
     def _flush_text_run(self):
         """Emit the pending run of characters poked straight into 0xb8000."""
@@ -372,6 +402,22 @@ class VgaDos(DosMachine):
             return
 
     def _on_intr(self, uc, intno, user):
+        if intno == 0x2F:
+            ax = self._reg(UC_X86_REG_AX)
+            if ax == 0x4300:                  # XMS installation check
+                self.int_counts[intno] += 1
+                self._set(UC_X86_REG_AX, (ax & 0xFF00) | 0x80)
+                return
+            if ax == 0x4310:                  # get XMS driver entry point
+                self.int_counts[intno] += 1
+                self.uc.reg_write(UC_X86_REG_ES, XMS_STUB_SEG)
+                self._set(UC_X86_REG_BX, 0)
+                print(f"  [xms] driver entry handed to the game at "
+                      f"{XMS_STUB_SEG:04x}:0000")
+                return
+        if intno == XMS_INT:
+            self.int_counts[intno] += 1
+            return self._xms_call()
         if intno == 0x29:
             # DOS fast console output: write AL at the cursor and advance it.
             # Real DOS always provides this vector; dropping it silently loses
@@ -380,6 +426,28 @@ class VgaDos(DosMachine):
             self._tty(self._reg(UC_X86_REG_AX) & 0xFF)
             return
         return super()._on_intr(uc, intno, user)
+
+    def _xms_call(self):
+        """Service an XMS request made through the entry-point stub."""
+        R = {"ax": UC_X86_REG_AX, "bx": UC_X86_REG_BX, "cx": UC_X86_REG_CX,
+             "dx": UC_X86_REG_DX, "si": UC_X86_REG_SI, "di": UC_X86_REG_DI,
+             "ds": UC_X86_REG_DS, "es": UC_X86_REG_ES}
+        regs = {k: self.uc.reg_read(v) for k, v in R.items()}
+        ah = (regs["ax"] >> 8) & 0xFF
+
+        class Mem:
+            def __init__(self, uc):
+                self.uc = uc
+
+            def read(self, addr, n):
+                return bytes(self.uc.mem_read(addr, n))
+
+            def write(self, addr, data):
+                self.uc.mem_write(addr, bytes(data))
+
+        out = self.xms.dispatch(ah, regs, Mem(self.uc))
+        for name, val in out.items():
+            self.uc.reg_write(R[name], val & 0xFFFF)
 
     def _dos(self):
         """Feed real keystrokes to the DOS console-input calls too.
@@ -469,8 +537,12 @@ class VgaDos(DosMachine):
             self._set(UC_X86_REG_DX, py)
             return
         if ax == 0x000B:
-            dx, dy = self.mouse_rel
-            self.mouse_rel = [0, 0]
+            # Report whole mickeys and carry the remainder. Ducks never calls
+            # 03h, so this is the only thing steering its cursor; quantising
+            # small movements to zero would lose fine control entirely.
+            dx, dy = int(self.mouse_rel[0]), int(self.mouse_rel[1])
+            self.mouse_rel[0] -= dx
+            self.mouse_rel[1] -= dy
             self._set(UC_X86_REG_CX, dx & 0xFFFF)
             self._set(UC_X86_REG_DX, dy & 0xFFFF)
             return
@@ -899,14 +971,21 @@ def main():
                     help="dump captured PCM here on exit")
     ap.add_argument("--no-audio", action="store_true",
                     help="emulate the card but do not open the host mixer")
+    ap.add_argument("--sound-slices", type=int, default=32,
+                    help="how many times per display update to service the "
+                         "sound card and deliver its IRQ")
+    ap.add_argument("--watch-dgroup", default="",
+                    help="comma-separated DGROUP offsets to watch for writes, "
+                         "e.g. 0x2104,0x18f6")
     ap.add_argument("--text-trace", action="store_true",
                     help="log cursor moves and direct text-buffer writes")
     ap.add_argument("--mouse-debug", action="store_true",
                     help="log every mouse button event and INT 33h query")
     args = ap.parse_args()
 
-    global TRACE_TEXT
+    global TRACE_TEXT, WATCH_DGROUP
     TRACE_TEXT = args.text_trace
+    WATCH_DGROUP = [int(x, 0) for x in args.watch_dgroup.split(",") if x.strip()]
 
     headless = args.shots > 0
     if headless:
@@ -954,18 +1033,28 @@ def main():
 
     while running:
         if not paused:
-            try:
-                m.uc.emu_start(addr, 0, count=args.chunk)
-            except UcError as e:
-                print(f"  [cpu] {e} at {m._reg(UC_X86_REG_CS):04x}:"
-                      f"{m._reg(UC_X86_REG_IP):04x}")
-                running = False
-            if m.finished:
-                print(f"  [dos] program exited: {m.finished}")
-                running = False
-            addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
-            m.service_sound()
-            addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
+            # Run the chunk in slices, servicing sound between each. A whole
+            # chunk between IRQ deliveries is an enormous latency by the
+            # guest's standards - real hardware interrupts within microseconds
+            # of a block completing - and anything that waits on an interrupt
+            # with a retry counter rather than a clock gives up long before it.
+            slices = max(1, args.sound_slices if m.sb is not None else 1)
+            step = max(1000, args.chunk // slices)
+            for _ in range(slices):
+                try:
+                    m.uc.emu_start(addr, 0, count=step)
+                except UcError as e:
+                    print(f"  [cpu] {e} at {m._reg(UC_X86_REG_CS):04x}:"
+                          f"{m._reg(UC_X86_REG_IP):04x}")
+                    running = False
+                    break
+                if m.finished:
+                    print(f"  [dos] program exited: {m.finished}")
+                    running = False
+                    break
+                addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
+                m.service_sound()
+                addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
             if audio is not None:
                 audio.push(m.sb)
 
@@ -983,6 +1072,11 @@ def main():
                 elif ev.key == pygame.K_F10:
                     cap_n += 1
                     capture(m, screen, f"cap{cap_n:02d}")
+                elif ev.key in (pygame.K_F7, pygame.K_F8):
+                    m.mouse_sens *= 0.8 if ev.key == pygame.K_F7 else 1.25
+                    print(f"  [ctl] mouse sensitivity {m.mouse_sens:.3f} "
+                          f"(effective {m.mouse_sens / args.scale:.3f} "
+                          f"mickeys per window pixel)")
                 elif ev.key == pygame.K_F11:
                     # Cycle candidate Mode X interpretations while paused, so a
                     # wrong guess can be identified without replaying the game.
@@ -1001,8 +1095,13 @@ def main():
                 mx, my = ev.pos
                 # INT 33h reports in a virtual 640x200 space for mode 13h.
                 m.mouse_pos = (int(mx / win_w * 640), int(my / win_h * 200))
-                m.mouse_rel[0] += ev.rel[0]
-                m.mouse_rel[1] += ev.rel[1]
+                # ev.rel is in window pixels, so at --scale 3 every movement is
+                # reported 3x too large. Divide it back out so one game pixel of
+                # cursor travel matches one game pixel of pointer travel, and
+                # let mouse_sens trim the rest at runtime (F7/F8).
+                k = m.mouse_sens / args.scale
+                m.mouse_rel[0] += ev.rel[0] * k
+                m.mouse_rel[1] += ev.rel[1] * k
             elif ev.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
                 # pygame numbers buttons 1=left, 2=middle, 3=right; INT 33h
                 # numbers them 0=left, 1=right, 2=middle. Wheel and extra
@@ -1129,8 +1228,9 @@ def main():
           f"{[f'{a:#07x}..{b:#07x}' for a, b in runs] or 'none'}")
     print(f"  OUT ports       : "
           f"{{{', '.join(f'{p:#05x}:{c}' for p, c in m.port_out.most_common(14))}}}")
+    import json
+    print(f"  XMS             : {json.dumps(m.xms.summary(), indent=2)}")
     if m.sb is not None:
-        import json
         print(f"  sound blaster   : {json.dumps(m.sb.summary(), indent=2)}")
         print(f"  IRQ5 delivered  : {m.sb_irqs}")
         path = m.sb.write_wav(args.wav)

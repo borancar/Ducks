@@ -148,7 +148,27 @@ class SoundBlaster:
             return self._dsp_read(port - self.base)
         if port == 0x21:
             return self.pic_mask
-        return None
+        return self._dma_read(port)
+
+    def _dma_read(self, port):
+        """Current address / current count read-back for our DMA channel.
+
+        A sound check confirms the card is really playing by watching these
+        count down. Returning a constant makes it look like nothing is being
+        consumed, so the check fails and the game concludes it has no working
+        audio - which disables its audio menu and leaves the mixer silent.
+        Reads are latched low byte first, sharing the byte-pointer flip-flop.
+        """
+        ch = self.dma_channel
+        if port == ch * 2:
+            val = self.cur_addr & 0xFFFF
+        elif port == ch * 2 + 1:
+            val = max(0, self.cur_remaining - 1) & 0xFFFF
+        else:
+            return None
+        byte = val & 0xFF if self.dma_flipflop == 0 else (val >> 8) & 0xFF
+        self.dma_flipflop ^= 1
+        return byte
 
     # ----------------------------------------------------------------- DSP
     def _dsp_write(self, off, v):
