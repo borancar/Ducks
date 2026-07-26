@@ -63,16 +63,23 @@ class Native(VgaDos):
 
     def __init__(self, *a, profile=False, keep_diagnostics=False,
                  verify=False, native_sound=False, native_mouse=False,
-                 native_keyboard=False, **kw):
+                 native_keyboard=False, native_file=False, **kw):
         self.native_sound = native_sound
         self.native_mouse = native_mouse
         self.native_keyboard = native_keyboard
+        self.native_file = native_file
         self.voices = None
+        self.file_reads = self.file_seeks = self.file_bytes = 0
+        self.native_declined = 0
+        self.egg_access = []
         self.bank = SoundBank()
         self.trace_mouse = False
         self.mouse_stacks = Counter()
         self.trace_keyboard = False
         self.kbd_stacks = Counter()
+        self.trace_file = False
+        self.file_stacks = Counter()
+        self.file_io = Counter()
         self.natives = {}            # image offset -> (name, handler, kind)
         self.native_calls = Counter()
         self.profiling = profile
@@ -332,11 +339,31 @@ class Native(VgaDos):
         check-stdin and read-char, i.e. Borland's kbhit()/getch(). Same BP-chain
         trick as the mouse, since these are library calls too.
         """
-        if self.trace_keyboard:
-            ah = (self._reg(UC_X86_REG_AX) >> 8) & 0xFF
-            if ah in (0x01, 0x06, 0x07, 0x08, 0x0B):
-                self.kbd_stacks[(ah,) + self._bp_chain(5)] += 1
+        ah = (self._reg(UC_X86_REG_AX) >> 8) & 0xFF
+        if self.trace_keyboard and ah in (0x01, 0x06, 0x07, 0x08, 0x0B):
+            self.kbd_stacks[(ah,) + self._bp_chain(5)] += 1
+        if self.trace_file and ah in (0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x42):
+            self.file_stacks[(ah,) + self._bp_chain(6)] += 1
+            if ah in (0x3F, 0x40):
+                self.file_io[ah] += self._reg(UC_X86_REG_CX)
         return super()._dos()
+
+    def file_report(self, img):
+        if not self.file_stacks:
+            return
+        FN = {0x3C: "create", 0x3D: "open", 0x3E: "close", 0x3F: "read",
+              0x40: "write", 0x42: "lseek"}
+        print("\n=== file I/O callers (DOS fn, then BP chain) ===")
+        for chain, n in self.file_stacks.most_common(12):
+            ah, frames = chain[0], chain[1:]
+            named = []
+            for off in frames:
+                f = find_function_start(img, off)
+                named.append(f"{f:#07x}" if f is not None else f"?{off:#07x}")
+            print(f"  AH={ah:02x}h ({FN.get(ah, '?'):6}) x{n:<5} "
+                  f"{' <- '.join(named)}")
+        print(f"  bytes read {self.file_io.get(0x3F, 0)}, "
+              f"written {self.file_io.get(0x40, 0)}")
 
     def kbd_report(self, img):
         if not self.kbd_stacks:
@@ -734,6 +761,8 @@ class Native(VgaDos):
             table += MOUSE_NATIVES
         if self.native_keyboard:
             table += KEYBOARD_NATIVES
+        if self.native_file:
+            table += FILE_NATIVES
         for off, name, fn, kind in table:
             self.natives[off] = (name, fn, kind)
 
@@ -763,6 +792,11 @@ class Native(VgaDos):
         t0 = time.perf_counter()
         result = handler(self, args_at)
         self.native_time += time.perf_counter() - t0
+        if result is DECLINE:
+            # Hand back to the original body: some cases (error paths that set
+            # errno through the runtime's own helper) must not be faked.
+            self.native_declined += 1
+            return
 
         if result is not None:
             if isinstance(result, tuple):
@@ -1167,6 +1201,58 @@ def native_mix_voice(m, args):
     return None
 
 
+DECLINE = object()      # a native returning this lets the original body run
+
+
+def native_dos_read(m, args):
+    """read(fd, buf_far, count) at 0x14a3 - the raw DOS read wrapper.
+
+    The layers above this (fread buffering, text-mode CR stripping, Ctrl-Z EOF)
+    keep working untouched; only the INT 21h AH=3Fh round-trip is replaced,
+    served from the file image our DOS shim already holds.
+
+    Declines rather than guesses when the handle is unknown or marked
+    write-only: the original sets errno through its own helper, and faking that
+    would be wrong in a way the game could act on.
+    """
+    fd = m.arg16(args, 0)
+    buf_off, buf_seg, count = m.arg16(args, 1), m.arg16(args, 2), m.arg16(args, 3)
+    flags = struct.unpack("<H", m.read(m.dgroup_base + 0x2F6E + fd * 2, 2))[0]
+    h = m.handles.get(fd)
+    if h is None or (flags & 2):
+        return DECLINE
+    chunk = bytes(h.data[h.pos:h.pos + count])
+    if chunk:
+        m.write(buf_seg * 16 + buf_off, chunk)
+    m.file_reads += 1
+    m.file_bytes += len(chunk)
+    if m.trace_file:
+        m.egg_access.append((h.path, h.pos, len(chunk)))
+    h.pos += len(chunk)
+    return len(chunk)
+
+
+def native_dos_lseek(m, args):
+    """lseek(fd, off_lo, off_hi, whence) at 0x12eb, returning DX:AX."""
+    fd = m.arg16(args, 0)
+    lo, hi, whence = m.arg16(args, 1), m.arg16(args, 2), m.arg16(args, 3) & 0xFF
+    h = m.handles.get(fd)
+    if h is None:
+        return DECLINE
+    # The original clears the EOF flag; omitting that would leave a stale EOF
+    # and the next read would wrongly report end of file.
+    a = m.dgroup_base + 0x2F6E + fd * 2
+    f = struct.unpack("<H", m.read(a, 2))[0]
+    m.write(a, struct.pack("<H", f & 0xFDFF))
+    off = (hi << 16) | lo
+    if off >= 1 << 31:
+        off -= 1 << 32
+    base = {0: 0, 1: h.pos, 2: len(h.data)}.get(whence, 0)
+    h.pos = max(0, min(base + off, len(h.data)))
+    m.file_seeks += 1
+    return (h.pos & 0xFFFF, (h.pos >> 16) & 0xFFFF)
+
+
 def native_kbhit(m, args):
     """Borland kbhit() at 0x029fc - the single choke point for key polling.
 
@@ -1517,6 +1603,14 @@ NATIVE_TABLE = [
 # Enabled only with --native-sound. The whole family must go together: the game
 # queries and stops sounds by id and reads an active-voice count, so pygame and
 # the guest's voice table have to agree or sounds stop starting.
+# Enabled with --native-file. The raw DOS read/lseek wrappers only; fread
+# buffering, text-mode translation and open() are left to the original, which
+# keeps their semantics without having to model Borland's FILE structure.
+FILE_NATIVES = [
+    (0x014A3, "dos_read", native_dos_read, "far"),
+    (0x012EB, "dos_lseek", native_dos_lseek, "far"),
+]
+
 # Enabled with --native-keyboard. One entry covers all key polling: every call
 # site reaches the keyboard through this library routine.
 KEYBOARD_NATIVES = [
@@ -1551,12 +1645,16 @@ def main():
                     help="report which routines do the drawing, then exit")
     ap.add_argument("--profile-sound", action="store_true",
                     help="profile writes to the sound DMA buffer from the start")
+    ap.add_argument("--native-file", action="store_true",
+                    help="serve the raw DOS read/lseek wrappers natively")
     ap.add_argument("--native-keyboard", action="store_true",
                     help="serve kbhit() natively, removing all key polling "
                          "through DOS")
     ap.add_argument("--native-mouse", action="store_true",
                     help="serve the game's mouse wrappers natively, removing "
                          "all INT 33h traffic")
+    ap.add_argument("--trace-file", action="store_true",
+                    help="record which functions do file I/O, and how much")
     ap.add_argument("--trace-keyboard", action="store_true",
                     help="record which game functions poll the keyboard")
     ap.add_argument("--trace-mouse", action="store_true",
@@ -1594,12 +1692,14 @@ def main():
                keep_diagnostics=args.keep_diagnostics, verify=args.verify,
                native_sound=args.native_sound,
                native_mouse=args.native_mouse,
-               native_keyboard=args.native_keyboard, max_insns=1 << 62)
+               native_keyboard=args.native_keyboard,
+               native_file=args.native_file, max_insns=1 << 62)
     m.voices = NativeVoices(m, bank=m.bank) if args.native_sound else None
     if args.native_sound or args.sound_bank:
         m.capture_loader()
     m.trace_mouse = args.trace_mouse
     m.trace_keyboard = args.trace_keyboard
+    m.trace_file = args.trace_file
     # Kept in hand so the profile report can name functions at any moment.
     _d = open(args.unpacked, "rb").read()
     img = _d[struct.unpack_from("<13H", _d, 2)[3] * 16:]
@@ -1788,6 +1888,10 @@ def main():
     m.bank.report()
     m.mouse_report(img)
     m.kbd_report(img)
+    m.file_report(img)
+    if m.native_file:
+        print(f"  native file I/O : {m.file_reads} reads ({m.file_bytes} bytes), "
+              f"{m.file_seeks} seeks, {m.native_declined} declined")
     pygame.quit()
 
 
