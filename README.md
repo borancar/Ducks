@@ -171,6 +171,75 @@ One structural win worth knowing: the sprite blitter draws only pixels whose
 four times the loop iterations for one sprite's pixels. A native does all planes
 in one pass.
 
+## Removing interrupts
+
+```sh
+venv/bin/python native.py --native-xms --native-setup --native-fp   # plus the I/O flags
+```
+
+`--run-seconds N` exits cleanly for a measurement run with nobody at the
+keyboard. The exit report lists every interrupt still executed, grouped by
+service and attributed to the function that raised it. Counts alone cannot drive
+removal: the goal is to replace the code raising the interrupt, so the address is
+what matters.
+
+A full play session went from **26821 interrupts to 140**, in three steps.
+
+**XMS (194).** All of it was self-inflicted. `xms.py` publishes the driver entry
+as a three-byte stub, `INT 60h; RETF`, so every request trapped through a vector
+to reach an API that was already pure Python. Hooking the entry address instead,
+and doing the far return the `RETF` would have done, removes all of them with no
+semantic change. The game caches the entry at `DGROUP:0x2b46` and reaches it by
+`lcall`, so one hook catches every call. The only other XMS interrupts were the
+two `INT 2Fh` detection sites, now natives - but still answering "installed",
+because Ducks disables sound entirely without XMS.
+
+**Two runtime helpers (1486 + 800).** `0x02e07` is Borland's `_dos_setblock`;
+our DOS never fails it, so the function reduces to the constant it returns on
+success. `0x02067` is Borland's `INT 10h` wrapper, which passed get- and
+set-cursor straight through to a shim that ignores them - the game draws its own
+text in Mode X, so the BIOS cursor means nothing. Its mode-set and mode-query
+paths chain several `INT 10h` calls and touch BIOS variables, so those decline
+and are left to run.
+
+**Borland's floating point (24207, i.e. 90% of the total).** Turbo C++ emits each
+x87 instruction as `FWAIT` + ESC opcode (`D8`-`DF`) + ModRM + displacement.
+Linking against the emulator library overwrites exactly that two-byte
+`FWAIT`+ESC pair with a two-byte `INT`, leaving the operand bytes untouched - so
+the interrupt number *carries the opcode*: `INT 34h`..`3Bh` for `D8`..`DF`, and
+`INT 3Dh` for a lone `FWAIT`. The handler decodes the ModRM at its own return
+address. Undoing it is a two-byte write, and Unicorn implements x87 in real mode,
+so the instructions the compiler originally wrote can just be put back.
+
+The bytes at `0x00e33` are the proof - substituting `D9`/`DF` back yields
+`fnstcw` / `fldcw` / `fistp` around an `or [bp-1],0x0c`, which is `__ftol`
+forcing round-toward-zero.
+
+Three things this depends on:
+
+- **Sites patch themselves on first execution**, not in a static sweep. A
+  two-byte scan for `CD 34`..`CD 3B` over 114 KB of 16-bit code cannot tell code
+  from data - this binary desynchronises constantly under static disassembly,
+  which is why the tracer exists - and a false positive corrupts whatever it hit.
+  An interrupt that just fired is proof those bytes are an instruction.
+- **The two FP representations must never coexist.** Borland's emulator keeps its
+  stack in memory, the real FPU keeps its own. Patching before the handler ever
+  runs means no operation touches the memory stack. `INT 3Ch`
+  (segment-prefixed ESC) and `3Eh` cannot be reversed with confidence, so they
+  warn loudly instead of quietly running one operation on the wrong stack. Neither
+  has been observed to execute.
+- **`FINIT` must run once.** A real FPU powers up with control word `0x037f`;
+  Unicorn's starts at zero, selecting single precision and unmasking every
+  exception. Without it `__ftol` still works by luck, but at the wrong precision.
+
+Only 42 sites exist, and a menu-only session reaches all of them: the game's
+floating point is two functions (`0x0d5c5`, `0x0c716`), `__ftol`, startup, and a
+helper block at `0x08f5c`.
+
+What remains is ~140 interrupts: the DOS file layer beneath the native `fopen`
+(~49), the console read behind `kbhit` (~27), `isatty` (~19), and one-shot startup
+(vector install, DOS version, date/time, video mode, mouse reset).
+
 ## The game's sound API
 
 ```sh
