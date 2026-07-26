@@ -79,6 +79,10 @@ class Native(VgaDos):
         self.reads = 0
         self.read_bytes = 0
         self.native_time = 0.0
+        self._cache = {}
+        self._cache_pages = {}
+        self._cache_hooks = {}
+        self.cache_hits = self.cache_misses = self.cache_drops = 0
         self.mark_reads = self.mark_rb = 0
         self.mark_nt = 0.0
         self.verify = verify
@@ -226,6 +230,13 @@ class Native(VgaDos):
                   f"guest reads {rd / t / 1000:7.1f}k/s "
                   f"({rd / calls if calls else 0:5.1f}/call, "
                   f"{b.get('rb', 0) / t / 1e6:.2f} MB/s)")
+        tot = self.cache_hits + self.cache_misses
+        if tot:
+            print(f"  [rate] source cache: {100 * self.cache_hits / tot:.1f}% "
+                  f"hit ({self.cache_hits} hits, {self.cache_misses} misses, "
+                  f"{self.cache_drops} invalidations, "
+                  f"{len(self._cache)} entries, "
+                  f"{len(self._cache_hooks)} watched pages)")
             for name, n in b["c"].most_common():
                 if not n:
                     continue
@@ -436,6 +447,46 @@ class Native(VgaDos):
     def arg32(self, base, i):
         return struct.unpack("<I", self.uc.mem_read(base + i * 2, 4))[0]
 
+    def cached_read(self, addr, n):
+        """Read guest memory, caching it until the guest writes to that page.
+
+        Now that every drawing routine is native, the graphics data those
+        routines consume - sprite pixels, tile rows, row-pointer tables - is
+        loaded from the egg once and thereafter only read. Fetching it through
+        uc.mem_read on every call was the dominant remaining cost, and it was
+        re-fetching bytes that had not changed.
+
+        A page-granular write hook invalidates the cache, so this stays correct
+        if the game ever does rewrite that data (loading a new level, say)
+        rather than assuming it never will. Only source data is cached: DGROUP
+        globals change constantly and are deliberately left alone, since
+        caching them would invalidate every frame and add a write hook to the
+        busiest page in the program.
+        """
+        key = (addr, n)
+        hit = self._cache.get(key)
+        if hit is not None:
+            self.cache_hits += 1
+            return hit
+        self.cache_misses += 1
+        data = bytes(self.uc.mem_read(addr, n))
+        self._cache[key] = data
+        for page in range(addr >> 12, (addr + n - 1 >> 12) + 1):
+            self._cache_pages.setdefault(page, set()).add(key)
+            if page not in self._cache_hooks:
+                lo = page << 12
+                self._cache_hooks[page] = self.uc.hook_add(
+                    UC_HOOK_MEM_WRITE, self._invalidate, None, lo, lo + 0xFFF)
+        return data
+
+    def _invalidate(self, uc, access, address, size, value, user):
+        keys = self._cache_pages.get(address >> 12)
+        if keys:
+            for k in keys:
+                self._cache.pop(k, None)
+            keys.clear()
+            self.cache_drops += 1
+
     def read(self, addr, n):
         # Counted so guest-memory round-trips can be compared against pixel
         # work: each one is a ctypes call into Unicorn, and a routine that
@@ -455,7 +506,7 @@ def read_row_table(m, table, n):
     accounting for essentially all the time spent in the natives. Reading the
     table in one go removes half of them.
     """
-    raw = m.read(table, n * 4)
+    raw = m.cached_read(table, n * 4)
     vals = struct.unpack_from(f"<{n * 2}H", raw)
     return [vals[i * 2 + 1] * 16 + vals[i * 2] for i in range(n)]
 
@@ -474,9 +525,9 @@ def bulk_rows(m, rows, start, span):
         stride = rows[1] - rows[0]
         if stride > 0 and all(rows[i + 1] - rows[i] == stride
                               for i in range(n - 1)) and stride >= span:
-            blob = m.read(rows[0] + start, (n - 1) * stride + span)
+            blob = m.cached_read(rows[0] + start, (n - 1) * stride + span)
             return [blob[i * stride:i * stride + span] for i in range(n)]
-    return [m.read(r + start, span) for r in rows]
+    return [m.cached_read(r + start, span) for r in rows]
 
 
 def find_function_start(img, off, limit=0x600):
@@ -564,7 +615,7 @@ def native_compose_layer(m, args):
         by = (row + y0) & mask_y
         bg = bg_cache.get(by)
         if bg is None:
-            bg = np.frombuffer(m.read(bg_rows[by], mask_x + 1), dtype=np.uint8)
+            bg = np.frombuffer(m.cached_read(bg_rows[by], mask_x + 1), dtype=np.uint8)
             bg_cache[by] = bg
         fg = np.frombuffer(fg_data[row], dtype=np.uint8)[::4]
         out += np.where(fg == 0, bg[idx[:len(fg)]], fg).tobytes()
@@ -651,7 +702,7 @@ def native_draw_sprite(m, args):
         return None
 
     plane = m.read(g + 0x177D, 1)[0] & 3
-    data = m.read(pixels, w * h + src + 1) if w and h else b""
+    data = m.cached_read(pixels, w * h + src + 1) if w and h else b""
     buf = np.frombuffer(data, dtype=np.uint8)
     planes = [m.planes[p] for p in m.active_planes]
     # Only columns where x & 3 == plane are written, so step the row by 4 from
@@ -775,7 +826,7 @@ def native_blit_rows_masked(m, args):
         return None
     planes = [m.planes[p] for p in m.active_planes]
     for row in range(row0, row1):
-        src = np.frombuffer(m.read(far(table + srcrow * 4) + plane, n * 4),
+        src = np.frombuffer(m.cached_read(far(table + srcrow * 4) + plane, n * 4),
                             dtype=np.uint8)[::4]
         o = base + row * stride + (sx >> 2)
         nz = src != 0
@@ -855,7 +906,7 @@ def native_compose_scroll(m, args):
             phase = (phase + step) & 0xFF
         bg = bg_cache.get(by)
         if bg is None:
-            bg = np.frombuffer(m.read(bg_rows[by], mask_x + 1), dtype=np.uint8)
+            bg = np.frombuffer(m.cached_read(bg_rows[by], mask_x + 1), dtype=np.uint8)
             bg_cache[by] = bg
         fg = np.frombuffer(fg_data[cur - row0], dtype=np.uint8)[::4]
         idx = (cols[:len(fg)] + shift) & mask_x
@@ -911,7 +962,7 @@ def native_blit_rows(m, args):
     planes = [m.planes[p] for p in m.active_planes]
     for row in range(row0, row1):
         src = far(table + srcrow * 4) + plane
-        data = m.read(src, n * 4)[::4]
+        data = m.cached_read(src, n * 4)[::4]
         o = plane_off + row * stride + (sx >> 2)
         for pl in planes:
             if 0 <= o and o + len(data) <= len(pl):
