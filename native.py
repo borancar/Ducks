@@ -60,6 +60,7 @@ class Native(VgaDos):
         self.verify = verify
         self.verify_calls = 0
         self.verify_bad = 0
+        self.verify_pending = 0
         super().__init__(*a, **kw)
         self.image_base = self.load_seg * 16
         self.dgroup_base = self.image_base + DGROUP_IMAGE_OFF
@@ -250,6 +251,15 @@ class Native(VgaDos):
 
         state["h"] = uc.hook_add(UC_HOOK_CODE, on_return, None,
                                  ret_lin, ret_lin)
+        # A code hook added mid-run does not apply to an already-translated
+        # block, so without this the return hook usually never fires and the
+        # comparison is silently skipped - which made verification look like it
+        # covered everything when it was sampling under 1% of calls.
+        try:
+            uc.ctl_remove_cache(ret_lin, ret_lin + 1)
+        except Exception:
+            pass
+        self.verify_pending += 1
         # Fall through: do NOT skip the body, the real code must run.
 
     # ------------------------------------------------------------- utilities
@@ -448,6 +458,42 @@ def native_draw_sprite(m, args):
             i += 1
         src = i + row_extra
     m.native_pixels += drawn
+    return None
+
+
+def native_clear_vram(m, args):
+    """Native replacement for the full-screen clear at 0x04d2a. Takes no args.
+
+    The original sets the sequencer map mask to all four planes and then writes
+    zero to 64000 consecutive offsets - 256000 pixels, one emulated iteration
+    each, re-loading the far pointer every time.
+
+    Two details matter for equivalence:
+      * it programs the map mask itself via OUT 0x3c4, 0xff02, and we skip that
+        instruction, so the native must apply the same sequencer write or later
+        drawing inherits a stale mask;
+      * the destination offset is 16-bit, so the run wraps at 0x10000 rather
+        than spilling past the end of the plane.
+    """
+    g = m.dgroup_base
+    off, seg = struct.unpack("<HH", m.read(g + 0x16F1, 4))
+    m._seq_write(0x02, 0xFF)          # what the OUT we skipped would have done
+
+    start = (seg * 16 + off) - 0xA0000
+    if start < 0:
+        return None
+    n = 0xFA00
+    for p in range(4):
+        pl = m.planes[p]
+        base, size = start & 0xFFFF, len(pl)
+        end = base + n
+        if end <= size:
+            pl[base:end] = bytes(n)
+        else:                          # wrap within the 64 KB plane
+            first = size - base
+            pl[base:size] = bytes(first)
+            pl[0:n - first] = bytes(n - first)
+    m.native_pixels += n * 4
     return None
 
 
@@ -659,6 +705,7 @@ NATIVE_TABLE = [
     (0x05DC4, "compose_scroll", native_compose_scroll, "far"),
     (0x05AC2, "blit_rows_masked", native_blit_rows_masked, "far"),
     (0x05761, "plot_pixel", native_plot_pixel, "far"),
+    (0x04D2A, "clear_vram", native_clear_vram, "far"),
 ]
 
 
@@ -799,8 +846,18 @@ def main():
         print(f"  background-warp path : {m.warp_calls} calls"
               + ("" if m.warp_calls else "  <-- NOT exercised, so unverified"))
     if m.verify:
-        print(f"  verify          : {m.verify_calls} calls compared, "
-              f"{m.verify_bad} MISMATCHED")
+        att = m.verify_pending
+        pct = 100.0 * m.verify_calls / att if att else 0.0
+        print(f"  verify          : {m.verify_calls} of {att} attempted "
+              f"({pct:.0f}% actually compared), {m.verify_bad} MISMATCHED")
+        if m.verify_calls < att:
+            print(f"                    {att - m.verify_calls} comparisons "
+                  f"never completed - this is a sample, not full coverage")
+        never = [n for _, n, _, _ in NATIVE_TABLE
+                 if n not in m.native_calls and n not in VERIFY_SKIP]
+        if never:
+            print(f"                    never called, so unverified: "
+                  f"{', '.join(never)}")
     if m.draw_sites:
         m.profile_report(img)
     pygame.quit()
