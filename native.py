@@ -458,9 +458,10 @@ class Native(VgaDos):
     FP_WAIT = 0x3D
 
     def install_int_stubs(self):
-        """Answer the startup's one-shot interrupts at the instruction itself.
+        """Answer interrupts at the instruction itself, where no entry will do.
 
-        These are inline in the C runtime rather than behind a callable function,
+        These are inline in the C runtime, or buried deep inside a function,
+        rather than behind a callable entry point,
         so they cannot be replaced at a function entry like every other native.
         They are answered at the instruction instead: service in Python, then step
         IP past the two bytes of the INT.
@@ -472,7 +473,7 @@ class Native(VgaDos):
         verification and is skipped, which is why the count is worth reading.
         """
         ok, bad = 0, []
-        for off, intno in ONE_SHOT_INT_SITES:
+        for off, intno in STUBBED_INT_SITES:
             lin = self.image_base + off
             found = bytes(self.uc.mem_read(lin, 2))
             if found != bytes([0xCD, intno]):
@@ -485,8 +486,8 @@ class Native(VgaDos):
             except Exception:
                 pass
             ok += 1
-        print(f"  [ints] {ok}/{len(ONE_SHOT_INT_SITES)} one-shot interrupt "
-              f"site(s) answered natively")
+        print(f"  [ints] {ok}/{len(STUBBED_INT_SITES)} interrupt site(s) "
+              f"answered natively")
         if bad:
             print(f"  [ints] {len(bad)} skipped, the image is not in place yet "
                   f"- is this the packed Ducks.exe?")
@@ -1975,6 +1976,46 @@ def stub_get_time(m):
     m._set(UC_X86_REG_DX, (n.tm_sec << 8) | int(t % 1 * 100))
 
 
+def stub_dos_console_read(m):
+    """AH=07h: read a character, through the shim's own console handling.
+
+    Delegated rather than reimplemented. DOS delivers extended keys as two reads
+    - a 0x00 prefix, then the scancode - and that protocol lives in
+    emulation.py._dos(); it is the reason the arrow keys work at all, and a
+    second copy of it here would be a second thing to get wrong. The gain is the
+    interrupt, not the servicing.
+
+    Unlike the rest of these, this site is not a one-shot: it fires once per
+    character read, 88 times in a played session.
+    """
+    m._dos()
+
+
+def stub_dos_truncate(m):
+    """AH=40h raised by 0x0397d, the runtime's truncate helper.
+
+    A near-call "ret 2" Pascal-convention function - the callee pops its own
+    arguments - which is what put it out of reach of the entry-replacement
+    mechanism. Its interrupt is still reachable here. It sets CX=DX=0 to truncate
+    at the current position, which is why that semantic belongs in the shim
+    rather than in the write native: this caller never goes through 0x04b10.
+    """
+    m._dos()
+
+
+def stub_bios_video(m):
+    """INT 10h raised inside the runtime's own video wrapper, for AH=0Fh.
+
+    The wrapper's mode-query path is deliberately left to run - the native
+    declines it, because it chains BIOS calls and reads BIOS variables - but its
+    interrupt can still be answered here. Delegating reproduces the shim exactly,
+    including that AL keeps whatever it already held, which the wrapper then
+    compares against 3. Faithful rather than improved: supplying a "better" value
+    would change a decision the game has always made on that one.
+    """
+    m._bios_video()
+
+
 def stub_get_vector(m):
     """AH=35h: hand back the interrupt vector from the table, in ES:BX."""
     al = m._reg(UC_X86_REG_AX) & 0xFF
@@ -2006,14 +2047,18 @@ INT_STUBS = {
     (0x21, 0x25): ("set_vector", stub_set_vector),
     (0x21, 0x2A): ("get_date", stub_get_date),
     (0x21, 0x2C): ("get_time", stub_get_time),
+    (0x21, 0x07): ("console_read", stub_dos_console_read),
+    (0x21, 0x40): ("dos_truncate", stub_dos_truncate),
+    (0x10, 0x0F): ("bios_mode_query", stub_bios_video),
     (0x1A, None): ("bios_ticks", stub_ticks),
     (0x11, None): ("bios_equipment", stub_equipment),
 }
-# Where the startup raises its one-shot interrupts, as image offsets. Recorded
+# Interrupt sites answered at the instruction, as image offsets. Mostly the
+# startup's one-shots. Recorded
 # from a real session's interrupt report and verified byte-for-byte at install,
 # so a wrong address is skipped rather than silently stepped over. Interrupt
 # numbers only; which function each site asks for is read from AH on arrival.
-ONE_SHOT_INT_SITES = [
+STUBBED_INT_SITES = [
     (0x0000A, 0x21),        # DOS version, the runtime's first act
     (0x00094, 0x21),        # AH=4Ah, shrink the startup memory block
     (0x0010B, 0x1A),        # BIOS tick count, seeds the RNG
@@ -2028,6 +2073,13 @@ ONE_SHOT_INT_SITES = [
     (0x001B9, 0x21), (0x002F5, 0x21), (0x00305, 0x21), (0x00312, 0x21),
     (0x00415, 0x21), (0x00420, 0x21), (0x0042A, 0x21), (0x00F32, 0x21),
     (0x00F45, 0x21), (0x01051, 0x21),
+    # Not a one-shot: getch's character read, 88 calls in a played session. Its
+    # interrupt is 0xa2 bytes inside 0x02786, past arithmetic on [0x8b]/[0x8d],
+    # so there is no wrapper entry to replace - which is exactly what answering
+    # at the instruction is for.
+    (0x02828, 0x21),
+    (0x03989, 0x21),        # the truncate helper's write, Pascal convention
+    (0x020D0, 0x10),        # AH=0Fh mode query, inside the declined wrapper path
 ]
 
 
