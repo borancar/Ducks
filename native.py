@@ -72,6 +72,7 @@ class Native(VgaDos):
         self.native_file = native_file
         self.native_xms = native_xms
         self.native_setup = native_setup
+        self.int_stubs = {}          # linear INT site -> interrupt number
         self.native_fp = False       # set by install_native_fp()
         self.fp_sites = {}           # linear site -> interrupt it replaced
         self.fp_unknown = Counter()
@@ -456,6 +457,55 @@ class Native(VgaDos):
     FP_ESC_LO, FP_ESC_HI = 0x34, 0x3B
     FP_WAIT = 0x3D
 
+    def install_int_stubs(self):
+        """Answer the startup's one-shot interrupts at the instruction itself.
+
+        These are inline in the C runtime rather than behind a callable function,
+        so they cannot be replaced at a function entry like every other native.
+        They are answered at the instruction instead: service in Python, then step
+        IP past the two bytes of the INT.
+
+        Requires the unpacked image - run with --exe Ducks.unpacked.exe. Given
+        the packed original, these addresses still hold compressed data when the
+        hooks go in, because the machine starts on the DIET stub and the game only
+        appears in memory part-way through the run; every site then fails
+        verification and is skipped, which is why the count is worth reading.
+        """
+        ok, bad = 0, []
+        for off, intno in ONE_SHOT_INT_SITES:
+            lin = self.image_base + off
+            found = bytes(self.uc.mem_read(lin, 2))
+            if found != bytes([0xCD, intno]):
+                bad.append(f"{off:#07x} holds {found.hex()}, want cd{intno:02x}")
+                continue
+            self.int_stubs[lin] = intno
+            self.uc.hook_add(UC_HOOK_CODE, self._on_int_stub, None, lin, lin)
+            try:
+                self.uc.ctl_remove_cache(lin, lin + 2)
+            except Exception:
+                pass
+            ok += 1
+        print(f"  [ints] {ok}/{len(ONE_SHOT_INT_SITES)} one-shot interrupt "
+              f"site(s) answered natively")
+        if bad:
+            print(f"  [ints] {len(bad)} skipped, the image is not in place yet "
+                  f"- is this the packed Ducks.exe?")
+            for b in bad[:3]:
+                print(f"  [ints]   {b}")
+
+    def _on_int_stub(self, uc, address, size, user):
+        intno = self.int_stubs.get(address)
+        if intno is None:
+            return
+        ah = (self._reg(UC_X86_REG_AX) >> 8) & 0xFF
+        entry = INT_STUBS.get((intno, ah)) or INT_STUBS.get((intno, None))
+        if entry is None:
+            return                      # no stub for this function: let it trap
+        name, fn = entry
+        fn(self)
+        self._set(UC_X86_REG_IP, (self._reg(UC_X86_REG_IP) + 2) & 0xFFFF)
+        self.native_calls[name] += 1
+
     def install_native_fp(self):
         """Hand the game's floating point to the real FPU.
 
@@ -578,7 +628,7 @@ class Native(VgaDos):
             svc = f"INT {intno:02x}h" + (f" AH={ah:02x}h" if ah is not None else "")
             desc = DOS_FN.get(ah, "") if intno == 0x21 else ""
             print(f"  {svc:<16} x{total:<7} {desc}")
-            for n, site in sorted(sites, key=lambda s: -s[0])[:4]:
+            for n, site in sorted(sites, key=lambda s: -s[0]):
                 off = site - self.image_base
                 if 0 <= off < len(img):
                     f = find_function_start(img, off)
@@ -1863,6 +1913,124 @@ def native_blit_rows(m, args):
 # Offsets are into the unpacked image; confirmed against the disassembly and
 # ranked by --profile. Anything not listed still runs on the emulated CPU.
 # Verify a new entry with --verify before trusting it.
+# ------------------------------------------------- one-shot interrupt stubs ---
+# These fire once, in the C runtime's startup, and are inline rather than behind
+# a callable function - so they cannot be replaced at a function entry like every
+# other native. They are answered at the instruction instead: service in Python,
+# then step IP past the two bytes of the INT.
+#
+# Being one-shots, they cannot be discovered adaptively the way the floating
+# point sites are: the first execution is the only one. The addresses below come
+# from the interrupt report of a real session rather than from a byte scan, and
+# install_int_stubs() verifies the bytes at each one are the expected CD nn
+# before hooking it, so a stale address is skipped loudly instead of corrupting
+# execution.
+
+def stub_dos_version(m):
+    """AH=30h: report DOS 5.0, matching what the shim answers."""
+    m._set(UC_X86_REG_AX, 0x0005)
+    m._set(UC_X86_REG_BX, 0)
+
+
+def stub_setblock(m):
+    """AH=4Ah: the startup's own heap resize. Granted, as the shim grants it."""
+    m._cf(False)
+
+
+def stub_equipment(m):
+    """INT 11h: the BIOS equipment word."""
+    m._set(UC_X86_REG_AX, 0x0021)
+
+
+def stub_ticks(m):
+    """INT 1Ah: BIOS tick count since midnight, at 18.2 Hz.
+
+    A real value rather than a constant on purpose. The startup reads this to
+    seed the random number generator, so freezing it would make every session
+    play out identically - which is a bigger behavioural change than any of the
+    interrupts removed so far. The shim derived it from an interrupt counter;
+    the host clock is both simpler and closer to a real machine.
+    """
+    now = time.localtime()
+    secs = now.tm_hour * 3600 + now.tm_min * 60 + now.tm_sec
+    ticks = int(secs * 18.2065) & 0xFFFFFFFF
+    m._set(UC_X86_REG_CX, (ticks >> 16) & 0xFFFF)
+    m._set(UC_X86_REG_DX, ticks & 0xFFFF)
+    m._set(UC_X86_REG_AX, 0)             # AL=0: no midnight rollover
+
+
+def stub_get_date(m):
+    """AH=2Ah: CX=year, DH=month, DL=day, AL=day of week. Real date, as above."""
+    n = time.localtime()
+    m._set(UC_X86_REG_CX, n.tm_year)
+    m._set(UC_X86_REG_DX, (n.tm_mon << 8) | n.tm_mday)
+    m._set(UC_X86_REG_AX, (n.tm_wday + 1) % 7)     # DOS counts from Sunday
+
+
+def stub_get_time(m):
+    """AH=2Ch: CH=hour, CL=minute, DH=second, DL=hundredths."""
+    t = time.time()
+    n = time.localtime(t)
+    m._set(UC_X86_REG_CX, (n.tm_hour << 8) | n.tm_min)
+    m._set(UC_X86_REG_DX, (n.tm_sec << 8) | int(t % 1 * 100))
+
+
+def stub_get_vector(m):
+    """AH=35h: hand back the interrupt vector from the table, in ES:BX."""
+    al = m._reg(UC_X86_REG_AX) & 0xFF
+    off, seg = struct.unpack("<HH", m.uc.mem_read(al * 4, 4))
+    m._set(UC_X86_REG_BX, off)
+    m.uc.reg_write(UC_X86_REG_ES, seg)
+
+
+def stub_set_vector(m):
+    """AH=25h: install DS:DX as the handler for interrupt AL.
+
+    Most of these install Borland's floating-point handlers, which --native-fp
+    has made unreachable - but they are still written, because the vectors must
+    read back correctly for the runtime's own save-and-restore on exit.
+    """
+    al = m._reg(UC_X86_REG_AX) & 0xFF
+    ds, dx = m._reg(UC_X86_REG_DS), m._reg(UC_X86_REG_DX)
+    m.uc.mem_write(al * 4, struct.pack("<HH", dx, ds))
+    m.hooked_vectors[al] = (ds, dx)
+
+
+# Which interrupts can be answered outright, keyed by (interrupt, AH). AH is read
+# from the register at the site, exactly as the interrupt handler would, so one
+# address serving different functions on different runs still dispatches right.
+INT_STUBS = {
+    (0x21, 0x30): ("dos_version", stub_dos_version),
+    (0x21, 0x4A): ("setblock_startup", stub_setblock),
+    (0x21, 0x35): ("get_vector", stub_get_vector),
+    (0x21, 0x25): ("set_vector", stub_set_vector),
+    (0x21, 0x2A): ("get_date", stub_get_date),
+    (0x21, 0x2C): ("get_time", stub_get_time),
+    (0x1A, None): ("bios_ticks", stub_ticks),
+    (0x11, None): ("bios_equipment", stub_equipment),
+}
+# Where the startup raises its one-shot interrupts, as image offsets. Recorded
+# from a real session's interrupt report and verified byte-for-byte at install,
+# so a wrong address is skipped rather than silently stepped over. Interrupt
+# numbers only; which function each site asks for is read from AH on arrival.
+ONE_SHOT_INT_SITES = [
+    (0x0000A, 0x21),        # DOS version, the runtime's first act
+    (0x00094, 0x21),        # AH=4Ah, shrink the startup memory block
+    (0x0010B, 0x1A),        # BIOS tick count, seeds the RNG
+    (0x0036D, 0x11),        # BIOS equipment word
+    (0x01015, 0x21),        # AH=2Ah get date
+    (0x01028, 0x21),        # AH=2Ch get time
+    # AH=35h/25h: save the vectors the runtime replaces, then install its own.
+    # Most of these are the floating-point handlers that --native-fp leaves
+    # unreachable, but they must still read back correctly for the restore on
+    # exit.
+    (0x0017E, 0x21), (0x0018B, 0x21), (0x00198, 0x21), (0x001A5, 0x21),
+    (0x001B9, 0x21), (0x002F5, 0x21), (0x00305, 0x21), (0x00312, 0x21),
+    (0x00415, 0x21), (0x00420, 0x21), (0x0042A, 0x21), (0x00F32, 0x21),
+    (0x00F45, 0x21), (0x01051, 0x21),
+]
+
+
 def _errno(m, dos_err):
     """Reproduce the runtime's DOS-error-to-errno mapping, function 0x011ed.
 
@@ -2087,7 +2255,7 @@ SOUND_NATIVES = [
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--exe", default="../Ducks.exe")
+    ap.add_argument("--exe", default="./Ducks.unpacked.exe")
     ap.add_argument("--scale", type=int, default=3)
     ap.add_argument("--chunk", type=int, default=400_000)
     ap.add_argument("--blaster", action="store_true")
@@ -2133,8 +2301,8 @@ def main():
                     help="service XMS with no interrupts: driver entry as a code "
                          "hook, plus the two INT 2Fh detection sites")
     ap.add_argument("--native-setup", action="store_true",
-                    help="serve the C runtime's heap-resize and INT 10h wrapper "
-                         "natively")
+                    help="serve the C runtime's heap-resize, INT 10h wrapper "
+                         "and one-shot startup interrupts natively")
     ap.add_argument("--native-fp", action="store_true",
                     help="put Borland's emulated x87 instructions back and let "
                          "the real FPU run them")
@@ -2163,6 +2331,8 @@ def main():
     m.voices = NativeVoices(m, bank=m.bank) if args.native_sound else None
     if args.native_sound or args.sound_bank:
         m.capture_loader()
+    if args.native_setup:
+        m.install_int_stubs()
     if args.native_xms:
         m.install_native_xms()
     if args.native_fp:

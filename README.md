@@ -236,9 +236,41 @@ Only 42 sites exist, and a menu-only session reaches all of them: the game's
 floating point is two functions (`0x0d5c5`, `0x0c716`), `__ftol`, startup, and a
 helper block at `0x08f5c`.
 
-What remains is ~140 interrupts: the DOS file layer beneath the native `fopen`
-(~49), the console read behind `kbhit` (~27), `isatty` (~19), and one-shot startup
-(vector install, DOS version, date/time, video mode, mouse reset).
+**The DOS layer under the native file I/O.** `close`, get-file-attributes,
+`isatty` and `ioctl` are thin wrappers - registers, one `INT 21h`, map the
+result, and on carry route DOS's error code through the errno helper at
+`0x011ed`. Reproducing that helper is what made them worth replacing: without it
+a native must decline on failure and let the interrupt happen anyway, and failure
+is the common case, since the save-slot scan stats five slots of which four are
+usually empty. It stores the DOS code in `_doserrno` at DGROUP:`0x2f9c`,
+translates it through the byte table at `0x2f9e` into `errno` at DGROUP:`0x7f`,
+and returns `0xFFFF`.
+
+**One-shot startup interrupts.** DOS version, the heap shrink, BIOS ticks and
+equipment, date, time, and the 33 vector saves and installs. These are inline in
+the C runtime rather than behind a callable function, so they are answered at the
+instruction: service in Python, then step IP past the two bytes. Being one-shots
+they cannot be discovered adaptively the way the floating-point sites are - the
+first execution is the only one - so the addresses are hardcoded, and verified to
+hold the expected `CD nn` before being hooked.
+
+This needs the **unpacked** image (`--exe Ducks.unpacked.exe`). Given the packed
+original the machine starts on the DIET stub with the game still compressed, so
+those addresses hold compressed data when the hooks go in, every site fails
+verification, and the count printed at startup says so.
+
+The tick and date/time stubs return real host values rather than constants. The
+startup reads ticks to seed the random number generator, so freezing it would
+make every session play out identically - a larger behavioural change than any
+interrupt removed here.
+
+What remains is **30** interrupts: `open` (14) and `write` (9), which maintain
+the file-flags table at DGROUP:`0x2f6e` on success and so were left alone rather
+than risk the save path; the console read behind `getch` (3), which sits 0xa2
+bytes inside a function rather than behind a wrapper; the two `INT 10h AH=0Fh`
+mode queries the video wrapper deliberately declines; and the mouse reset and
+mode set that Borland's `int86` builds at runtime, patching the interrupt number
+into a buffer - self-modifying by construction, and one call each.
 
 ## The game's sound API
 
