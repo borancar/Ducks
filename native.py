@@ -38,7 +38,7 @@ from unicorn.x86_const import *
 
 import emulation
 from emulation import VgaDos, make_surface, capture, AudioSink
-from nsound import NativeVoices
+from nsound import NativeVoices, SoundBank
 
 # Borland large-model layout, as established in emulation.py and analyze.py.
 DGROUP_IMAGE_OFF = 0x18950
@@ -65,6 +65,7 @@ class Native(VgaDos):
                  verify=False, native_sound=False, **kw):
         self.native_sound = native_sound
         self.voices = None
+        self.bank = SoundBank()
         self.natives = {}            # image offset -> (name, handler, kind)
         self.native_calls = Counter()
         self.profiling = profile
@@ -316,6 +317,65 @@ class Native(VgaDos):
                   f"{per_frame:8.1f}/frame  ({n} calls)")
         if not rows:
             print("           no native calls in this interval")
+
+    def capture_loader(self, off=0x14F07):
+        """Capture each sample into the bank as the loader finishes building it.
+
+        Hooked on RETURN, not entry: on entry the descriptor does not exist yet.
+        The loader mallocs a 10-byte descriptor, writes handle/start/length into
+        it, streams the sample from the egg in 2 KB chunks scaling each byte by
+        di/32, and XMS-moves it in. So after it returns, the descriptor is
+        complete and the bytes are in XMS - which is the moment to copy them out
+        under a stable index.
+
+        Observational only: the loader still runs. Reimplementing it would mean
+        reproducing its stdio stream reads, for something that happens once per
+        level.
+        """
+        lin = self.image_base + off
+        self.uc.hook_add(UC_HOOK_CODE, self._on_loader, None, lin, lin)
+        print(f"  [bank] capturing samples from the loader at {off:#07x}")
+
+    def _on_loader(self, uc, address, size, user):
+        ss, sp = self._reg(UC_X86_REG_SS), self._reg(UC_X86_REG_SP)
+        try:
+            ip, cs = struct.unpack("<HH", uc.mem_read(ss * 16 + sp, 4))
+            out_off, out_seg = struct.unpack("<HH",
+                                            uc.mem_read(ss * 16 + sp + 4, 4))
+            scale = struct.unpack("<H", uc.mem_read(ss * 16 + sp + 14, 2))[0]
+        except Exception:
+            return
+        ret_lin = cs * 16 + ip
+        state = {"h": None}
+
+        def on_return(uc2, a2, s2, u2):
+            if a2 != ret_lin:
+                return
+            uc2.hook_del(state["h"])
+            try:
+                d_off, d_seg = struct.unpack(
+                    "<HH", uc2.mem_read(out_seg * 16 + out_off, 4))
+                raw = bytes(uc2.mem_read(d_seg * 16 + d_off, 10))
+            except Exception:
+                return
+            handle = struct.unpack_from("<H", raw, 0)[0]
+            start = struct.unpack_from("<I", raw, 2)[0]
+            length = struct.unpack_from("<I", raw, 6)[0]
+            blk = self.xms.handles.get(handle)
+            if blk is None or not length or start + length > len(blk):
+                print(f"  [bank] skipped: handle {handle} start {start} "
+                      f"len {length} not resident")
+                return
+            pcm = (np.frombuffer(bytes(blk[start:start + length]),
+                                 dtype=np.uint8) ^ 0x80).tobytes()
+            self.bank.add(handle, start, length, scale, pcm)
+
+        state["h"] = uc.hook_add(UC_HOOK_CODE, on_return, None,
+                                 ret_lin, ret_lin)
+        try:
+            uc.ctl_remove_cache(ret_lin, ret_lin + 1)
+        except Exception:
+            pass
 
     def observe_play_sample(self, off=0x151D2):
         """Observe play_sample and decode the sample descriptor it is handed.
@@ -1341,6 +1401,8 @@ def main():
                     help="report which routines do the drawing, then exit")
     ap.add_argument("--profile-sound", action="store_true",
                     help="profile writes to the sound DMA buffer from the start")
+    ap.add_argument("--sound-bank", action="store_true",
+                    help="capture samples into an indexed bank as they load")
     ap.add_argument("--native-sound", action="store_true",
                     help="play voices through pygame instead of the emulated "
                          "Sound Blaster path")
@@ -1371,7 +1433,9 @@ def main():
     m = Native(args.exe, blaster=args.blaster, profile=args.profile,
                keep_diagnostics=args.keep_diagnostics, verify=args.verify,
                native_sound=args.native_sound, max_insns=1 << 62)
-    m.voices = NativeVoices(m) if args.native_sound else None
+    m.voices = NativeVoices(m, bank=m.bank) if args.native_sound else None
+    if args.native_sound or args.sound_bank:
+        m.capture_loader()
     # Kept in hand so the profile report can name functions at any moment.
     _d = open(args.unpacked, "rb").read()
     img = _d[struct.unpack_from("<13H", _d, 2)[3] * 16:]
@@ -1557,6 +1621,7 @@ def main():
     if m.voices is not None:
         import json
         print(f"  native voices   : {json.dumps(m.voices.summary())}")
+    m.bank.report()
     pygame.quit()
 
 

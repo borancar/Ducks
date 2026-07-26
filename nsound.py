@@ -40,6 +40,7 @@ Three things this has to get right to be faithful:
     accumulating. Playing them as unsigned without conversion is loud noise.
 """
 import struct
+from collections import Counter
 
 import numpy as np
 import pygame
@@ -52,11 +53,69 @@ ACTIVE_COUNT = 0x3D1C
 FREE_ID = 0xFFFF
 
 
+class SoundBank:
+    """Our own store of the game's samples, indexed in load order.
+
+    The game identifies a sample only by (XMS handle, start offset, length),
+    which is an artefact of how the loader packs them end-to-end into an
+    extended-memory block - those numbers shift between levels and say nothing
+    about which sound it is. Capturing each sample as the loader builds it gives
+    a stable index instead, in the order the egg defines them, which is what
+    makes "sound #7 played when a duck died" a usable observation.
+
+    PCM is copied out of XMS at load time, so the bank owns its own bytes and
+    remains valid after the game frees or reuses a handle.
+    """
+
+    def __init__(self, log=print):
+        self.entries = []                  # index -> dict
+        self.by_extent = {}                # (handle, start, length) -> index
+        self.log = log
+        self.plays = {}                    # index -> play count
+
+    def add(self, handle, start, length, scale, pcm):
+        key = (handle, start, length)
+        if key in self.by_extent:
+            return self.by_extent[key]
+        idx = len(self.entries)
+        self.entries.append({"index": idx, "handle": handle, "start": start,
+                             "length": length, "scale": scale, "pcm": pcm})
+        self.by_extent[key] = idx
+        self.log(f"  [bank] sound #{idx:<3} handle {handle} start {start:>7} "
+                 f"len {length:>7} scale {scale}/32 "
+                 f"({length / 11111.0:.2f}s)")
+        return idx
+
+    def lookup(self, handle, start, length):
+        return self.by_extent.get((handle, start, length))
+
+    def note_play(self, idx):
+        self.plays[idx] = self.plays.get(idx, 0) + 1
+
+    def report(self):
+        if not self.entries:
+            return
+        print(f"\n=== sound bank: {len(self.entries)} samples ===")
+        for e in self.entries:
+            n = self.plays.get(e["index"], 0)
+            print(f"  #{e['index']:<3} handle {e['handle']} "
+                  f"start {e['start']:>7} len {e['length']:>7} "
+                  f"scale {e['scale']:>2}/32  {e['length'] / 11111.0:5.2f}s  "
+                  f"played x{n}")
+        unplayed = [e["index"] for e in self.entries
+                    if not self.plays.get(e["index"])]
+        if unplayed:
+            print(f"  never played: {unplayed}")
+
+
 class NativeVoices:
-    def __init__(self, m, rate=11111, log=print):
+    def __init__(self, m, rate=11111, log=print, bank=None):
         self.m = m
         self.rate = rate
         self.log = log
+        self.bank = bank if bank is not None else SoundBank(log)
+        self.unknown = Counter()
+        self.trace_plays = True
         self.chan = {}           # slot -> pygame Channel
         self.snd = {}            # slot -> pygame Sound (kept alive)
         self.loops = {}          # slot -> bool
@@ -116,18 +175,32 @@ class NativeVoices:
 
     # ---------------------------------------------------------------- samples
     def _pcm(self, desc_seg, desc_off):
-        """Fetch a sample straight out of the XMS block, as unsigned 8-bit."""
+        """Resolve a descriptor to bank PCM, falling back to reading XMS.
+
+        Prefer the bank: it is indexed by load order, so we learn *which* sound
+        this is, and it keeps working after the game frees or reuses the handle.
+        A miss means the loader-capture hook did not see this sample, so read
+        XMS directly rather than dropping the sound - and count the miss, since
+        it means the bank is incomplete.
+        """
         raw = self.m.read(desc_seg * 16 + desc_off, 10)
         handle = struct.unpack_from("<H", raw, 0)[0]
         start = struct.unpack_from("<I", raw, 2)[0]
         length = struct.unpack_from("<I", raw, 6)[0]
+        info = (handle, start, length)
+
+        idx = self.bank.lookup(handle, start, length)
+        if idx is not None:
+            self.bank.note_play(idx)
+            return self.bank.entries[idx]["pcm"], info, idx
+
+        self.unknown[info] += 1
         blk = self.m.xms.handles.get(handle)
         if blk is None or length == 0 or start + length > len(blk):
-            return None, (handle, start, length)
-        # Signed 8-bit in the game, unsigned in the mixer: offset by 128.
-        pcm = np.frombuffer(bytes(blk[start:start + length]),
-                            dtype=np.uint8) ^ 0x80
-        return pcm.tobytes(), (handle, start, length)
+            return None, info, None
+        pcm = (np.frombuffer(bytes(blk[start:start + length]),
+                             dtype=np.uint8) ^ 0x80).tobytes()
+        return pcm, info, None
 
     # -------------------------------------------------------------------- API
     def play_sample(self, desc_off, desc_seg, sid, loop):
@@ -137,11 +210,16 @@ class NativeVoices:
         if slot is None:
             self.refused += 1
             return 0
-        pcm, info = self._pcm(desc_seg, desc_off)
+        pcm, info, idx = self._pcm(desc_seg, desc_off)
         if pcm is None:
             self.log(f"  [nsnd] bad descriptor {desc_seg:04x}:{desc_off:04x} "
                      f"handle/start/len={info}")
             return 0
+        if self.trace_plays:
+            name = f"#{idx}" if idx is not None else f"unbanked {info}"
+            self.log(f"  [snd] play {name} id={sid:#06x} "
+                     f"loop={'yes' if loop else 'no'} slot={slot} "
+                     f"len={len(pcm)}")
         try:
             snd = pygame.mixer.Sound(buffer=pcm)
             ch = pygame.mixer.Channel(slot)
@@ -204,4 +282,6 @@ class NativeVoices:
     def summary(self):
         return {"started": self.started, "refused_no_free_voice": self.refused,
                 "stopped": self.stopped, "finished": self.reaped,
-                "slots_live": sorted(self.chan)}
+                "slots_live": sorted(self.chan),
+                "banked_samples": len(self.bank.entries),
+                "unbanked_extents": len(self.unknown)}
