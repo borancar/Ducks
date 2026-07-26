@@ -15,7 +15,7 @@ Enough of a card for a DOS game's autodetect and playback path:
 Audio is pulled from guest memory on a wall-clock schedule and appended to a PCM
 buffer, which the host can both play and dump to a WAV for verification.
 
-Kept separate from play.py so the sound work can be reviewed on its own.
+Kept separate from emulation.py so the sound work can be reviewed on its own.
 """
 import struct
 from collections import Counter

@@ -7,11 +7,12 @@ debug/
 shots/
 *.png
 *.bin
+*.wav
 
 # Run logs
 *.log
 
-# Runtime control triggers used by play.py
+# Runtime control triggers used by emulation.py
 capture.request
 pause.request
 

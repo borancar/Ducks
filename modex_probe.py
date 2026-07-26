@@ -3,7 +3,7 @@
 Try alternative Mode X interpretations against a capture, off-line.
 
 Reads the four raw planes, the linear aperture and the palette dumped by
-play.py's capture(), then renders the same memory under several candidate
+emulation.py's capture(), then renders the same memory under several candidate
 layouts. Comparing them side by side identifies the correct one without having
 to replay the game to the same screen.
 
