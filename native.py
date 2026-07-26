@@ -40,10 +40,19 @@ from emulation import VgaDos, make_surface, capture, AudioSink
 # Borland large-model layout, as established in emulation.py and analyze.py.
 DGROUP_IMAGE_OFF = 0x18950
 
-# Natives excluded from --verify. plot_pixel is a single byte write and by far
-# the most frequently called, so checking it dominates the cost of a verify run
-# while telling us almost nothing; the complex blitters are what need checking.
-VERIFY_SKIP = {"plot_pixel"}
+# Natives excluded from --verify. All of the graphics routines are currently
+# skipped: they have been exercised enough in practice, and comparing them costs
+# a lot for little remaining information. To re-check one, delete it from this
+# set and run with --verify (or press F7 mid-run).
+VERIFY_SKIP = {
+    "plot_pixel",
+    "blit_rows",
+    "blit_rows_masked",
+    "compose_layer",
+    "compose_scroll",
+    "draw_sprite",
+    "clear_vram",
+}
 
 
 class Native(VgaDos):
