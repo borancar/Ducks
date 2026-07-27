@@ -27,20 +27,30 @@ keep the opt-out that restores the safe mode (`--read-only`).
 ## `native.py` is edited by anchored scripts
 
 `native.py` is large and heavily cross-referenced, so it is not edited in place by
-hand or by an editor pass. Each change is a small Python script, `edit_*.py`,
-committed alongside the change it made:
+hand or by an editor pass. Each change is applied by a small throwaway Python
+script, `edit_*.py`, which:
 
-- read the whole file,
-- assert each anchor string occurs **exactly once** — bail out printing the anchor
-  if not,
-- do the replacements,
-- write the file back **once**, at the end.
+- reads the whole file,
+- asserts each anchor string occurs **exactly once** — bailing out and printing the
+  anchor if not,
+- does the replacements,
+- writes the file back **once**, at the end.
 
-A failed anchor therefore leaves the file untouched, and the script's docstring
-records *why* the change was made, which is the part a diff cannot carry. The
-scripts are one-shot by design: they are history, not a build step, and re-running
-one after its edit has landed will fail its anchor check, which is the intended
-behaviour.
+A failed anchor therefore leaves the file untouched, which is the point: a
+half-applied edit to this file is much worse than one that did not start.
+
+**The scripts are not part of the repository.** `edit_*.py` is git-ignored: they are
+how a change is made, not what the repository is, and each is genuinely one-shot —
+re-running one after its edit has landed fails its anchor check by design. What
+matters is the *reasoning*, and that belongs in the commit message, where someone
+reading `git log` will find it, rather than in a docstring in a file nobody opens
+again.
+
+Where a script's structure is worth checking, assert it: string surgery that
+produces valid but wrong Python is the failure mode here. One such edit moved a
+block of event handling out of the function it was meant to land in — syntactically
+fine, semantically dead — and an `ast` post-condition in the corrective script is
+what made the second attempt provable rather than hopeful.
 
 ## The game lives under the repository, and never in it
 

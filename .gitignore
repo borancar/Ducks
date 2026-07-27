@@ -43,5 +43,12 @@ snapshots/
 # Runtime control trigger for a snapshot, same idea as capture.request
 snapshot.request
 
+# The anchored one-shot scripts that apply changes to native.py. They are how a
+# change is made, not part of what the repository is: each is applied once and
+# discarded, and re-running one after its edit has landed fails its anchor check
+# anyway. The reasoning that used to live in their docstrings goes in the commit
+# message instead, where it is read.
+edit_*.py
+
 __pycache__/
 *.pyc

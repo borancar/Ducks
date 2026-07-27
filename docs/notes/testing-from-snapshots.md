@@ -1,8 +1,9 @@
 # Testing from snapshots instead of playing
 
-**Added 2026-07-27 and exercised the same day. Round trip byte-identical, and three
-of the four plane loops - including the in-game one - verified clean from a single
-menu snapshot with nobody at the keyboard. See [Status](#status).**
+**Added 2026-07-27 and exercised the same day. Round trip byte-identical, and all
+four plane loops verified clean from snapshots with nobody at the keyboard - the
+in-game ones from a menu capture, because the idle menu runs a demo level itself.
+See [Status](#status).**
 
 ## Why
 
@@ -173,4 +174,4 @@ instrument cannot see before reading its silence as agreement - and render the
 screen when the claim is about the screen.
 
 See [editing-conventions](editing-conventions.md) for why the `native.py` half of
-this landed as `edit_snapshot.py`.
+this was applied by an anchored one-shot script.

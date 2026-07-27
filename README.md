@@ -334,7 +334,15 @@ is a number - the bonus screen misses ~7% of its slots at 15.0 ms a frame.
 **Input moved to the flip as well, and had to.** A paced chunk spans dozens of
 frames and most of a second, so events pumped once per chunk responded less than
 twice a second. `pump()` is called from the flip, which puts input at the game's
-own frame rate.
+own frame rate. The `--run-seconds` deadline and the status interval moved with it,
+for the same reason - and they measure *this run's* wall clock, not the machine's,
+which carries on from the snapshot and can be minutes old before you start.
+
+**The mouse is grabbed while playing**, in SDL's relative mode rather than as a
+plain grab: the game reads only relative motion, so a confined pointer would still
+stop producing deltas at the window edge. **Ctrl+Alt** hands it back, clicking in
+the window takes it again, and losing focus releases it. `--no-grab-mouse` turns it
+off.
 
 What the port trace exposed along the way, all of it from
 [`trace_ports.py`](trace_ports.py) against a snapshot:
@@ -633,7 +641,6 @@ so this is architectural, not an optimisation.
 | `test_fn_start.py` | pins function-boundary attribution to known answers |
 | `test_retire.py` | drives the guest's own code to reach a state play cannot |
 | `probe_plot_ptr.py` | resolves which pixel plotter `[0x53e]` points at |
-| `edit_*.py` | the anchored edit scripts that produced changes to `native.py` |
 | `export_sessions.py` | regenerates `docs/sessions/` from a session transcript |
 | `sb.py` | Sound Blaster DSP, DMA channel and IRQ model |
 | `xms.py` | XMS / HIMEM.SYS driver; without it the game has no sound |

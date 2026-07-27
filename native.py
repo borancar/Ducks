@@ -4182,6 +4182,10 @@ def make_parser():
                          "it, so every game frame reaches the screen. Drops the "
                          "retrace spin and the delay, so nothing limits the "
                          "frame rate but the host")
+    ap.add_argument("--grab-mouse", default=True,
+                    action=argparse.BooleanOptionalAction,
+                    help="lock the mouse to the window while playing, since the "
+                         "game steers by relative motion; Ctrl+Alt releases it")
     ap.add_argument("--flip-hz", type=float, default=70.0,
                     help="pace the native page flip at this rate (70 Hz is the "
                          "Mode X frame rate the game was written for); 0 leaves "
@@ -4341,6 +4345,12 @@ def main():
     if args.load_snapshot:
         snapshot.restore_file(m, args.load_snapshot, force=args.force_snapshot)
     snap_at = {int(x, 0) for x in args.snapshot_at.split(",") if x.strip()}
+    # Wall time for this run. Not m._elapsed(): the machine's clock continues from
+    # the snapshot's, deliberately, so it can be minutes old before we start.
+    run_t0 = time.perf_counter()
+
+    def run_elapsed():
+        return time.perf_counter() - run_t0
     audio = None
     if args.blaster and not args.no_audio and not args.native_sound:
         audio = AudioSink()
@@ -4374,6 +4384,39 @@ def main():
     # because it closes over the window, which a headless replay does not have.
     m.present = present
 
+    def status():
+        """The periodic [stat] line. Called from wherever the interval elapses.
+
+        Two clocks, because they differ after a restore and the difference is not a
+        fault: `t` is wall time in this run, `clock` is the guest's, which carries
+        on from the captured session.
+        """
+        print(f"  [stat] t={run_elapsed():6.1f}s clock={m._elapsed():6.1f}s "
+              f"frames={frames} flips={m.flips} mode={m.mode:#04x} "
+              f"natives={dict(m.native_calls)}")
+
+    grabbed = False
+
+    def set_grab(on):
+        """Take the mouse or hand it back.
+
+        Relative mode, not a plain grab: the game reads only relative motion, so
+        the pointer position is meaningless to it, and in relative mode the mouse
+        never runs out of screen to move across. A plain grab confines the pointer
+        to the window and then stops producing deltas at its edge - the same
+        failure in a smaller box.
+        """
+        nonlocal grabbed
+        grabbed = bool(on)
+        try:
+            pygame.mouse.set_relative_mode(grabbed)
+        except Exception:
+            # Older SDL bindings: confine the pointer and hide it instead.
+            pygame.event.set_grab(grabbed)
+            pygame.mouse.set_visible(not grabbed)
+        print("  [mouse] grabbed - Ctrl+Alt releases" if grabbed
+              else "  [mouse] released - click in the window to grab again")
+
     def pump():
         """Service the window: events in, and the quit key.
 
@@ -4382,14 +4425,23 @@ def main():
         frames, so pumping only per chunk would leave input responding less
         than twice a second.
         """
-        nonlocal running
+        nonlocal running, next_status
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT or (
                     ev.type == pygame.KEYDOWN and ev.key == pygame.K_F12):
                 running = False
                 m.quit_requested = True   # survives step_frame's return value
                 m.uc.emu_stop()   # end the slice now, not in a second
+            elif ev.type == pygame.WINDOWFOCUSLOST:
+                # Do not leave the pointer captive in a window being left.
+                if grabbed:
+                    set_grab(False)
             elif ev.type == pygame.KEYDOWN:
+                mods = pygame.key.get_mods()
+                if grabbed and (mods & pygame.KMOD_CTRL) \
+                        and (mods & pygame.KMOD_ALT):
+                    set_grab(False)
+                    continue          # not passed on: it is our shortcut
                 if ev.key == pygame.K_F2:
                     # Recorded, not taken: see Native.snapshot_requested.
                     m.snapshot_requested = f"F2 at frame {frames}"
@@ -4429,6 +4481,12 @@ def main():
                 m.mouse_rel[0] += ev.rel[0] * k
                 m.mouse_rel[1] += ev.rel[1] * k
             elif ev.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+                if not grabbed:
+                    # The click that takes the mouse back is not also a click in
+                    # the game, or returning would fire a shot or pick a menu item.
+                    if ev.type == pygame.MOUSEBUTTONDOWN and args.grab_mouse:
+                        set_grab(True)
+                    continue
                 idx = {1: 0, 3: 1, 2: 2}.get(ev.button)
                 if idx is not None:
                     bit = 1 << idx
@@ -4441,7 +4499,22 @@ def main():
                         m.release_count[idx] += 1
                         m.release_pos[idx] = m.mouse_pos
 
+        # Time-based, so they belong at the frame boundary rather than at the end
+        # of an instruction chunk that may span thousands of frames.
+        if args.run_seconds and not m.quit_requested \
+                and run_elapsed() >= args.run_seconds:
+            print(f"  [stat] --run-seconds {args.run_seconds} reached, quitting")
+            running = False
+            m.quit_requested = True
+            m.uc.emu_stop()
+        if run_elapsed() >= next_status:
+            next_status += args.status_every
+            status()
+
     m.pump = pump
+
+    if args.grab_mouse:
+        set_grab(True)
 
     addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
     running, frames, next_status = True, 0, args.status_every
@@ -4501,16 +4574,13 @@ def main():
             take_snapshot(m, args, f"--snapshot-at {frames}")
         clock.tick(60)
 
-        if args.run_seconds and m._elapsed() >= args.run_seconds:
-            print(f"  [stat] --run-seconds {args.run_seconds} reached, quitting")
-            running = False
-        if m._elapsed() >= next_status:
-            next_status += args.status_every
-            print(f"  [stat] t={m._elapsed():6.1f}s frames={frames} "
-                  f"mode={m.mode:#04x} natives={dict(m.native_calls)}")
+        # The deadline and the status interval are pump()'s, and pump() is called
+        # just above, so there is nothing to repeat here - including when the flip
+        # is not native, which is the case that seemed to need a second copy.
 
     m.flush_open_files()
-    print(f"\n=== finished after {frames} frames, {m._elapsed():.1f}s ===")
+    print(f"\n=== finished after {frames} frames, {run_elapsed():.1f}s "
+          f"(guest clock {m._elapsed():.1f}s) ===")
     if m.flips:
         el = max(m._elapsed(), 1e-6)
         rate = m.flips / el
