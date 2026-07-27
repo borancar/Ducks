@@ -56,8 +56,12 @@ than performed. `--read-only` restores the overlay-only behaviour.
 
 ```sh
 python -m venv venv
-venv/bin/pip install capstone unicorn pygame-ce
+venv/bin/pip install capstone unicorn pygame-ce numpy
 ```
+
+`numpy` is not optional: `native.py` and `nsound.py` import it at the top level,
+for the vectorised compositors and the sample slicing, so a venv without it fails
+at import rather than degrading.
 
 ## Unpacking
 

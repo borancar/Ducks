@@ -12,7 +12,7 @@ game/
 *.URL
 
 # Python virtualenv (113 MB, recreate with: python -m venv venv &&
-# venv/bin/pip install capstone unicorn pygame-ce)
+# venv/bin/pip install capstone unicorn pygame-ce numpy)
 venv/
 
 # Captures and generated images from debugging sessions
