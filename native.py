@@ -133,6 +133,7 @@ class Native(VgaDos):
         self.mark_nt = 0.0
         self.verify = verify
         self.verify_only = set()
+        self.verify_declined = 0
         self.verify_calls = 0
         self.verify_bad = 0
         self.verify_pending = 0
@@ -1225,9 +1226,19 @@ class Native(VgaDos):
 
         before = [bytes(p) for p in self.planes]
         try:
-            handler(self, args_at)
+            outcome = handler(self, args_at)
         except Exception as e:
             print(f"  [verify] {name}: native raised {e!r}")
+            for i, p in enumerate(before):
+                self.planes[i][:] = p
+            return
+        if outcome is DECLINE:
+            # A declining native is not predicting anything, so there is nothing
+            # to compare: it is handing the call back for the original to do.
+            # Counting that as a mismatch made verification useless for exactly
+            # the natives that need it most - the ones that only handle the cases
+            # they have been proven correct on.
+            self.verify_declined += 1
             for i, p in enumerate(before):
                 self.planes[i][:] = p
             return
@@ -1498,6 +1509,29 @@ def native_draw_sprite(m, args):
     plane in [0x177d], so the game calls it four times per sprite; here the
     whole span is done in one pass over the plane shadow.
     """
+    u16 = lambda a: struct.unpack("<H", m.read(a, 2))[0]
+
+    def far(a):
+        off, seg = struct.unpack("<HH", m.read(a, 4))
+        return seg * 16 + off
+
+    _i = u16(far(args + 0x06 - 6))
+    return blit_sprite(m,
+                       index=_i,
+                       x=struct.unpack("<h", m.read(args + 0x0A - 6, 2))[0],
+                       y=struct.unpack("<i", m.read(args + 0x0C - 6, 4))[0],
+                       table=far(args + 0x10 - 6),
+                       clip=far(args + 0x14 - 6),
+                       colour=m.read(args + 0x18 - 6, 1)[0])
+
+
+def blit_sprite(m, index, x, y, table, clip, colour):
+    """Blit one sprite, given already-resolved arguments.
+
+    Split out of the native above so the entity loop can draw without paying a
+    second native dispatch per sprite - which is the whole point of replacing the
+    loop rather than the blitter.
+    """
     g = m.dgroup_base
     u16 = lambda a: struct.unpack("<H", m.read(a, 2))[0]
     s16 = lambda a: struct.unpack("<h", m.read(a, 2))[0]
@@ -1506,15 +1540,11 @@ def native_draw_sprite(m, args):
         off, seg = struct.unpack("<HH", m.read(a, 4))
         return seg * 16 + off
 
-    clip = far(args + 0x14 - 6)
-    table = far(args + 0x10 - 6)
-    index = u16(far(args + 0x06 - 6))
     desc = u16(table + 4) * 16 + u16(table + 2) + index * 14
 
     w, h = u16(desc + 0), u16(desc + 2)
     ox, oy = s16(desc + 4), s16(desc + 6)
     pixels = far(desc + 0x0A)
-    colour = m.read(args + 0x18 - 6, 1)[0]
 
     # While a rate bucket is open, record what is being drawn. Knowing the
     # count is not enough to explain a redraw storm; the sprite identity and
@@ -1522,8 +1552,8 @@ def native_draw_sprite(m, args):
     if m.active_label is not None:
         m.sprite_census[m.active_label][(index, w, h)] += 1
 
-    x = s16(args + 0x0A - 6) - ox
-    y = struct.unpack("<i", m.read(args + 0x0C - 6, 4))[0] + s16(clip + 0) - oy
+    x = x - ox
+    y = y + s16(clip + 0) - oy
 
     src = 0            # index into the sprite's pixel data
     row_extra = 0      # per-row source advance added by horizontal clipping
@@ -1597,6 +1627,138 @@ def native_draw_sprite(m, args):
     drawn = int(nz.sum())
     m.rows_done = nrows
     m.native_pixels += drawn
+    return None
+
+
+# Entity types whose sprite selection has been verified byte-exact against the
+# original. Anything else declines the whole call, so the emulated body draws it.
+ENTITY_TYPES_VERIFIED = frozenset({0x04, 0x14})
+
+
+def native_draw_entities(m, args):
+    """The sprite entity loop at 0x0aba5, one level above draw_sprite.
+
+    Walks the scene's entity array, works out which sprite each one shows, and
+    blits it. Called once per Mode X plane, like everything else in that loop.
+
+        args+0   far ptr -> scene: +2 entity count, +8 far ptr -> entity array
+        args+4   20-byte viewport, by value: +0 top, +2 bottom, +8 right,
+                 +0xc scroll x, +0x10 scroll y (dword). Its address is what
+                 draw_sprite receives as its clip rectangle.
+        args+0x18 byte : colour offset
+
+        entity record, 0x29 bytes:
+          +0x00 word   x                  +0x14 byte   animation frame
+          +0x04 dword  y, fixed point     +0x17 word   flag (0x36 y-nudge)
+          +0x1f word   sprite sub-index   +0x23 word   y offset (type 0x26)
+          +0x25 word   type
+
+    Sprite selection is one mechanism with per-type exceptions. DGROUP 0x9a holds
+    a far pointer per type, each addressing an array of sprite indices selected
+    by (ent[+0x1f] & 0xfffe); [0x3a7] holds a flags byte per type whose bit 2
+    means "a mirrored variant lives in the next slot", chosen by the global facing
+    direction in [0x511]. Types 1, 2 and 4 compute an index arithmetically
+    instead, and 0x26 and 0x36 adjust y first.
+
+    Two paths are deliberately NOT reproduced, and the whole call declines if any
+    entity needs one:
+
+      * type 5 with y <= 0 calls 0x78d4, which mutates game state. Faking a
+        drawing routine is safe; faking a state change is not.
+      * an entity following one of type 0x0f or 0x10 is also drawn through
+        0x65f1, a second blitter that has not been reimplemented yet.
+
+    Declining the entire call rather than the entity keeps this exactly as correct
+    as the original: the emulated body runs and draws everything.
+    """
+    u16 = lambda a: struct.unpack("<H", m.read(a, 2))[0]
+    s16 = lambda a: struct.unpack("<h", m.read(a, 2))[0]
+
+    def far(a):
+        off, seg = struct.unpack("<HH", m.read(a, 4))
+        return seg * 16 + off
+
+    g = m.dgroup_base
+    scene = far(args + 0)
+    count = s16(scene + 2)
+    if count <= 0:
+        return None
+    ents = far(scene + 8)
+    view = args + 4                      # the by-value viewport, in guest memory
+    scroll_x = s16(view + 0x0C)
+    scroll_y = struct.unpack("<i", m.read(view + 0x10, 4))[0]
+    colour = m.read(args + 0x18, 1)[0]
+
+    recs = m.read(ents, count * 0x29)
+    types = [struct.unpack_from("<H", recs, i * 0x29 + 0x25)[0]
+             for i in range(count)]
+    if any(t not in ENTITY_TYPES_VERIFIED for t in types):
+        # Verified types only. The default branch's mirrored variants were
+        # producing the right sprite indices at the right positions, yet the
+        # original went on to emit further blits with a different clip rectangle
+        # and colour that this loop does not - so something in that path draws
+        # more than one sprite per entity, and it is not reproduced yet.
+        return DECLINE
+
+    # Bail out before drawing anything if any entity needs a path we do not have.
+    prev_shadow = False
+    for i, t in enumerate(types):
+        if prev_shadow:
+            return DECLINE                       # needs 0x65f1
+        if t == 5:
+            y = struct.unpack_from("<i", recs, i * 0x29 + 4)[0]
+            if y <= 0:
+                return DECLINE                   # needs 0x78d4
+        prev_shadow = t in (0x0F, 0x10)
+
+    facing = u16(g + 0x511)
+    frame_dir = -1 if facing else 1
+    anim_base = m.read(g + 0x179E, 1)[0]
+
+    def table_index(t, sub):
+        ptr = far(g + 0x9A + (t & 0xFFFF) * 4)
+        return u16(ptr + (sub & 0xFFFE))
+
+    for i in range(count):
+        r = i * 0x29
+        t = types[i]
+        sub = struct.unpack_from("<H", recs, r + 0x1F)[0]
+        # Signed: the original sign-extends this byte before using it, so a
+        # negative frame both shifts differently and is what the mirrored-variant
+        # test compares against.
+        frame = struct.unpack_from("<b", recs, r + 0x14)[0]
+        y = struct.unpack_from("<i", recs, r + 4)[0]
+
+        if t in (1, 2):
+            # Arithmetic rather than a table, and mirrored by the facing flag.
+            idx = ((frame << 2) + (2 - t) * 12 + anim_base + 6) & 0xFFFF
+            if not facing:
+                idx = (((2 - t) * 12 + 6) - (frame << 2) + anim_base) & 0xFFFF
+        elif t == 4:
+            if frame:
+                idx = 0x7B + (1 if frame < 0 else 0)
+            else:
+                idx = table_index(4, sub)
+        elif t == 0x26:
+            y -= struct.unpack_from("<H", recs, r + 0x23)[0]
+            idx = table_index(0x26, sub)
+        elif t == 0x36:
+            idx = table_index(0x36, sub)
+            if struct.unpack_from("<H", recs, r + 0x17)[0] != 1:
+                y += 8
+        else:
+            slot = t
+            if m.read(g + 0x3A7 + (t & 0xFFFF), 1)[0] & 4:
+                slot = t + (1 if frame == frame_dir else 0)
+            idx = table_index(slot, sub)
+
+        blit_sprite(m, index=idx,
+                    x=(struct.unpack_from("<h", recs, r)[0] - scroll_x),
+                    # ds:0x18e9 is pushed as the pointer VALUE, so the table
+                    # header IS at 0x18e9 - not a pointer stored there.
+                    y=y - scroll_y, table=g + 0x18E9, clip=view,
+                    colour=colour)
+    m.rows_done = count
     return None
 
 
@@ -2572,6 +2734,7 @@ NATIVE_TABLE = [
     (0x05AC2, "blit_rows_masked", native_blit_rows_masked, "far"),
     (0x05761, "plot_pixel", native_plot_pixel, "far"),
     (0x04D2A, "clear_vram", native_clear_vram, "far"),
+    (0x0ABA5, "draw_entities", native_draw_entities, "far"),
     (0x0AB09, "particles", native_particles, "far"),
     (0x157C1, "sound_gather", native_sound_gather, "far"),
 ]
