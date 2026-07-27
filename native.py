@@ -2003,6 +2003,64 @@ def set_plane(m, n):
     m._seq_write(0x02, 1 << (n & 3))
 
 
+def compose_layer_shared(m):
+    """Everything compose_layer computes that does not depend on the plane.
+
+    The per-plane call reads both row tables, fetches the foreground rows from
+    [0x177d] rightwards, and gathers the background rows - and only the
+    foreground window and the column indices actually differ between planes. So
+    for four planes it read four overlapping windows of the same rows and
+    gathered the same background four times. Here the full row is read once and
+    each plane takes a stride of it, which is free.
+
+    Returns None when the destination is not the Mode X aperture, matching what
+    the per-plane version does in that case.
+    """
+    g = m.dgroup_base
+    u16 = lambda o: struct.unpack("<H", m.read(g + o, 2))[0]
+
+    def farptr(o):
+        off, seg = struct.unpack("<HH", m.read(g + o, 4))
+        return seg * 16 + off
+
+    width, height = u16(0x538), u16(0x53A)
+    mask_x, mask_y = u16(0x1729), u16(0x172B)
+    dst_lin = u16(0x16F3) * 16 + u16(0x16F1) + u16(0x1727)
+    plane_off = dst_lin - 0xA0000
+    if plane_off < 0 or width <= 0 or height <= 0:
+        return None
+
+    fg_rows = read_row_table(m, farptr(0x16F5), height)
+    bg_rows = read_row_table(m, farptr(0x170B), mask_y + 1)
+    fg_data = bulk_rows(m, fg_rows, 0, width)     # every column, once
+    if not fg_data:
+        return None
+    fg = np.frombuffer(b"".join(fg_data), dtype=np.uint8).reshape(height, -1)
+
+    # The background rows, gathered once. Only the distinct ones are read: the
+    # wrap mask means the same few recur down the region.
+    by = (np.arange(height, dtype=np.int32) +
+          m.read(g + 0x177F, 1)[0]) & mask_y
+    uniq, inv = np.unique(by, return_inverse=True)
+    bg = np.stack([np.frombuffer(m.cached_read(bg_rows[b], mask_x + 1),
+                                dtype=np.uint8) for b in uniq])[inv]
+    return plane_off, width, mask_x, fg, bg
+
+
+def compose_layer_plane(m, shared, plane):
+    """One plane's worth of compose_layer, from the hoisted arrays."""
+    plane_off, width, mask_x, fg_all, bg = shared
+    fg = fg_all[:, plane::4]
+    ncols = fg.shape[1]
+    if ncols == 0:
+        return
+    idx = (np.arange(plane, width, 4, dtype=np.int32) & mask_x)[:ncols]
+    out = np.where(fg == 0, bg[:, idx], fg).tobytes()
+    for p in m.active_planes:
+        m.planes[p][plane_off:plane_off + len(out)] = out
+    m.native_pixels += len(out)
+
+
 def plane_loop_layer(m):
     """The four-plane drawing loop at 0x0cd5f, done in one native call.
 
@@ -2024,9 +2082,15 @@ def plane_loop_layer(m):
     imposed by the game's.
     """
     g = m.dgroup_base
+    # The compositor's plane-independent work is done once here, which is the
+    # point of owning the loop: the caller used to force it four times.
+    shared = compose_layer_shared(m)
     for plane in range(4):
         set_plane(m, plane)
-        native_compose_layer(m, 0)           # reads only DGROUP
+        if shared is None:
+            native_compose_layer(m, 0)       # aperture not set up; let it decide
+        else:
+            compose_layer_plane(m, shared, plane)
         draw_entities(m, scene=g + 0x0D93, view=g + 0x1755, colour=0)
 
 
