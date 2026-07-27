@@ -25,6 +25,7 @@ routine you have not identified:
 Usage mirrors emulation.py otherwise (--scale, --blaster, F9/F10/F12).
 """
 import argparse
+import bisect
 import os
 import struct
 import sys
@@ -1502,19 +1503,127 @@ def bulk_rows(m, rows, start, span):
     return [m.cached_read(r + start, span) for r in rows]
 
 
-def find_function_start(img, off, limit=0x600):
-    """Scan back for a Borland function prologue (push bp; mov bp,sp)."""
-    for back in range(0, limit):
-        i = off - back
-        if i < 2:
+# Big enough for the largest function in this image: the in-game frame runs
+# 0x0d7ee-0x0e8ac, 4287 bytes. The old window was 0x600, so addresses deep inside
+# it resolved to nothing at all.
+FUNCTION_SCAN_LIMIT = 0x2000
+
+_fn_entries = {}
+_fn_start_cache = {}
+_fp_norm_cache = {}
+_cs16 = None
+
+
+def _disasm16():
+    """A 16-bit capstone, or None if it is not installed.
+
+    Imported lazily: this is only wanted to confirm a prologue for the exit
+    reports, so the game should not pay for the import in order to run.
+    """
+    global _cs16
+    if _cs16 is None:
+        try:
+            import capstone
+            _cs16 = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_16)
+            _cs16.detail = False
+        except Exception:
+            _cs16 = False
+    return _cs16 or None
+
+
+def _fp_normalised(img):
+    """A copy of the image with Borland's INT-encoded x87 turned back into x87.
+
+    INT 34h..3Bh stand in for FWAIT + ESC D8..DF, and INT 3Dh for a lone FWAIT;
+    both are two bytes, as is the substitution, so nothing shifts. Built once per
+    image and used only for sweeping - it is never executed.
+
+    Safe because those vectors are Borland's floating point and nothing else in
+    this binary: the interrupt inventory found no other use of 34h-3Dh.
+    """
+    key = len(img)
+    norm = _fp_norm_cache.get(key)
+    if norm is None:
+        buf = bytearray(img)
+        for i in range(len(buf) - 1):
+            if buf[i] != 0xCD:
+                continue
+            n = buf[i + 1]
+            if 0x34 <= n <= 0x3B:
+                buf[i], buf[i + 1] = 0x9B, 0xD8 + n - 0x34
+            elif n == 0x3D:
+                buf[i], buf[i + 1] = 0x9B, 0x90      # FWAIT, then a NOP
+        norm = bytes(buf)
+        _fp_norm_cache[key] = norm
+    return norm
+
+
+def _entry_table(img):
+    """Every `push bp; mov bp,sp` in the image, sorted, with a set for lookups.
+
+    Built once - 423 of them here - so resolving an address is a bisect plus a
+    confirmation or two. Confirming every byte match inside a window instead meant
+    thousands of forward sweeps for any address sitting in data.
+    """
+    key = len(img)
+    table = _fn_entries.get(key)
+    if table is None:
+        offs = [o for o in range(len(img) - 2)
+                if img[o] == 0x55 and img[o + 1] == 0x8B and img[o + 2] == 0xEC]
+        table = (offs, set(offs))
+        _fn_entries[key] = table
+    return table
+
+
+def _sweep_reaches(img, start, off, entries):
+    """Does a linear sweep from `start` land exactly on the instruction at `off`?
+
+    This is what separates a function entry from three bytes that merely read
+    55 8b ec. It is not proof - x86 sweeps resynchronise, so a false start can
+    still reach the target by accident - but a candidate that does not reach it is
+    definitely not the function containing it.
+
+    A return whose next byte begins another known entry ends the sweep: past that
+    point the code belongs to the next function, not this one. That is what keeps
+    a frameless function's addresses from being credited to its predecessor.
+    """
+    md = _disasm16()
+    if md is None:
+        return True                       # unconfirmable; take the byte match
+    img = _fp_normalised(img)
+    for i in md.disasm(img[start:off + 16], start):
+        if i.address == off:
+            return True
+        if i.address > off:
+            return False                  # swept straight past it: desynced
+        if i.mnemonic in ("ret", "retf") and (i.address + i.size) in entries:
+            return False                  # the function ended before `off`
+    return False
+
+
+def find_function_start(img, off, limit=FUNCTION_SCAN_LIMIT, tries=8):
+    """The Borland prologue beginning the function that contains `off`, or None.
+
+    None now means what it says: no indexed entry within `limit` bytes sweeps to
+    `off`. With the old 0x600 window it usually just meant the function was too
+    big, which is a different thing and was indistinguishable from outside.
+    """
+    key = (len(img), off, limit)
+    if key in _fn_start_cache:
+        return _fn_start_cache[key]
+
+    offs, entries = _entry_table(img)
+    idx = bisect.bisect_right(offs, off)
+    found = None
+    for k in range(idx - 1, max(-1, idx - 1 - tries), -1):
+        cand = offs[k]
+        if off - cand > limit:
             break
-        if img[i] == 0x55 and img[i + 1] == 0x8B and img[i + 2] == 0xEC:
-            return i
-        # Also accept the retf/ret that ends the previous function, meaning the
-        # next byte begins this one.
-        if img[i] in (0xCB, 0xC3) and img[i + 1] == 0x55:
-            return i + 1
-    return None
+        if cand == off or _sweep_reaches(img, cand, off, entries):
+            found = cand
+            break
+    _fn_start_cache[key] = found
+    return found
 
 
 # ---------------------------------------------------------------- natives ---
