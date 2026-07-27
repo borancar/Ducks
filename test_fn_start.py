@@ -15,7 +15,7 @@ import sys
 import capstone
 
 from native import (find_function_start, function_extent, _entry_table,
-                    _fp_normalised, FUNCTION_SCAN_LIMIT)
+                    _fp_normalised, _function_map, FUNCTION_SCAN_LIMIT)
 
 EXE = "Ducks.unpacked.exe"
 
@@ -43,6 +43,20 @@ INSIDE = {
     0x0D9A2: 0x0D7EE,   # the other plane loop in the same function
     0x0BC75: 0x0BBA1,   # draw_number call site in the score tally
     0x0AF7B: 0x0ABA5,   # draw_sprite call site inside the entity loop
+}
+
+
+# Prologue byte matches that sit inside another function. These are the regression
+# cases for the bug coverage.py exposed: the helper used to hand any address in the
+# prologue table back as its own function start, with no confirmation, so each of
+# these was its own answer and the extents overlapped.
+NESTED = {
+    0x00EB5: 0x00E5F,
+    0x01D69: 0x018AB,
+    0x02012: 0x01EE0,
+    0x024F3: 0x024E9,
+    0x02657: 0x02650,
+    0x02854: 0x02786,
 }
 
 
@@ -97,6 +111,15 @@ def main():
         print(f"  {off:#07x} -> {(f'{got:#07x}' if got else 'None'):<9}"
               f" want {want:#07x}  {'ok' if ok else 'WRONG'}")
 
+    print("\nprologue matches inside another function resolve to it, not "
+          "themselves:")
+    for off, want in sorted(NESTED.items()):
+        got = find_function_start(img, off)
+        ok = got == want
+        bad += not ok
+        print(f"  {off:#07x} -> {(f'{got:#07x}' if got else 'None'):<9}"
+              f" want {want:#07x}  {'ok' if ok else 'WRONG'}")
+
     # The real coverage measure. Sampling arbitrary byte offsets says nothing:
     # most of them are mid-instruction, where None is the right answer and the old
     # helper's confident reply was simply wrong. So sweep each function from its
@@ -110,14 +133,15 @@ def main():
     # the helper uses, or it is measuring phantoms.
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_16)
     md.detail = False
+    # Over real functions from the map, not over consecutive byte matches: 28 of
+    # the matches are inside another function, and treating those as starts made
+    # this measure its own assumption.
+    starts, spans = _function_map(img)
     img = _fp_normalised(img)
-    offs, _ = _entry_table(img)
     tested = ok_new = ok_old = 0
     misses = []
-    for e, nxt in zip(offs, offs[1:]):
-        if nxt - e > FUNCTION_SCAN_LIMIT:
-            continue
-        for i in list(md.disasm(bytes(img[e:nxt]), e))[::7]:
+    for e, end in spans:
+        for i in list(md.disasm(bytes(img[e:end]), e))[::7]:
             tested += 1
             got = find_function_start(img, i.address)
             ok_new += got == e
@@ -131,15 +155,15 @@ def main():
         print(f"   {a:#07x} in {e:#07x} -> {g if g is None else hex(g)}")
     bad += len(misses)
 
-    # Extents, against an independent rule: the next prologue that resolves to
-    # itself. function_extent instead sweeps to the first return landing on an
-    # indexed prologue, so agreement between the two is real corroboration rather
-    # than the same idea checked twice.
+    # Extents, against an independent rule: a function should end exactly where
+    # the next one begins, since Borland packs them back to back. function_extent
+    # gets its end by sweeping to a return instead, so the two agreeing is real
+    # corroboration rather than one idea checked twice.
     print("\nfunction extents, and the two rules agreeing:")
     for off, want_size in EXTENTS.items():
         start, end = function_extent(img, off)
-        k = bisect.bisect_right(offs, start)
-        alt = next((e for e in offs[k:] if find_function_start(img, e) == e), None)
+        k = bisect.bisect_right(starts, start)
+        alt = starts[k] if k < len(starts) else None
         ok = end is not None and end - start == want_size and end == alt
         bad += not ok
         print(f"  {off:#07x} -> {start:#07x}-{(end - 1) if end else 0:#07x}"

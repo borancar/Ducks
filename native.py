@@ -1511,6 +1511,7 @@ FUNCTION_SCAN_LIMIT = 0x2000
 _fn_entries = {}
 _fn_start_cache = {}
 _fp_norm_cache = {}
+_fn_map_cache = {}
 _cs16 = None
 
 
@@ -1575,53 +1576,101 @@ def _entry_table(img):
     return table
 
 
-def _sweep_reaches(img, start, off, entries):
-    """Does a linear sweep from `start` land exactly on the instruction at `off`?
+def _sweep_end(md, norm, entries, start, limit):
+    """Where the function at `start` ends, by sweeping to its terminating return.
 
-    This is what separates a function entry from three bytes that merely read
-    55 8b ec. It is not proof - x86 sweeps resynchronise, so a false start can
-    still reach the target by accident - but a candidate that does not reach it is
-    definitely not the function containing it.
-
-    A return whose next byte begins another known entry ends the sweep: past that
-    point the code belongs to the next function, not this one. That is what keeps
-    a frameless function's addresses from being credited to its predecessor.
+    Borland emits one epilogue per function and packs functions back to back, so
+    the end is the first return whose next byte begins another prologue match.
+    None means no such return inside `limit` - the sweep desynced, or this is not
+    a function at all.
     """
-    md = _disasm16()
-    if md is None:
-        return True                       # unconfirmable; take the byte match
-    img = _fp_normalised(img)
-    for i in md.disasm(img[start:off + 16], start):
-        if i.address == off:
-            return True
-        if i.address > off:
-            return False                  # swept straight past it: desynced
+    for i in md.disasm(norm[start:start + limit], start):
         if i.mnemonic in ("ret", "retf") and (i.address + i.size) in entries:
-            return False                  # the function ended before `off`
-    return False
+            return i.address + i.size
+    return None
 
 
-def find_function_start(img, off, limit=FUNCTION_SCAN_LIMIT, tries=8):
+def _function_map(img, limit=None):
+    """Disjoint (start, end) spans for every real function, built once.
+
+    Walking forward is what makes them disjoint, and disjoint is what makes them
+    trustworthy: a prologue byte match that falls inside a function already
+    measured is not an entry, whatever its bytes say. 28 of the 423 matches here
+    are exactly that.
+
+    Returns (starts, spans) for bisecting, or None when capstone is absent and
+    nothing can be swept.
+    """
+    limit = FUNCTION_SCAN_LIMIT if limit is None else limit
+    key = (len(img), limit)
+    cached = _fn_map_cache.get(key)
+    if cached is None:
+        md = _disasm16()
+        if md is None:
+            return None
+        offs, entries = _entry_table(img)
+        norm = _fp_normalised(img)
+        spans, i = [], 0
+        while i < len(offs):
+            start = offs[i]
+            end = _sweep_end(md, norm, entries, start, limit)
+            i += 1
+            if end is None:
+                continue
+            spans.append((start, end))
+            while i < len(offs) and offs[i] < end:
+                i += 1        # inside this function, so not an entry
+        cached = ([s for s, _ in spans], spans)
+        _fn_map_cache[key] = cached
+    return cached
+
+
+def _enclosing(img, off, limit):
+    """The (start, end) span containing `off`, or None."""
+    themap = _function_map(img, limit)
+    if themap is None:
+        return None
+    starts, spans = themap
+    k = bisect.bisect_right(starts, off) - 1
+    if k < 0:
+        return None
+    start, end = spans[k]
+    return (start, end) if start <= off < end else None
+
+
+def _find_function_start_bytes(img, off, limit):
+    """The old backwards byte scan, for when capstone is not installed.
+
+    Kept because it is better than nothing, and honest about being worse: it
+    returns the nearest matching byte triple, which is only usually the entry.
+    """
+    for back in range(0, limit):
+        i = off - back
+        if i < 2:
+            break
+        if img[i] == 0x55 and img[i + 1] == 0x8B and img[i + 2] == 0xEC:
+            return i
+        if img[i] in (0xCB, 0xC3) and img[i + 1] == 0x55:
+            return i + 1
+    return None
+
+
+def find_function_start(img, off, limit=FUNCTION_SCAN_LIMIT):
     """The Borland prologue beginning the function that contains `off`, or None.
 
-    None now means what it says: no indexed entry within `limit` bytes sweeps to
-    `off`. With the old 0x600 window it usually just meant the function was too
-    big, which is a different thing and was indistinguishable from outside.
+    Answered from the function map, so an address is only reported as its own entry
+    when it really starts a function - not merely because those three bytes read as
+    a prologue. None means the address is in no function: padding, a jump table, or
+    data.
     """
     key = (len(img), off, limit)
     if key in _fn_start_cache:
         return _fn_start_cache[key]
-
-    offs, entries = _entry_table(img)
-    idx = bisect.bisect_right(offs, off)
-    found = None
-    for k in range(idx - 1, max(-1, idx - 1 - tries), -1):
-        cand = offs[k]
-        if off - cand > limit:
-            break
-        if cand == off or _sweep_reaches(img, cand, off, entries):
-            found = cand
-            break
+    span = _enclosing(img, off, limit)
+    if span is None and _function_map(img, limit) is None:
+        found = _find_function_start_bytes(img, off, limit)
+    else:
+        found = span[0] if span else None
     _fn_start_cache[key] = found
     return found
 
@@ -1629,34 +1678,17 @@ def find_function_start(img, off, limit=FUNCTION_SCAN_LIMIT, tries=8):
 def function_extent(img, off, limit=FUNCTION_SCAN_LIMIT):
     """(start, end) of the function containing `off`; end is exclusive.
 
-    Borland emits one epilogue per function and packs functions back to back, so
-    the end is the first return - swept from the entry - whose next byte begins
-    another indexed prologue. Everything after that belongs to the next function.
+    Both ends come from the same forward walk, so extents cannot overlap and their
+    sum cannot exceed the code they are measured from - which is how the old
+    version's mistake surfaced, in coverage.py.
 
     Cross-checked against an independent rule, "the next prologue that resolves to
-    itself": the two agree on every function this port has named, including the
-    two that hold plane loops. test_fn_start.py keeps them agreeing.
+    itself"; test_fn_start.py keeps the two agreeing.
 
-    (None, None) when the entry cannot be found, and (start, None) when no such
-    return appears within `limit` - which would mean the sweep desynced or the
-    function is larger than the window, and either way is not a boundary to guess.
+    (None, None) when `off` is in no function.
     """
-    start = find_function_start(img, off, limit)
-    if start is None:
-        return None, None
-    md = _disasm16()
-    if md is None:
-        return start, None
-    _, entries = _entry_table(img)
-    norm = _fp_normalised(img)
-    for i in md.disasm(norm[start:start + limit], start):
-        if i.mnemonic in ("ret", "retf") and (i.address + i.size) in entries:
-            return start, i.address + i.size
-    return start, None
-
-
-# ---------------------------------------------------------------- natives ---
-# Each handler is given (machine, args_at) and returns AX, or (AX, DX), or None.
+    span = _enclosing(img, off, limit)
+    return span if span else (None, None)
 
 def native_snow_blit(m, args):
     """Replace the CGA snow-avoidance text blit with a straight copy.
