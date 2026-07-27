@@ -1820,11 +1820,7 @@ def native_draw_entities(m, args):
         return DECLINE
 
     # Bail out before drawing anything if any entity needs a path we do not have.
-    for i, t in enumerate(types):
-        if t == 5:
-            y = struct.unpack_from("<i", recs, i * 0x29 + 4)[0]
-            if y <= 0:
-                return DECLINE                   # needs 0x78d4
+    del types  # rebuilt below; retiring an entity changes its type
 
     facing = u16(g + 0x511)
     frame_dir = -1 if facing else 1
@@ -1837,13 +1833,26 @@ def native_draw_entities(m, args):
     shadow = False
     for i in range(count):
         r = i * 0x29
-        t = types[i]
+        t = struct.unpack_from("<H", recs, r + 0x25)[0]
         sub = struct.unpack_from("<H", recs, r + 0x1F)[0]
         # Signed: the original sign-extends this byte before using it, so a
         # negative frame both shifts differently and is what the mirrored-variant
         # test compares against.
         frame = struct.unpack_from("<b", recs, r + 0x14)[0]
         y = struct.unpack_from("<i", recs, r + 4)[0]
+
+        if t == 5 and y < 0:
+            # 0x78d4: retire the entity in place - set its type and clear the
+            # sub-index - then draw it as the type it has just become. A drawing
+            # pass that mutates game state, which is why it was declined until
+            # its 35 bytes were read: an entity that has floated off the top of
+            # the screen is turned into an inactive type 0 rather than removed
+            # from the array. Guarded on y < 0, not <= 0: the original only takes
+            # this path when the high word of y is negative.
+            if t != 0:
+                m.write(ents + r + 0x25, b"\x00\x00")
+                m.write(ents + r + 0x1F, b"\x00\x00")
+            t, sub = 0, 0
 
         if t in (1, 2):
             # Arithmetic rather than a table, and mirrored by the facing flag.
