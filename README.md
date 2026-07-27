@@ -184,22 +184,29 @@ in one pass.
 
 Mode X puts column `x` in plane `x & 3` at byte `x >> 2`, so every drawing routine
 in the game filters on the selected plane and every caller runs the whole thing
-four times. Two four-plane loops drive everything on screen, and both are now on
+four times. **Four** such loops draw everything on screen, and all four are now on
 this side:
 
-| Loop | Where | Inside | Draws |
-|---|---|---|---|
-| `plane_loop_layer` | `0x0cd5f`-`0x0cd98` | `0x0c716`-`0x0ce2d`, 1816 B | menus and between-level screens: one compositor pass and one scene |
-| `plane_loop_scroll` | `0x0e4dc`-`0x0e673` | `0x0d7ee`-`0x0e8ac`, 4287 B | the in-game frame: the scrolling background, particles, seven scenes, three panels, two numbers and a five-pixel run |
+| Loop | Where | Inside | Draws | Runs |
+|---|---|---|---|---|
+| `plane_loop_layer` | `0x0cd5f`-`0x0cd98` | `0x0c716`-`0x0ce2d`, 1816 B | menus and between-level screens: one compositor pass and one scene | every menu frame |
+| `plane_loop_scroll` | `0x0e4dc`-`0x0e673` | `0x0d7ee`-`0x0e8ac`, 4287 B | the in-game frame: scrolling background, particles, seven scenes, three panels, two numbers, a five-pixel run | every in-game frame |
+| `plane_loop_hud` | `0x0d9a2`-`0x0db2c` | the same function | the status panel, the collected items with outlines, three numbers | twice a level |
+| `plane_loop_tally` | `0x0bc4b`-`0x0bca9` | `0x0bba1`-`0x0bcff`, 351 B | one or two running totals on the end-of-level screen | every tally frame |
 
-Neither loop is a function — both are inline in a much larger one, which is why
+The HUD's cadence is worth knowing before reading a verification count: an outer
+loop draws it once into each of the two video pages at level start, with a page flip
+between, and never again. Two comparisons is the entire population for a level, not
+a sample. The score that updates visibly every frame comes from the scroll loop.
+
+None of the four is a function — each is inline in a much larger one, which is why
 they are replaced at the instruction like the interrupt stubs rather than hooked at
-an entry, and why the handler reads its locals off the live `BP` frame. The
-enclosing extents matter for one specific claim: the loops share a plane counter at
-`[bp-0x1f]` with a *third* plane loop at `0x0d9a2`, in the same function as the
-scroll one, and the native leaves that counter alone. All eight references to it
-sit inside `0x0d7ee`-`0x0e8ac` and all eight belong to those two loops, so nothing
-after either reads it. A fourth plane loop lives in the score tally at `0x0bba1`.
+an entry, and why the handlers read their locals off the live `BP` frame (and, in the
+tally's case, `SI` and `DI`). The enclosing extents matter for one specific claim:
+the scroll and HUD loops share a function *and* a plane counter at `[bp-0x1f]`, and
+the natives leave that counter alone. All eight references to it sit inside
+`0x0d7ee`-`0x0e8ac` and all eight belong to those two loops, so nothing after
+either reads it.
 
 `function_extent()` in `native.py` gives those boundaries, cross-checked against an
 independent rule (the next prologue that resolves to itself); `test_fn_start.py`
