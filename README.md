@@ -147,10 +147,18 @@ queued sound, so overflow must be buffered rather than dropped.
 ## Native-I/O port
 
 ```sh
-venv/bin/python native.py --scale 3 --blaster
+venv/bin/python native.py                  # everything native, ready to play
 venv/bin/python native.py --profile        # rank the drawing routines
 venv/bin/python native.py --verify         # check a native against the original
+venv/bin/python native.py --no-native-plane-loop   # turn one piece back off
 ```
+
+**Everything this port replaces is on by default**, and the unpacked image is the
+default `--exe`, so a bare `native.py` is the way to play. Each piece has a `--no-`
+form, which is how to find out whether a native is responsible for something: turn
+it off and see if the behaviour follows. `--skip-natives` does the same one routine
+at a time, and `--verify-only` checks a named routine against the original body
+while the rest run at full speed.
 
 `native.py` subclasses `emulation.py`. The game logic still runs on the emulated
 CPU, but recognised I/O routines are intercepted at their entry: the handler
@@ -253,7 +261,8 @@ frames where those pixels were not already zero.
 ## Removing interrupts
 
 ```sh
-venv/bin/python native.py --native-xms --native-setup --native-fp   # plus the I/O flags
+venv/bin/python native.py            # all of this is on by default
+venv/bin/python native.py --no-native-xms --no-native-setup --no-native-fp
 ```
 
 `--run-seconds N` exits cleanly for a measurement run with nobody at the
@@ -399,7 +408,8 @@ a wrong displacement gives a plausible-looking background, not a broken screen.
 ## The game's sound API
 
 ```sh
-venv/bin/python native.py --blaster --native-sound
+venv/bin/python native.py                     # native sound is the default
+venv/bin/python native.py --no-native-sound   # back to the emulated card
 ```
 
 Recovered by disassembly, Ducks' sound layer is eight voices:

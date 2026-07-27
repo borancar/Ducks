@@ -3719,21 +3719,30 @@ SOUND_NATIVES = [
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description="Run Ducks with the native port. Everything this port "
+                    "replaces is on by default; each piece can be turned off "
+                    "with its --no- form, which is how to check whether a "
+                    "native is responsible for something.")
     ap.add_argument("--exe", default="./Ducks.unpacked.exe")
     ap.add_argument("--scale", type=int, default=3)
     ap.add_argument("--chunk", type=int, default=400_000)
-    ap.add_argument("--blaster", action="store_true")
+    ap.add_argument("--blaster", default=True,
+                    action=argparse.BooleanOptionalAction,
+                    help="emulate the Sound Blaster")
     ap.add_argument("--profile", action="store_true",
                     help="report which routines do the drawing, then exit")
     ap.add_argument("--profile-sound", action="store_true",
                     help="profile writes to the sound DMA buffer from the start")
-    ap.add_argument("--native-file", action="store_true",
+    ap.add_argument("--native-file", default=True,
+                    action=argparse.BooleanOptionalAction,
                     help="serve the raw DOS read/lseek wrappers natively")
-    ap.add_argument("--native-keyboard", action="store_true",
+    ap.add_argument("--native-keyboard", default=True,
+                    action=argparse.BooleanOptionalAction,
                     help="serve kbhit() natively, removing all key polling "
                          "through DOS")
-    ap.add_argument("--native-mouse", action="store_true",
+    ap.add_argument("--native-mouse", default=True,
+                    action=argparse.BooleanOptionalAction,
                     help="serve the game's mouse wrappers natively, removing "
                          "all INT 33h traffic")
     ap.add_argument("--trace-file", action="store_true",
@@ -3742,9 +3751,11 @@ def main():
                     help="record which game functions poll the keyboard")
     ap.add_argument("--trace-mouse", action="store_true",
                     help="record which game functions poll INT 33h")
-    ap.add_argument("--sound-bank", action="store_true",
+    ap.add_argument("--sound-bank", default=True,
+                    action=argparse.BooleanOptionalAction,
                     help="capture samples into an indexed bank as they load")
-    ap.add_argument("--native-sound", action="store_true",
+    ap.add_argument("--native-sound", default=True,
+                    action=argparse.BooleanOptionalAction,
                     help="play voices through pygame instead of the emulated "
                          "Sound Blaster path")
     ap.add_argument("--observe-play", action="store_true",
@@ -3762,10 +3773,12 @@ def main():
                     help="keep the inherited per-write instrumentation on")
     ap.add_argument("--sound-slices", type=int, default=32,
                     help="times per display update to service the sound card")
-    ap.add_argument("--native-xms", action="store_true",
-                    help="service XMS with no interrupts: driver entry as a code "
-                         "hook, plus the two INT 2Fh detection sites")
-    ap.add_argument("--native-setup", action="store_true",
+    ap.add_argument("--native-xms", default=True,
+                    action=argparse.BooleanOptionalAction,
+                    help="service XMS with no interrupts: driver entry as a "
+                         "code hook, plus the two INT 2Fh detection sites")
+    ap.add_argument("--native-setup", default=True,
+                    action=argparse.BooleanOptionalAction,
                     help="serve the C runtime's heap-resize, INT 10h wrapper "
                          "and one-shot startup interrupts natively")
     ap.add_argument("--skip-natives", default="",
@@ -3773,11 +3786,14 @@ def main():
                          "whether replacing them actually helps")
     ap.add_argument("--verify-only", default="",
                     help="comma-separated natives to verify even if skipped")
-    ap.add_argument("--native-plane-loop", action="store_true",
-                    help="replace the guest's four-plane drawing loop natively")
-    ap.add_argument("--native-fp", action="store_true",
-                    help="put Borland's emulated x87 instructions back and let "
-                         "the real FPU run them")
+    ap.add_argument("--native-plane-loop", default=True,
+                    action=argparse.BooleanOptionalAction,
+                    help="replace the guest's four four-plane drawing loops "
+                         "natively")
+    ap.add_argument("--native-fp", default=True,
+                    action=argparse.BooleanOptionalAction,
+                    help="put Borland's emulated x87 instructions back and "
+                         "let the real FPU run them")
     ap.add_argument("--run-seconds", type=float, default=0.0,
                     help="quit cleanly after N seconds, for measurement runs")
     ap.add_argument("--read-only", action="store_true",
