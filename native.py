@@ -1719,6 +1719,56 @@ def blit_sprite(m, index, x, y, table, clip, colour):
     return None
 
 
+def native_draw_number(m, args):
+    """Native replacement for the fixed-width number drawer at 0x0bb3b.
+
+        [+0x06] word    : value
+        [+0x08] word    : x of the leftmost digit cell
+        [+0x0a] word    : y, sign-extended to a long by the original
+        [+0x0c] far ptr : viewport / clip rectangle
+        [+0x10] byte    : colour offset, as draw_sprite takes it
+        [+0x12] word    : how many digits to draw
+
+    The score and the level counter, drawn eight times a frame - not hot. It is
+    here because it was the last thing inside the scroll caller's four-plane loop
+    that was not native, and that loop is the point.
+    """
+    s16 = lambda a: struct.unpack("<h", m.read(a, 2))[0]
+
+    def far(a):
+        off, seg = struct.unpack("<HH", m.read(a, 4))
+        return seg * 16 + off
+
+    return draw_number(m, value=s16(args + 0x00), x=s16(args + 0x02),
+                       y=s16(args + 0x04), clip=far(args + 0x06),
+                       colour=m.read(args + 0x0A, 1)[0],
+                       digits=s16(args + 0x0C))
+
+
+def draw_number(m, value, x, y, clip, colour, digits):
+    """Draw `digits` decimal digits of `value`, right-aligned, 12 pixels apart.
+
+    Every digit is a sprite: glyph 0x71 plus the digit, out of the same table
+    header at DGROUP:0x18e9 the entity loop draws from. The original walks from
+    the least significant digit upwards, drawing at x + i * 12 with i counting
+    down from digits - 1, so the field is fixed-width and right-aligned with no
+    leading-zero suppression: a score of nothing draws six noughts.
+
+    Goes through blit_sprite rather than the draw_sprite native, so a six-digit
+    score costs one native dispatch instead of seven.
+    """
+    g = m.dgroup_base
+    for i in range(digits - 1, -1, -1):
+        # idiv truncates toward zero; Python's // floors. No caller passes a
+        # negative today, but the two disagree silently on both the digit and
+        # the quotient, so the original's arithmetic is what gets reproduced.
+        q = -(-value // 10) if value < 0 else value // 10
+        blit_sprite(m, index=(0x71 + value - q * 10) & 0xFFFF,
+                    x=x + i * 12, y=y, table=g + 0x18E9, clip=clip,
+                    colour=colour)
+        value = q
+
+
 # All entity types are handled and verified. Kept as a knob because restricting
 # it is how a suspect type gets isolated: set it to a frozenset and every call
 # containing anything else declines to the emulated body.
@@ -3066,6 +3116,7 @@ def native_xms_get_entry(m, args):
 NATIVE_TABLE = [
     (0x05D3A, "compose_layer", native_compose_layer, "far"),
     (0x063D6, "draw_sprite", native_draw_sprite, "far"),
+    (0x0BB3B, "draw_number", native_draw_number, "far"),
     (0x05C09, "blit_rows", native_blit_rows, "far"),
     (0x05DC4, "compose_scroll", native_compose_scroll, "far"),
     (0x05AC2, "blit_rows_masked", native_blit_rows_masked, "far"),
