@@ -180,6 +180,56 @@ One structural win worth knowing: the sprite blitter draws only pixels whose
 four times the loop iterations for one sprite's pixels. A native does all planes
 in one pass.
 
+## The drawing path
+
+Mode X puts column `x` in plane `x & 3` at byte `x >> 2`, so every drawing routine
+in the game filters on the selected plane and every caller runs the whole thing
+four times. Two four-plane loops drive everything on screen, and both are now on
+this side:
+
+| Loop | Where | Draws |
+|---|---|---|
+| `plane_loop_layer` | `0x0cd5f`-`0x0cd98` | menus and between-level screens: one compositor pass and one scene |
+| `plane_loop_scroll` | `0x0e4dc`-`0x0e673` | the in-game frame: the scrolling background, particles, seven scenes, three panels, two numbers and a five-pixel run |
+
+The in-game loop is the one that matters — `draw_entities` gets most of its ~34000
+calls a session from it. Per plane it does:
+
+```
+set_plane(plane)                                  # 0x57ee
+compose_scroll([0x1739], [0x173d])                # 0x5dc4
+if [0x4f6]: particles()                           # 0xab09
+draw_entities(scene, ds:0x172d, 0)                # 0xaba5, five layers
+if arg == 0:   draw_entities(ds:0xd93,  ds:0x172d, 0x90)
+if [0x178b]:   draw_entities(ds:0x178c, ds:0x1741, 0x90)
+for i in 0..2: if [0x2154+i]: blit_rows_masked(...)   # 0x5ac2, flashing panels
+if [bp-8]:     draw_number([bp-6],   0x80, 0x22, ..., 6)   # 0xbb3b, the score
+if [bp-0xa]:   draw_number([0x2007], 0xe1, 0x22, ..., 2)
+for x in [bp-2]..[bp-4]: (*[0x53e])(x, y, 0)      # 0x5761, five pixels
+```
+
+**The scene table.** Six 12-byte records live at `DGROUP:0xd63` — count at `+2`, a
+far pointer to the entity array at `+8` — and the loop draws them back to front in
+the order 1, 0, 2, 3, 5, then 4. Record 4 (`0xd93`) is drawn only when the
+function's argument is zero, and it is the only one the menu loop draws. A seventh
+scene sits at `0x178c` behind a flag, with a different viewport. Viewports are
+20-byte records at `0x172d`, `0x1741` and `0x1755`, passed to the blitter as its
+clip rectangle.
+
+**Numbers are sprites.** `draw_number` (`0x0bb3b`) draws glyph `0x71 + digit` from
+the same sprite table the entities use, 12 pixels apart, least significant digit
+first: a fixed-width right-aligned field with no leading-zero suppression, so a
+score of nothing is six noughts.
+
+**Two plotters, and a lesson.** `0x5761` computes its row stride as 80 with no
+`[0x4fe]` resolution check — which looks like a bug until you find `0x57a1`, the
+same routine with a stride of 90. The game swaps a far pointer at `[0x53e]` when it
+changes resolution rather than testing inside the routine. Resolving that pointer
+by its offset word alone recognises neither (the segment is not the one image
+offsets are measured from), and the failure is silent: the loop just skips its
+pixel run. `--verify` reported it as five mismatched bytes a call, and only on the
+frames where those pixels were not already zero.
+
 ## Removing interrupts
 
 ```sh
