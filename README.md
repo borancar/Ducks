@@ -1,12 +1,41 @@
 # Ducks! unpacking and emulation tooling
 
 Tools for analysing `Ducks.exe` — a DIET-compressed 16-bit DOS executable
-(Ducks! v1.2, Tim Furnish / Hungry Software, 1998-2000) sitting in the parent
-directory.
+(Ducks! v1.2, Tim Furnish / Hungry Software, 1998-2000).
 
 Two things happen here: the packed executable is recovered to a plain EXE, and
 the game is run under an emulated DOS with an SDL window so its actual behaviour
 can be observed rather than guessed at from disassembly.
+
+On top of that sits a growing native port: routines in the original are hooked at
+their entry points and reimplemented in Python, each byte-compared against the
+code it replaces before being trusted. The point is reach rather than speed — the
+drawing pipeline has to be understood end to end before planar Mode X can be
+replaced with flat drawing. See [`docs/`](docs/) for where that stands, what is
+still open, and the conventions the work follows.
+
+## What you need
+
+**The game is not included here and none of it is redistributed.** Ducks! is the
+property of its authors; bring your own copy. It is available from
+<https://www.kieranmillar.com/ducks/>, which links a zip at
+<https://www.kieranmillar.com/ducks/Ducks.zip>.
+
+The tooling expects to sit inside the game directory:
+
+```
+Ducks/            <- your copy of the game: Ducks.exe, Eggs/, ...
+  unpack/         <- this repository
+```
+
+That assumption is encoded in exactly one place — the `../Ducks.exe` argument in
+the unpacking step below — so a different layout only needs that path changed.
+
+A fresh clone will not run anything until you unpack: `Ducks.unpacked.exe` is
+derived from the game and deliberately untracked. `native.py` defaults to it, and
+`--native-setup` needs it specifically (with the packed original the machine
+starts on the DIET stub, so every interrupt site fails verification and is
+skipped). Do the [Unpacking](#unpacking) step first.
 
 **`trace_dos.py` only ever reads the host filesystem.** It serves reads from the
 real game directory and satisfies the program's writes from an in-memory overlay,
@@ -459,6 +488,13 @@ so this is architectural, not an optimisation.
 | `unpack_ducks.py` | emulates DIET's stub, writes a plain EXE |
 | `validate.py` | verifies the unpack, incl. the round-trip check |
 | `emulation.py` | DOS + VGA + SDL; runs the game interactively |
+| `native.py` | the native port; what you launch to play |
+| `coverage.py` | measures how much of the image has been reimplemented |
+| `test_fn_start.py` | pins function-boundary attribution to known answers |
+| `test_retire.py` | drives the guest's own code to reach a state play cannot |
+| `probe_plot_ptr.py` | resolves which pixel plotter `[0x53e]` points at |
+| `edit_*.py` | the anchored edit scripts that produced changes to `native.py` |
+| `export_sessions.py` | regenerates `docs/sessions/` from a session transcript |
 | `sb.py` | Sound Blaster DSP, DMA channel and IRQ model |
 | `xms.py` | XMS / HIMEM.SYS driver; without it the game has no sound |
 | `nsound.py` | the game's 8-voice sound API implemented on pygame |
@@ -471,3 +507,18 @@ so this is architectural, not an optimisation.
 | `trace_relocs.py` | attributes each relocation write to its instruction |
 | `find_extent.py` | derives the true stored-image size |
 | `test_seg.py` | probes Unicorn's real-mode segmentation behaviour |
+
+Working notes — the current state of the drawing port, the one open bug, the
+conventions, and a condensed log of each working session — live in
+[`docs/`](docs/).
+
+## Licence
+
+The tooling in this repository is MIT licensed; see [`LICENSE`](LICENSE).
+
+**That covers this repository only.** Ducks! itself — the executable, the `.egg`
+data files, the artwork and the documentation — belongs to Tim Furnish / Hungry
+Software and is not distributed here under any licence. What is published here is
+analysis: descriptions of how the program works, and code that reimplements
+behaviour observed by running your own copy.
+
