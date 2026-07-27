@@ -187,10 +187,23 @@ in the game filters on the selected plane and every caller runs the whole thing
 four times. Two four-plane loops drive everything on screen, and both are now on
 this side:
 
-| Loop | Where | Draws |
-|---|---|---|
-| `plane_loop_layer` | `0x0cd5f`-`0x0cd98` | menus and between-level screens: one compositor pass and one scene |
-| `plane_loop_scroll` | `0x0e4dc`-`0x0e673` | the in-game frame: the scrolling background, particles, seven scenes, three panels, two numbers and a five-pixel run |
+| Loop | Where | Inside | Draws |
+|---|---|---|---|
+| `plane_loop_layer` | `0x0cd5f`-`0x0cd98` | `0x0c716`-`0x0ce2d`, 1816 B | menus and between-level screens: one compositor pass and one scene |
+| `plane_loop_scroll` | `0x0e4dc`-`0x0e673` | `0x0d7ee`-`0x0e8ac`, 4287 B | the in-game frame: the scrolling background, particles, seven scenes, three panels, two numbers and a five-pixel run |
+
+Neither loop is a function — both are inline in a much larger one, which is why
+they are replaced at the instruction like the interrupt stubs rather than hooked at
+an entry, and why the handler reads its locals off the live `BP` frame. The
+enclosing extents matter for one specific claim: the loops share a plane counter at
+`[bp-0x1f]` with a *third* plane loop at `0x0d9a2`, in the same function as the
+scroll one, and the native leaves that counter alone. All eight references to it
+sit inside `0x0d7ee`-`0x0e8ac` and all eight belong to those two loops, so nothing
+after either reads it. A fourth plane loop lives in the score tally at `0x0bba1`.
+
+`function_extent()` in `native.py` gives those boundaries, cross-checked against an
+independent rule (the next prologue that resolves to itself); `test_fn_start.py`
+keeps the two agreeing.
 
 The in-game loop is the one that matters — `draw_entities` gets most of its ~34000
 calls a session from it. Per plane it does:

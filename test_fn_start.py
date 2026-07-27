@@ -8,13 +8,14 @@ in the exit reports, and a wrong label is worse than no label: it reads as a fac
 
     venv/bin/python test_fn_start.py
 """
+import bisect
 import struct
 import sys
 
 import capstone
 
-from native import (find_function_start, _entry_table, _fp_normalised,
-                    FUNCTION_SCAN_LIMIT)
+from native import (find_function_start, function_extent, _entry_table,
+                    _fp_normalised, FUNCTION_SCAN_LIMIT)
 
 EXE = "Ducks.unpacked.exe"
 
@@ -42,6 +43,21 @@ INSIDE = {
     0x0D9A2: 0x0D7EE,   # the other plane loop in the same function
     0x0BC75: 0x0BBA1,   # draw_number call site in the score tally
     0x0AF7B: 0x0ABA5,   # draw_sprite call site inside the entity loop
+}
+
+
+# Function extents, by size in bytes. The two that hold plane loops are the
+# reason this exists: deciding that nothing after a loop reads its counter needs
+# the far end of the function, and the window used by hand overshot the frame
+# function by 1.4 KB.
+EXTENTS = {
+    0x0E4DC: 4287,   # the in-game frame, 0x0d7ee-0x0e8ac: two plane loops
+    0x0CD5F: 1816,   # the layer caller, 0x0c716-0x0ce2d
+    0x0BBA1:  351,   # the score tally, another plane loop
+    0x0BB3B:  102,   # draw_number
+    0x078D4:   35,   # set_entity_type, the 35 bytes test_retire.py drives
+    0x05761:   64,   # plot_pixel 320, ending exactly where its 360 twin starts
+    0x063D6:  539,   # draw_sprite, ending exactly where outline_sprite starts
 }
 
 
@@ -114,6 +130,22 @@ def main():
     for a, e, g in misses[:6]:
         print(f"   {a:#07x} in {e:#07x} -> {g if g is None else hex(g)}")
     bad += len(misses)
+
+    # Extents, against an independent rule: the next prologue that resolves to
+    # itself. function_extent instead sweeps to the first return landing on an
+    # indexed prologue, so agreement between the two is real corroboration rather
+    # than the same idea checked twice.
+    print("\nfunction extents, and the two rules agreeing:")
+    for off, want_size in EXTENTS.items():
+        start, end = function_extent(img, off)
+        k = bisect.bisect_right(offs, start)
+        alt = next((e for e in offs[k:] if find_function_start(img, e) == e), None)
+        ok = end is not None and end - start == want_size and end == alt
+        bad += not ok
+        print(f"  {off:#07x} -> {start:#07x}-{(end - 1) if end else 0:#07x}"
+              f"  {(end - start) if end else 0:>5} bytes  want {want_size:>5}"
+              f"  next-entry rule {'agrees' if end == alt else 'DISAGREES'}"
+              f"  {'ok' if ok else 'WRONG'}")
 
     # And nothing may ever claim an entry that comes after the address itself.
     ahead = [o for o in range(0, len(img), 97)

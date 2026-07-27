@@ -1626,6 +1626,35 @@ def find_function_start(img, off, limit=FUNCTION_SCAN_LIMIT, tries=8):
     return found
 
 
+def function_extent(img, off, limit=FUNCTION_SCAN_LIMIT):
+    """(start, end) of the function containing `off`; end is exclusive.
+
+    Borland emits one epilogue per function and packs functions back to back, so
+    the end is the first return - swept from the entry - whose next byte begins
+    another indexed prologue. Everything after that belongs to the next function.
+
+    Cross-checked against an independent rule, "the next prologue that resolves to
+    itself": the two agree on every function this port has named, including the
+    two that hold plane loops. test_fn_start.py keeps them agreeing.
+
+    (None, None) when the entry cannot be found, and (start, None) when no such
+    return appears within `limit` - which would mean the sweep desynced or the
+    function is larger than the window, and either way is not a boundary to guess.
+    """
+    start = find_function_start(img, off, limit)
+    if start is None:
+        return None, None
+    md = _disasm16()
+    if md is None:
+        return start, None
+    _, entries = _entry_table(img)
+    norm = _fp_normalised(img)
+    for i in md.disasm(norm[start:start + limit], start):
+        if i.mnemonic in ("ret", "retf") and (i.address + i.size) in entries:
+            return start, i.address + i.size
+    return start, None
+
+
 # ---------------------------------------------------------------- natives ---
 # Each handler is given (machine, args_at) and returns AX, or (AX, DX), or None.
 
