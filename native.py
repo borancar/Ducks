@@ -1636,6 +1636,119 @@ def blit_sprite(m, index, x, y, table, clip, colour):
 ENTITY_TYPES_VERIFIED = None
 
 
+def native_outline_sprite(m, args):
+    """The outline drawer at 0x065f1, reading its arguments off the stack."""
+    u16 = lambda a: struct.unpack("<H", m.read(a, 2))[0]
+
+    def far(a):
+        off, seg = struct.unpack("<HH", m.read(a, 4))
+        return seg * 16 + off
+
+    return outline_sprite(m, index=u16(far(args + 0)),
+                          x=struct.unpack("<h", m.read(args + 4, 2))[0],
+                          y=struct.unpack("<h", m.read(args + 6, 2))[0],
+                          table=far(args + 8), clip=far(args + 0x0C))
+
+
+def outline_sprite(m, index, x, y, table, clip):
+    """Halo a sprite: a colour-0 pixel above, below, left and right of each of
+    its non-zero pixels. 0x065f1.
+
+    Same descriptors and the same clipping shape as draw_sprite, but it plots
+    through the [0x53e] callback instead of writing spans - so, like the particle
+    loop, only pixels whose x & 3 matches the selected plane land, and nothing is
+    clipped beyond what the loop bounds impose.
+
+    Two quirks are faithful rather than tidy: vertical clipping insets by a row
+    at each end (y becomes top + 1, bottom becomes limit - 1), and clip[+4] is
+    added to x after the source offsets are worked out, which shifts the sprite
+    horizontally and therefore also changes which plane each pixel belongs to.
+    """
+    u16 = lambda a: struct.unpack("<H", m.read(a, 2))[0]
+    s16 = lambda a: struct.unpack("<h", m.read(a, 2))[0]
+
+    g = m.dgroup_base
+    desc = u16(table + 4) * 16 + u16(table + 2) + index * 14
+    w, h = u16(desc + 0), u16(desc + 2)
+    if not (w and h) or not m.active_planes:
+        return None
+    pixels = u16(desc + 0x0A) + u16(desc + 0x0C) * 16
+    xbase = m.read(clip + 4, 1)[0]
+
+    src, row_extra = 0, 0
+    x -= s16(desc + 4)
+    top = s16(clip + 0)
+    y += top - s16(desc + 6)
+    right, bottom = x + w, y + h
+
+    if x < 1:
+        row_extra -= x - 1
+        src -= x - 1
+        x = 1
+    elif right > 0x13F:
+        row_extra += right - 0x13F
+        right = 0x13F
+    if top >= y:
+        src -= (y - top - 1) * w
+        y = top + 1
+    elif s16(clip + 2) <= bottom:
+        bottom = s16(clip + 2) - 1
+    x += xbase
+    right += xbase
+
+    ncols, nrows = right - x, bottom - y
+    stride_src = ncols + row_extra
+    if ncols <= 0 or nrows <= 0 or stride_src <= 0 or src < 0:
+        return None
+    need = (nrows - 1) * stride_src + ncols
+    data = m.cached_read(pixels + src, need)
+    if len(data) < need:
+        return None
+    sel = np.lib.stride_tricks.as_strided(
+        np.frombuffer(data, dtype=np.uint8), shape=(nrows, ncols),
+        strides=(stride_src, 1))
+    nz = sel != 0
+    if not nz.any():
+        return None
+    m.native_calls["outline(inline)"] += 1
+    if m.native_calls["outline(inline)"] == 1:
+        # Written from the disassembly and never once executed, so it has never
+        # been compared against the original. Say so the moment it runs.
+        print("  [outline] the sprite outline is running for the first time. "
+              "This path is UNVERIFIED - no session has contained an entity of "
+              "type 0x0f or 0x10.\n"
+              "  [outline] check it with --verify-only draw_entities,"
+              "outline_sprite before trusting the screen. If it mismatches, "
+              "doubt the vertical clip first: it insets by a row at each end "
+              "(y = top + 1, bottom = limit - 1), and clip[+4] shifts x after "
+              "the source offsets are computed, which also moves pixels between "
+              "planes.")
+
+    plane = m.read(g + 0x177D, 1)[0] & 3
+    dst_off, dst_seg = struct.unpack("<HH", m.read(g + 0x16F1, 4))
+    plane_off = dst_seg * 16 + dst_off - 0xA0000
+    if plane_off < 0:
+        return None
+    stride = 90 if u16(g + 0x4FE) else 80
+    base = plane_off + u16(g + 0x1727)
+    sx = x + np.arange(ncols, dtype=np.int32)
+    sy = y + np.arange(nrows, dtype=np.int32)
+    planes = [m.planes[p] for p in m.active_planes]
+    for dx, dy in ((0, -1), (0, 1), (1, 0), (-1, 0)):
+        px = (sx + dx)[None, :]
+        py = (sy + dy)[:, None]
+        keep = nz & ((px & 3) == plane)
+        if not keep.any():
+            continue
+        offs = np.broadcast_to(base + py * stride + (px >> 2),
+                               (nrows, ncols))[keep]
+        for pl in planes:
+            inb = (offs >= 0) & (offs < len(pl))
+            np.frombuffer(pl, dtype=np.uint8)[offs[inb]] = 0
+        m.native_pixels += int(keep.sum())
+    return None
+
+
 def native_draw_entities(m, args):
     """The sprite entity loop at 0x0aba5, one level above draw_sprite.
 
@@ -1707,15 +1820,11 @@ def native_draw_entities(m, args):
         return DECLINE
 
     # Bail out before drawing anything if any entity needs a path we do not have.
-    prev_shadow = False
     for i, t in enumerate(types):
-        if prev_shadow:
-            return DECLINE                       # needs 0x65f1
         if t == 5:
             y = struct.unpack_from("<i", recs, i * 0x29 + 4)[0]
             if y <= 0:
                 return DECLINE                   # needs 0x78d4
-        prev_shadow = t in (0x0F, 0x10)
 
     facing = u16(g + 0x511)
     frame_dir = -1 if facing else 1
@@ -1725,6 +1834,7 @@ def native_draw_entities(m, args):
         ptr = far(g + 0x9A + (t & 0xFFFF) * 4)
         return u16(ptr + (sub & 0xFFFE))
 
+    shadow = False
     for i in range(count):
         r = i * 0x29
         t = types[i]
@@ -1758,8 +1868,17 @@ def native_draw_entities(m, args):
                 slot = t + (1 if frame == frame_dir else 0)
             idx = table_index(slot, sub)
 
-        blit_sprite(m, index=idx,
-                    x=(struct.unpack_from("<h", recs, r)[0] - scroll_x),
+        ex = struct.unpack_from("<h", recs, r)[0] - scroll_x
+        if shadow:
+            # The entity after one of type 0x0f/0x10 is outlined first, and gets
+            # only the low word of y - unlike the blit below, which gets all 32
+            # bits of it.
+            y16 = ((y & 0xFFFF) - (scroll_y & 0xFFFF)) & 0xFFFF
+            outline_sprite(m, index=idx, x=ex,
+                           y=y16 - 0x10000 if y16 >= 0x8000 else y16,
+                           table=g + 0x18E9, clip=view)
+        shadow = t in (0x0F, 0x10)
+        blit_sprite(m, index=idx, x=ex,
                     # ds:0x18e9 is pushed as the pointer VALUE, so the table
                     # header IS at 0x18e9 - not a pointer stored there.
                     y=y - scroll_y, table=g + 0x18E9, clip=view,
@@ -2741,6 +2860,7 @@ NATIVE_TABLE = [
     (0x05761, "plot_pixel", native_plot_pixel, "far"),
     (0x04D2A, "clear_vram", native_clear_vram, "far"),
     (0x0ABA5, "draw_entities", native_draw_entities, "far"),
+    (0x065F1, "outline_sprite", native_outline_sprite, "far"),
     (0x0AB09, "particles", native_particles, "far"),
     (0x157C1, "sound_gather", native_sound_gather, "far"),
 ]
