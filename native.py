@@ -30,7 +30,7 @@ import os
 import struct
 import sys
 import time
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 
 import numpy as np
 import pygame
@@ -104,6 +104,13 @@ class Native(VgaDos):
         self.native_pixels = 0
         self.warp_calls = 0
         self.plot_pixel_warned = False
+        self.wild_reported = False
+        self.iret_sites = {}
+        self.isr_entry = {}
+        self.native_ring = deque(maxlen=32)
+        self.iret_reported = 0
+        self.block_ring = deque(maxlen=24)
+        self.report_img = None
         self.rate_mark = (0.0, {}, 0)
         self.frames = 0
         self.buckets = {}
@@ -706,6 +713,234 @@ class Native(VgaDos):
                   f"{n:>7} calls {1e6 * secs / n:8.1f} us/call"
                   + (f" {rows / n:6.1f} rows/call" if rows else ""))
 
+    def install_iret_guard(self, img):
+        """Hook every iret in the image, and the handler entry that reaches it.
+
+        The handler entry is the byte after the preceding return: Borland emits the
+        interrupt wrapper immediately after the routine that installs it, so the
+        wrapper is not a function of its own and the function map has no entry for
+        it.
+
+        Cheap: two addresses in the whole image, so the hooks fire only when an
+        interrupt handler actually runs.
+        """
+        md = _disasm16()
+        if md is None:
+            return
+        norm = _fp_normalised(img)
+        _, spans = _function_map(img)
+        for start, end in spans:
+            prev_ret = None
+            for i in md.disasm(norm[start:end], start):
+                if i.mnemonic == "iret":
+                    entry = prev_ret if prev_ret is not None else start
+                    self.iret_sites[self.image_base + i.address] = entry
+                    lin_entry = self.image_base + entry
+                    self.uc.hook_add(UC_HOOK_CODE, self._on_isr_entry, None,
+                                     lin_entry, lin_entry)
+                    self.uc.hook_add(UC_HOOK_CODE, self._on_iret, None,
+                                     self.image_base + i.address,
+                                     self.image_base + i.address)
+                    print(f"  [iret] guarding iret {i.address:#07x}, handler "
+                          f"entry {entry:#07x}")
+                if i.mnemonic in ("ret", "retf"):
+                    prev_ret = i.address + i.size
+        return
+
+    def _on_isr_entry(self, uc, address, size, user):
+        off = address - self.image_base
+        self.isr_entry[off] = (self._reg(UC_X86_REG_SP), len(self.native_ring))
+
+    def _on_iret(self, uc, address, size, user):
+        """Check the stack at an iret against what the handler entered with."""
+        entry = self.iret_sites.get(address)
+        if entry is None or self.iret_reported >= 3:
+            return
+        rec = self.isr_entry.get(entry)
+        sp, ss = self._reg(UC_X86_REG_SP), self._reg(UC_X86_REG_SS)
+        ip, cs, fl = struct.unpack("<3H", uc.mem_read(ss * 16 + sp, 6))
+        target = cs * 16 + ip
+        code_lo, code_hi = self.image_base, self.image_base + DGROUP_IMAGE_OFF
+        sane = code_lo <= target < code_hi
+        if rec is not None and sp == rec[0] and sane:
+            return                      # balanced and returning into code
+        self.iret_reported += 1
+        print(f"\n  [iret] BAD iret at {address - self.image_base:#07x} "
+              f"(handler {entry:#07x})")
+        if rec is None:
+            print("  [iret] the handler entry was never seen, so control reached "
+                  "this iret without going through the top of the handler")
+        else:
+            print(f"  [iret] SP {sp:04x}, but the handler was entered with "
+                  f"{rec[0]:04x} - off by {sp - rec[0]:+d} bytes")
+        print(f"  [iret] frame it will pop: {cs:04x}:{ip:04x} flags {fl:04x}"
+              f"  -> {'code' if sane else 'NOT CODE'}")
+        since = list(self.native_ring)[rec[1]:] if rec else list(self.native_ring)
+        print(f"  [iret] natives called since entry ({len(since)}): "
+              + (", ".join(since) if since else "none"))
+
+    def install_block_trace(self):
+        """Keep the last basic blocks executed, for the wild-jump report.
+
+        One callback per basic block rather than per instruction, which is the
+        cheapest granularity that still identifies a control transfer: the block
+        before the wild one ends with whatever made the jump.
+        """
+        self.uc.hook_add(UC_HOOK_BLOCK, self._on_block)
+        print("  [blocks] tracing basic blocks for the wild-jump report")
+
+    def _on_block(self, uc, address, size, user):
+        self.block_ring.append((address, size))
+
+    def report_block_ring(self, img):
+        """The blocks leading to here, and the tail of the one that transferred."""
+        if not self.block_ring:
+            print("  [blocks] no block trace; rerun with --trace-blocks")
+            return
+        md = _disasm16()
+        norm = _fp_normalised(img) if md else None
+        print("  [blocks] blocks leading here, oldest first:")
+        for addr, size in list(self.block_ring):
+            off = addr - self.image_base
+            if 0 <= off < DGROUP_IMAGE_OFF:
+                fn = find_function_start(img, off)
+                place = f"in {fn:#07x}" if fn is not None else "in no function"
+            elif 0 <= off < 0x20000:
+                place = f"DGROUP+{off - DGROUP_IMAGE_OFF:#06x} (DATA)"
+            else:
+                place = "outside the image"
+            print(f"  [blocks]   {addr:#07x} (+{size:#x}) {place}")
+
+        # The transferring block is the last one that was still code.
+        for addr, size in reversed(list(self.block_ring)[:-1]):
+            off = addr - self.image_base
+            if not (0 <= off < DGROUP_IMAGE_OFF) or md is None:
+                continue
+            print(f"  [blocks] tail of the block that transferred, "
+                  f"{off:#07x}:")
+            insns = list(md.disasm(norm[off:off + size + 16], off))
+            for i in insns[-6:]:
+                print(f"  [blocks]   {i.address:#07x}  {i.mnemonic} {i.op_str}")
+            break
+
+    def install_wild_jump_trap(self):
+        """Report the first instruction executed outside the code, then shut up.
+
+        Costs nothing while nothing goes wrong: the hook covers only the data
+        region, where no instruction should ever execute. It fires once, so a
+        runaway that crawls a thousand bytes of BSS produces one report rather
+        than a thousand.
+
+        One legitimate exception exists and is skipped: Borland's int86 builds a
+        two-instruction stub on the stack and calls it, which is executing outside
+        the code by design. It only happens with --no-native-setup, since the
+        native serves int86 without building anything.
+        """
+        lo = self.image_base + DGROUP_IMAGE_OFF
+        hi = self.image_base + 0x20000
+        self.uc.hook_add(UC_HOOK_CODE, self._on_wild_jump, None, lo, hi)
+
+    def _on_wild_jump(self, uc, address, size, user):
+        if self.wild_reported:
+            return
+        ss = self._reg(UC_X86_REG_SS)
+        if ss * 16 <= address < ss * 16 + 0x10000:
+            return                      # a stub on the stack: int86 does this
+        self.wild_reported = True
+        off = address - self.image_base
+        print(f"  [wild] control just left the code: executing {address:#07x} = "
+              f"DGROUP+{off - DGROUP_IMAGE_OFF:#06x}, which is data")
+        print("  [wild] state below is from the moment of arrival, so the words "
+              "just under SP are whatever a bad return popped")
+        self.crash_report()
+        self.report_block_ring(self.report_img)
+
+    def crash_report(self, img=None):
+        """Where the fault came from: the stack and the frame chain, resolved.
+
+        A fault address alone rarely identifies a bug. When the address is not even
+        in the code - executing DGROUP, say - it identifies nothing at all, and the
+        only record of how control got there is the stack.
+
+        Every candidate is printed with what it resolves to, rather than picking
+        one: a stack word that happens to look like an address is not a caller, and
+        deciding which are real is a judgement to make while reading, not one to
+        bury in here.
+        """
+        img = self.report_img if img is None else img
+        cs, ip = self._reg(UC_X86_REG_CS), self._reg(UC_X86_REG_IP)
+        ss, sp = self._reg(UC_X86_REG_SS), self._reg(UC_X86_REG_SP)
+        bp = self._reg(UC_X86_REG_BP)
+        dgroup_seg = (self.dgroup_base) // 16
+        lin = cs * 16 + ip
+
+        def where(addr):
+            """Describe a linear address: which image region, which function."""
+            off = addr - self.image_base
+            if not (0 <= off < 0x20000):
+                return f"{addr:#07x} outside the image"
+            if off >= DGROUP_IMAGE_OFF:
+                return (f"image {off:#07x} = DGROUP+{off - DGROUP_IMAGE_OFF:#06x}"
+                        f" (DATA, not code)")
+            fn = find_function_start(img, off) if img is not None else None
+            if fn is None:
+                return f"image {off:#07x} (in no function)"
+            return f"image {off:#07x} in {fn:#07x}"
+
+        print(f"  [crash] CS:IP {cs:04x}:{ip:04x} -> {where(lin)}")
+        if cs == dgroup_seg:
+            print(f"  [crash] CS is the DGROUP segment, so this is data being "
+                  f"executed - something transferred control to a data address")
+        try:
+            print(f"  [crash] bytes there: "
+                  f"{bytes(self.uc.mem_read(lin, 16)).hex(' ')}")
+        except Exception:
+            print("  [crash] bytes there: unreadable")
+
+        try:
+            below = struct.unpack("<4H", self.uc.mem_read(ss * 16 + sp - 8, 8))
+            for i, w in enumerate(below):
+                print(f"  [crash]   [sp-{8 - 2 * i:#04x}] {w:04x}  "
+                      f"already popped: {where(self._reg(UC_X86_REG_CS) * 16 + w)}")
+        except Exception:
+            pass
+        try:
+            words = struct.unpack("<12H", self.uc.mem_read(ss * 16 + sp, 24))
+        except Exception:
+            words = ()
+        fl = self._reg(UC_X86_REG_EFLAGS)
+        named = [n for bit, n in ((0x100, "TF"), (0x200, "IF"), (0x400, "DF"),
+                                  (0x001, "CF"), (0x040, "ZF"), (0x080, "SF"))
+                 if fl & bit]
+        print(f"  [crash] SS:SP {ss:04x}:{sp:04x} BP {bp:04x} "
+              f"FLAGS {fl & 0xFFFF:04x} [{' '.join(named)}]")
+        if fl & 0x100:
+            print("  [crash] TF is set: the CPU was single-stepping, which is why "
+                  "INT 01h appears in the interrupt report. Nothing in this port "
+                  "sets it, so it arrived in a restored flags word - an iret or a "
+                  "popf reading something that was not a flags word.")
+        for i in range(0, max(0, len(words) - 1)):
+            near, far_ = cs * 16 + words[i], words[i + 1] * 16 + words[i]
+            print(f"  [crash]   [sp+{2 * i:#04x}] {words[i]:04x}  "
+                  f"as near return {where(near)}")
+            if i + 1 < len(words):
+                print(f"  [crash]            {words[i + 1]:04x}:{words[i]:04x}"
+                      f"  as far return {where(far_)}")
+
+        seen, frame = set(), bp
+        for depth in range(8):
+            if not frame or frame in seen:
+                break
+            seen.add(frame)
+            try:
+                nbp, roff, rseg = struct.unpack(
+                    "<3H", self.uc.mem_read(ss * 16 + frame, 6))
+            except Exception:
+                break
+            print(f"  [crash] frame {depth}: BP {frame:04x} -> caller "
+                  f"{where(rseg * 16 + roff)}")
+            frame = nbp
+
     def fp_report(self, img):
         if not self.fp_sites and not self.fp_unknown:
             return
@@ -1258,6 +1493,9 @@ class Native(VgaDos):
             return
         name, handler, kind = entry
         self.native_calls[name] += 1
+        # Kept for the iret guard: which natives ran inside an interrupt handler
+        # is exactly what a stack imbalance would be traced through.
+        self.native_ring.append(name)
 
         # --verify-only names a subset to check even though it is in the skip
         # list, so a routine can be verified right after it is rewritten without
@@ -3786,6 +4024,9 @@ def main():
                          "whether replacing them actually helps")
     ap.add_argument("--verify-only", default="",
                     help="comma-separated natives to verify even if skipped")
+    ap.add_argument("--trace-blocks", action="store_true",
+                    help="record the last basic blocks, so a wild jump reports "
+                         "the instruction that made it")
     ap.add_argument("--native-plane-loop", default=True,
                     action=argparse.BooleanOptionalAction,
                     help="replace the guest's four four-plane drawing loops "
@@ -3839,6 +4080,11 @@ def main():
     # Kept in hand so the profile report can name functions at any moment.
     _d = open(args.unpacked, "rb").read()
     img = _d[struct.unpack_from("<13H", _d, 2)[3] * 16:]
+    m.report_img = img
+    m.install_wild_jump_trap()
+    m.install_iret_guard(img)
+    if args.trace_blocks:
+        m.install_block_trace()
     if args.profile_sound:
         m.profile_sound()
     if args.observe_play:
@@ -3883,6 +4129,7 @@ def main():
             except UcError as e:
                 print(f"  [cpu] {e} at {m._reg(UC_X86_REG_CS):04x}:"
                       f"{m._reg(UC_X86_REG_IP):04x}")
+                m.crash_report(img)
                 running = False
                 break
             if m.finished:
