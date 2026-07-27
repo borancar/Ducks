@@ -21,15 +21,17 @@ property of its authors; bring your own copy. It is available from
 <https://www.kieranmillar.com/ducks/>, which links a zip at
 <https://www.kieranmillar.com/ducks/Ducks.zip>.
 
-The tooling expects to sit inside the game directory:
+Unzip it into `game/` at the root of this repository:
 
 ```
-Ducks/            <- your copy of the game: Ducks.exe, Eggs/, ...
-  unpack/         <- this repository
+Ducks/            <- this repository
+  game/           <- your copy of the game: Ducks.exe, Eggs/, ...
+  docs/
+  native.py, trace_dos.py, ...
 ```
 
-That assumption is encoded in exactly one place — the `../Ducks.exe` argument in
-the unpacking step below — so a different layout only needs that path changed.
+`game/` is ignored by git, twice over: by name, and again by file type. Nothing
+from it is ever committed. Set `DUCKS_GAME_DIR` to put it somewhere else.
 
 A fresh clone will not run anything until you unpack: `Ducks.unpacked.exe` is
 derived from the game and deliberately untracked. `native.py` defaults to it, and
@@ -60,7 +62,7 @@ venv/bin/pip install capstone unicorn pygame-ce
 ## Unpacking
 
 ```sh
-venv/bin/python unpack_ducks.py ../Ducks.exe -o Ducks.unpacked.exe
+venv/bin/python unpack_ducks.py game/Ducks.exe -o Ducks.unpacked.exe
 venv/bin/python validate.py
 ```
 

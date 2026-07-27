@@ -14,5 +14,5 @@ a commit log cannot carry. They are not maintained: where a session log and a no
 disagree, **the note wins**, and at least one such correction is called out
 in place.
 
-The README in the parent directory documents the results themselves — the
+The README at the repository root documents the results themselves — the
 unpacking, the emulation traps, the drawing path, the sound API.

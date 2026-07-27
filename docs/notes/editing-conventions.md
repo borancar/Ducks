@@ -42,12 +42,18 @@ scripts are one-shot by design: they are history, not a build step, and re-runni
 one after its edit has landed will fail its anchor check, which is the intended
 behaviour.
 
-## The repository root
+## The game lives under the repository, and never in it
 
-The Python tooling is a git repository rooted at `unpack/`, not at the game
-directory above it — that keeps the copyrighted game binaries and the 2.4 MB
-`Eggs/Main.egg` out of history entirely, rather than relying on a `.gitignore`
-being right.
+Your copy of the game sits in `game/` at the repository root, and `.gitignore`
+excludes it twice: by directory name, and again by file type (`*.exe`, `*.egg`,
+`*.SG`, `*.dat`, `*.ico`, `*.URL`). Either rule alone would be enough, which is
+the point — the payload being guarded is a 2.4 MB `Eggs/Main.egg` and a
+copyrighted commercial executable, so one rule being wrong should not be enough
+to publish them.
+
+`GAME_DIR` in `trace_dos.py` is anchored on the file's own directory rather than
+the working directory, so the tools run from anywhere; `DUCKS_GAME_DIR` overrides
+it.
 
 Derived artefacts are untracked for the same reason: `Ducks.unpacked.exe` is
 reproducible with `unpack_ducks.py`, so it is regenerated rather than shipped.

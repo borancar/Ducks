@@ -14,7 +14,7 @@ from unpack_ducks import Unpacker, MZ
 
 SEG_A, SEG_B = 0x0110, 0x0310
 
-data = open("../Ducks.exe", "rb").read()
+data = open("game/Ducks.exe", "rb").read()
 
 runs = {}
 for seg in (SEG_A, SEG_B):

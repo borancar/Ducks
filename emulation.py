@@ -970,7 +970,7 @@ def capture(m, screen, tag, outdir="debug"):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--exe", default="../Ducks.exe")
+    ap.add_argument("--exe", default="game/Ducks.exe")
     ap.add_argument("--scale", type=int, default=3)
     ap.add_argument("--blaster", action="store_true")
     ap.add_argument("--chunk", type=int, default=400_000,

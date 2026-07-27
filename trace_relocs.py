@@ -14,7 +14,7 @@ from unicorn.x86_const import *
 from unpack_ducks import Unpacker
 
 SEG = 0x0110
-data = open("../Ducks.exe", "rb").read()
+data = open("game/Ducks.exe", "rb").read()
 
 up = Unpacker(data, SEG)
 attributed = []          # (cs, ip, addr, size, value)

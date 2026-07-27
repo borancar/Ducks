@@ -11,8 +11,8 @@ then IS the original image, by construction.
 Nothing executes on the host: the guest code runs inside Unicorn.
 
 Usage:
-    python unpack_ducks.py ../Ducks.exe -o ../unpack/Ducks.unpacked.exe
-    python unpack_ducks.py ../Ducks.exe --diagnose
+    python unpack_ducks.py game/Ducks.exe -o Ducks.unpacked.exe
+    python unpack_ducks.py game/Ducks.exe --diagnose
 """
 import argparse
 import struct

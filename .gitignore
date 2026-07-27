@@ -1,3 +1,16 @@
+# Your copy of the game, which lives under the repository but is never part of
+# it. Ducks! belongs to its authors and none of it is redistributed here.
+game/
+
+# Belt and braces: the same files again by type, so a mistake in the rule above
+# is not the only thing standing between the game and a commit.
+*.exe
+*.egg
+*.SG
+*.dat
+*.ico
+*.URL
+
 # Python virtualenv (113 MB, recreate with: python -m venv venv &&
 # venv/bin/pip install capstone unicorn pygame-ce)
 venv/

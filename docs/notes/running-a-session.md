@@ -1,6 +1,6 @@
 # Running a session, and reading what it prints
 
-From `unpack/`, after the unpacking step:
+From the repository root, after the unpacking step:
 
 ```sh
 venv/bin/python native.py

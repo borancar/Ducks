@@ -23,7 +23,12 @@ from collections import Counter
 from unicorn import *
 from unicorn.x86_const import *
 
-GAME_DIR = os.path.abspath("..")
+# The game lives under the repository, in game/, and is never part of it. Anchor
+# on this file rather than on the working directory, so the tools can be run from
+# anywhere; DUCKS_GAME_DIR overrides it for a different layout.
+GAME_DIR = os.path.abspath(os.environ.get(
+    "DUCKS_GAME_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "game")))
 MEM_SIZE = 0x200000
 PSP_SEG = 0x0100
 ENV_SEG = 0x00F0
@@ -587,7 +592,7 @@ class DosMachine:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--exe", default="../Ducks.exe")
+    ap.add_argument("--exe", default="game/Ducks.exe")
     ap.add_argument("--blaster", action="store_true")
     ap.add_argument("--max-insns", type=int, default=80_000_000)
     ap.add_argument("-q", "--quiet", action="store_true")

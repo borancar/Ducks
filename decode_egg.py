@@ -12,7 +12,7 @@ import re
 import sys
 from collections import Counter
 
-PATH = sys.argv[1] if len(sys.argv) > 1 else "../Eggs/Main.egg"
+PATH = sys.argv[1] if len(sys.argv) > 1 else "game/Eggs/Main.egg"
 data = open(PATH, "rb").read()
 print(f"=== {PATH}: {len(data)} bytes ===")
 

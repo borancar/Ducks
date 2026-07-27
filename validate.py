@@ -12,9 +12,9 @@ import subprocess
 import sys
 from unpack_ducks import MZ, Unpacker
 
-PACKED = "../Ducks.exe"
+PACKED = "game/Ducks.exe"
 UNPACKED = "Ducks.unpacked.exe"
-REFERENCE = "../PickEggs.exe"     # same author/toolchain, never packed
+REFERENCE = "game/PickEggs.exe"     # same author/toolchain, never packed
 
 ok = True
 
