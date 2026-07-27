@@ -1630,9 +1630,10 @@ def blit_sprite(m, index, x, y, table, clip, colour):
     return None
 
 
-# Entity types whose sprite selection has been verified byte-exact against the
-# original. Anything else declines the whole call, so the emulated body draws it.
-ENTITY_TYPES_VERIFIED = frozenset({0x04, 0x14})
+# All entity types are handled and verified. Kept as a knob because restricting
+# it is how a suspect type gets isolated: set it to a frozenset and every call
+# containing anything else declines to the emulated body.
+ENTITY_TYPES_VERIFIED = None
 
 
 def native_draw_entities(m, args):
@@ -1666,7 +1667,11 @@ def native_draw_entities(m, args):
       * type 5 with y <= 0 calls 0x78d4, which mutates game state. Faking a
         drawing routine is safe; faking a state change is not.
       * an entity following one of type 0x0f or 0x10 is also drawn through
-        0x65f1, a second blitter that has not been reimplemented yet.
+        0x65f1, which is not a blitter but an outline: for every non-zero pixel
+        of the sprite it plots four colour-0 pixels around it, through the same
+        [0x53e] callback the particles use. Not reimplemented yet, and it is what
+        most declines are - a scene usually contains one highlighted entity, so
+        the entity after it takes this path.
 
     Declining the entire call rather than the entity keeps this exactly as correct
     as the original: the emulated body runs and draws everything.
@@ -1692,7 +1697,8 @@ def native_draw_entities(m, args):
     recs = m.read(ents, count * 0x29)
     types = [struct.unpack_from("<H", recs, i * 0x29 + 0x25)[0]
              for i in range(count)]
-    if any(t not in ENTITY_TYPES_VERIFIED for t in types):
+    if ENTITY_TYPES_VERIFIED is not None and \
+            any(t not in ENTITY_TYPES_VERIFIED for t in types):
         # Verified types only. The default branch's mirrored variants were
         # producing the right sprite indices at the right positions, yet the
         # original went on to emit further blits with a different clip rectangle
