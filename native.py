@@ -464,6 +464,95 @@ class Native(VgaDos):
     FP_ESC_LO, FP_ESC_HI = 0x34, 0x3B
     FP_WAIT = 0x3D
 
+    def install_plane_loops(self):
+        """Replace the guest's four-plane drawing loops with native ones.
+
+        Hooked at the loop head rather than a function entry - the loop is inline
+        inside a larger function, so the same technique as the interrupt stubs
+        applies: do the work, then step IP to the loop exit.
+        """
+        for head, (exit_off, _) in PLANE_LOOPS.items():
+            lin = self.image_base + head
+            self.uc.hook_add(UC_HOOK_CODE, self._on_plane_loop, None, lin, lin)
+            try:
+                self.uc.ctl_remove_cache(lin, lin + 2)
+            except Exception:
+                pass
+            print(f"  [loop] plane loop {head:#07x} native, exit {exit_off:#07x}")
+
+    def _on_plane_loop(self, uc, address, size, user):
+        head = address - self.image_base
+        entry = PLANE_LOOPS.get(head)
+        if entry is None:
+            return
+        exit_off, handler = entry
+        self.native_calls["plane_loop"] += 1
+        if self.verify and ("plane_loop" in self.verify_only
+                            or not self.verify_only):
+            return self._verify_plane_loop(uc, head, exit_off, handler)
+        t0 = time.perf_counter()
+        handler(self)
+        self.native_secs["plane_loop"] += time.perf_counter() - t0
+        # CS is unchanged, so the jump is just the distance between the two
+        # offsets. The loop counter is left alone: it is a local that nothing
+        # after the loop reads.
+        self._set(UC_X86_REG_IP,
+                  (self._reg(UC_X86_REG_IP) + (exit_off - head)) & 0xFFFF)
+
+    def _verify_plane_loop(self, uc, head, exit_off, handler):
+        """Run the native into a snapshot, let the guest's loop run, then diff.
+
+        The function-level harness cannot be reused here: there is no return
+        address to hook, so the comparison point is the loop's exit instruction.
+        Plane-selection state is saved and restored too - unlike a blitter, this
+        handler moves the sequencer mask as it goes.
+        """
+        before = [bytes(p) for p in self.planes]
+        mask, active = self.map_mask, self.active_planes
+        plane_var = self.read(self.dgroup_base + 0x177D, 1)
+        try:
+            handler(self)
+        except Exception as e:
+            print(f"  [verify] plane_loop raised {e!r}")
+            for i, p in enumerate(before):
+                self.planes[i][:] = p
+            return
+        predicted = [bytes(p) for p in self.planes]
+        for i, p in enumerate(before):
+            self.planes[i][:] = p
+        self.map_mask, self.active_planes = mask, active
+        self.write(self.dgroup_base + 0x177D, plane_var)
+
+        exit_lin = self.image_base + exit_off
+        state = {"h": None}
+
+        def on_exit(uc2, a2, s2, u2):
+            if a2 != exit_lin:
+                return
+            uc2.hook_del(state["h"])
+            self.verify_calls += 1
+            bad = 0
+            first = None
+            for pi, (pa, pb) in enumerate(zip(predicted, self.planes)):
+                for i, (a, b) in enumerate(zip(pa, pb)):
+                    if a != b:
+                        bad += 1
+                        if first is None:
+                            first = (pi, i, a, b)
+            if bad:
+                self.verify_bad += 1
+                pi, i, a, b = first
+                print(f"  [verify] plane_loop MISMATCH {bad} bytes, first "
+                      f"plane{pi} off {i:#07x} native={a:#04x} real={b:#04x}")
+            else:
+                print(f"  [verify] plane_loop: match #{self.verify_calls}")
+
+        state["h"] = uc.hook_add(UC_HOOK_CODE, on_exit, None, exit_lin, exit_lin)
+        try:
+            uc.ctl_remove_cache(exit_lin, exit_lin + 1)
+        except Exception:
+            pass
+
     def install_int_stubs(self):
         """Answer interrupts at the instruction itself, where no entry will do.
 
@@ -1750,6 +1839,16 @@ def outline_sprite(m, index, x, y, table, clip):
 
 
 def native_draw_entities(m, args):
+    """Stack-reading shim for 0x0aba5."""
+    def far(a):
+        off, seg = struct.unpack("<HH", m.read(a, 4))
+        return seg * 16 + off
+
+    return draw_entities(m, scene=far(args + 0), view=args + 4,
+                         colour=m.read(args + 0x18, 1)[0])
+
+
+def draw_entities(m, scene, view, colour):
     """The sprite entity loop at 0x0aba5, one level above draw_sprite.
 
     Walks the scene's entity array, works out which sprite each one shows, and
@@ -1797,15 +1896,12 @@ def native_draw_entities(m, args):
         return seg * 16 + off
 
     g = m.dgroup_base
-    scene = far(args + 0)
     count = s16(scene + 2)
     if count <= 0:
         return None
     ents = far(scene + 8)
-    view = args + 4                      # the by-value viewport, in guest memory
     scroll_x = s16(view + 0x0C)
     scroll_y = struct.unpack("<i", m.read(view + 0x10, 4))[0]
-    colour = m.read(args + 0x18, 1)[0]
 
     recs = m.read(ents, count * 0x29)
     types = [struct.unpack_from("<H", recs, i * 0x29 + 0x25)[0]
@@ -1894,6 +1990,49 @@ def native_draw_entities(m, args):
                     colour=colour)
     m.rows_done = count
     return None
+
+
+def set_plane(m, n):
+    """0x057ee: select a Mode X plane - the DGROUP copy and the sequencer mask.
+
+    Goes through the same sequencer handler the OUT instructions reach, rather
+    than assigning active_planes directly, so there is one definition of what a
+    map-mask write means.
+    """
+    m.write(m.dgroup_base + 0x177D, bytes([n & 0xFF]))
+    m._seq_write(0x02, 1 << (n & 3))
+
+
+def plane_loop_layer(m):
+    """The four-plane drawing loop at 0x0cd5f, done in one native call.
+
+    The original is 57 bytes:
+
+        for plane in 0..3:
+            set_plane(plane)                 # 0x57ee
+            compose_layer()                  # 0x5d3a, all arguments in DGROUP
+            draw_entities(ds:0xd93, copy of ds:0x1755, colour 0)
+
+    Everything it calls is already native, so the loop is the only part left in
+    the guest - and it is the reason the compositors' fixed cost is paid four
+    times per frame instead of once. The viewport is copied to the stack by value
+    in the original; here its DGROUP source address is passed instead, since the
+    copy is verbatim.
+
+    This is also the step that makes flat drawing reachable: with the loop on this
+    side, planar output becomes a choice made in our code rather than a shape
+    imposed by the game's.
+    """
+    g = m.dgroup_base
+    for plane in range(4):
+        set_plane(m, plane)
+        native_compose_layer(m, 0)           # reads only DGROUP
+        draw_entities(m, scene=g + 0x0D93, view=g + 0x1755, colour=0)
+
+
+# Loop head -> (exit address, handler). Replaced at the instruction, like the
+# interrupt stubs: there is no function entry to hook, the loop is inline.
+PLANE_LOOPS = {0x0CD5F: (0x0CD98, plane_loop_layer)}
 
 
 def native_particles(m, args):
@@ -2994,6 +3133,8 @@ def main():
                          "whether replacing them actually helps")
     ap.add_argument("--verify-only", default="",
                     help="comma-separated natives to verify even if skipped")
+    ap.add_argument("--native-plane-loop", action="store_true",
+                    help="replace the guest's four-plane drawing loop natively")
     ap.add_argument("--native-fp", action="store_true",
                     help="put Borland's emulated x87 instructions back and let "
                          "the real FPU run them")
@@ -3030,6 +3171,8 @@ def main():
         m.install_native_xms()
     if args.native_fp:
         m.install_native_fp()
+    if args.native_plane_loop:
+        m.install_plane_loops()
     if args.verify_only:
         m.verify_only = {n.strip() for n in args.verify_only.split(",") if n.strip()}
         m.verify = True
