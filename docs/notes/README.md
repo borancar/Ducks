@@ -11,5 +11,7 @@ Current, and kept current. Where these disagree with
   coherent wrong answers; prove the tool before reading its shape
 - [running-a-session](running-a-session.md) — how to launch, what a healthy
   startup prints, and why `mode=0x03` means nothing was tested
+- [testing-from-snapshots](testing-from-snapshots.md) — capture a state once
+  instead of playing to it every time; written, not yet exercised
 - [editing-conventions](editing-conventions.md) — the three layers, why behaviour
   goes in `native.py`, and the anchored `edit_*.py` scripts

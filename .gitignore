@@ -34,5 +34,14 @@ pause.request
 Ducks.unpacked.exe
 *.unpacked
 
+# Machine snapshots. These hold 2 MB of guest memory, which is the game's own
+# decompressed code and data - as copyrighted as the executable it came from.
+# Ignored by directory and again by extension, the same belt-and-braces as game/.
+snapshots/
+*.snap
+
+# Runtime control trigger for a snapshot, same idea as capture.request
+snapshot.request
+
 __pycache__/
 *.pyc

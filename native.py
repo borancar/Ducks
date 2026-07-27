@@ -23,6 +23,12 @@ routine you have not identified:
     python native.py                # run with whatever natives are registered
 
 Usage mirrors emulation.py otherwise (--scale, --blaster, F9/F10/F12).
+
+F2 - or `touch snapshot.request` - writes the whole machine to a file, and
+--load-snapshot starts from one instead of from the program's entry point. That is
+what makes the drawing states testable: reaching a level, the HUD or the tally
+screen is a play-through, and a snapshot only has to be earned once. replay.py
+runs them headlessly.
 """
 import argparse
 import bisect
@@ -41,6 +47,7 @@ import emulation
 from emulation import VgaDos, make_surface, capture, AudioSink
 from trace_dos import GAME_DIR, host_path, DOS_FN
 from nsound import NativeVoices, SoundBank
+import snapshot
 
 # Borland large-model layout, as established in emulation.py and analyze.py.
 DGROUP_IMAGE_OFF = 0x18950
@@ -50,6 +57,9 @@ DGROUP_IMAGE_OFF = 0x18950
 # a lot for little remaining information. To re-check one, delete it from this
 # set and run with --verify (or press F7 mid-run).
 VERIFY_SKIP = {
+    # Nothing to compare: the flip draws no pixels, so the planes always match,
+    # and the timing it changes is not something a plane diff can see.
+    "page_flip",
     "plot_pixel",
     "blit_rows",
     "blit_rows_masked",
@@ -66,7 +76,26 @@ class Native(VgaDos):
     def __init__(self, *a, profile=False, keep_diagnostics=False,
                  verify=False, native_sound=False, native_mouse=False,
                  native_keyboard=False, native_file=False, native_xms=False,
-                 native_setup=False, skip_natives=(), persist=True, **kw):
+                 native_setup=False, native_flip=False, skip_natives=(),
+                 persist=True, **kw):
+        self.native_flip = native_flip
+        # Flip pacing. build_machine sets flip_hz from --flip-hz; these defaults
+        # mean an unpaced machine still counts flips correctly.
+        self.flips = 0
+        # Set by pump() when F12 or a window close is seen, which may happen from
+        # inside the flip hook mid-slice. It lives here rather than only in
+        # main()'s `running` local because that local is reassigned from
+        # step_frame's return value immediately afterwards.
+        self.quit_requested = False
+        # A note string when a capture has been asked for and not yet taken. The
+        # request is recorded by pump() - which may run inside the flip hook - and
+        # honoured by the display loop, because snapshot.py's only supported
+        # capture point is the loop's frame boundary.
+        self.snapshot_requested = None
+        self.flip_hz = 0.0
+        self.flip_due = None
+        self.flip_late = 0
+        self.flip_slept = 0.0
         self.native_sound = native_sound
         self.native_mouse = native_mouse
         self.native_keyboard = native_keyboard
@@ -1481,6 +1510,8 @@ class Native(VgaDos):
             table += XMS_NATIVES
         if self.native_setup:
             table += SETUP_NATIVES
+        if self.native_flip:
+            table += FLIP_NATIVES
         for off, name, fn, kind in table:
             if name in self.skip_natives:
                 continue
@@ -3037,6 +3068,113 @@ def native_sound_gather(m, args):
     return None
 
 
+def _pace_flip(m):
+    """Hold the frame until its slot, the way the retrace wait used to.
+
+    Returns nothing; updates the schedule. Three cases, and the third is the
+    interesting one:
+
+    - ahead of the slot: sleep the remainder, then advance the schedule by one
+      period. This is the normal case and what keeps the game at its intended
+      speed.
+    - a little behind (inside one period): advance the schedule without sleeping,
+      so the cadence is kept rather than drifting later every frame.
+    - far behind (more than a period): resynchronise on now. Carrying the debt
+      forward would run frames back-to-back to catch up, which the original never
+      does - it waits for the next retrace and simply shows fewer frames.
+    """
+    hz = getattr(m, "flip_hz", 0.0)
+    if not hz:
+        return
+    period = 1.0 / hz
+    now = time.perf_counter()
+    due = m.flip_due
+    if due is None:
+        m.flip_due = now + period
+        return
+    if now < due:
+        time.sleep(due - now)
+        m.flip_slept += due - now
+        m.flip_due = due + period
+    elif now < due + period:
+        m.flip_late += 1
+        m.flip_due = due + period
+    else:
+        m.flip_late += 1
+        m.flip_due = now + period
+
+
+def _take_requested_snapshot(m):
+    """Write a pending capture. Only called from the top of the flip.
+
+    That is the one point where the resume is exact: execution restarts at the
+    flip's entry with the pages still unswapped, so the flip runs once, as it
+    would have. It is also a true frame boundary - the game has finished drawing
+    and asked to show it - which the display loop's instruction-count boundary
+    never was.
+    """
+    note, m.snapshot_requested = m.snapshot_requested, None
+    p = snapshot.save(m, snapshot.next_path(
+        getattr(m, "snapshot_dir", snapshot.SNAP_DIR)), note=note)
+    print(f"  [snap] wrote {p} ({os.path.getsize(p) / 1e6:.1f} MB, "
+          f"frame {getattr(m, 'frames', 0)}, mode {m.mode:#04x}, {note})")
+    return p
+
+
+def native_page_flip(m, args):
+    """0x04d4b: swap the video pages, program the CRTC, and present.
+
+    The original delays (0x1f - [0x1fd4]) ms on the PIT, waits for display enable
+    to fall, swaps [0x1725] with [0x1727], writes the new value to CRTC 0x0c/0x0d
+    as two word OUTs, waits for vertical retrace, then advances a 0..9 phase
+    counter at [0xd61].
+
+    Everything except the two waits is reproduced. The waits are dropped on
+    purpose: the retrace spin was ~1836 port reads per flip - 94% of all port I/O
+    - and it burned the instruction budget that would otherwise draw. Presenting
+    here instead makes the guest's own flip the frame boundary, so every game
+    frame reaches the screen rather than the one-in-eight a fixed-size chunk
+    happened to catch.
+
+    The CRTC goes through _crtc_write rather than being poked directly, so
+    start_addr and the addressing unit are derived the same way they are for a
+    real OUT - assuming byte addressing here is what rendered every other frame
+    black when this was first got wrong in emulation.py.
+    """
+    # Before anything is changed, so the state written is the one the game is
+    # about to show and a restore of it flips exactly once.
+    if m.snapshot_requested:
+        _take_requested_snapshot(m)
+
+    g = m.dgroup_base
+    front = struct.unpack("<H", m.read(g + 0x1725, 2))[0]
+    back = struct.unpack("<H", m.read(g + 0x1727, 2))[0]
+    m.write(g + 0x1725, struct.pack("<H", back))
+    m.write(g + 0x1727, struct.pack("<H", front))
+
+    # The new visible page is what [0x1725] now holds; high byte to index 0x0c,
+    # low byte to 0x0d, exactly as the two word OUTs did.
+    m._crtc_write(0x0C, (back >> 8) & 0xFF)
+    m._crtc_write(0x0D, back & 0xFF)
+
+    phase = (struct.unpack("<H", m.read(g + 0x0D61, 2))[0] + 1) % 10
+    m.write(g + 0x0D61, struct.pack("<H", phase))
+
+    m.flips += 1
+    present = getattr(m, "present", None)
+    if present is not None:
+        present()
+    # After presenting, so the frame is on screen for its slot rather than
+    # sleeping before anyone can see it.
+    _pace_flip(m)
+    # Input last, so the guest resumes with the freshest state rather than with
+    # whatever was current 14 ms ago.
+    pump = getattr(m, "pump", None)
+    if pump is not None:
+        pump()
+    return None
+
+
 def native_clear_vram(m, args):
     """Native replacement for the full-screen clear at 0x04d2a. Takes no args.
 
@@ -3909,6 +4047,13 @@ SETUP_NATIVES = [
     (0x0293A, "int86", native_int86, "far"),
 ]
 
+# Enabled with --native-flip. One entry: the page flipper at 0x04d4b, which is
+# reached from 31 sites in the image by the `push cs; call near` idiom, three of
+# them the instruction immediately after a plane loop's exit.
+FLIP_NATIVES = [
+    (0x04D4B, "page_flip", native_page_flip, "far"),
+]
+
 XMS_NATIVES = [
     (0x159AE, "xms_present", native_xms_present, "far"),
     (0x159C7, "xms_get_entry", native_xms_get_entry, "far"),
@@ -3956,7 +4101,7 @@ SOUND_NATIVES = [
 ]
 
 
-def main():
+def make_parser():
     ap = argparse.ArgumentParser(
         description="Run Ducks with the native port. Everything this port "
                     "replaces is on by default; each piece can be turned off "
@@ -4031,6 +4176,16 @@ def main():
                     action=argparse.BooleanOptionalAction,
                     help="replace the guest's four four-plane drawing loops "
                          "natively")
+    ap.add_argument("--native-flip", default=True,
+                    action=argparse.BooleanOptionalAction,
+                    help="serve the game's page flip natively and present from "
+                         "it, so every game frame reaches the screen. Drops the "
+                         "retrace spin and the delay, so nothing limits the "
+                         "frame rate but the host")
+    ap.add_argument("--flip-hz", type=float, default=70.0,
+                    help="pace the native page flip at this rate (70 Hz is the "
+                         "Mode X frame rate the game was written for); 0 leaves "
+                         "it unlimited")
     ap.add_argument("--native-fp", default=True,
                     action=argparse.BooleanOptionalAction,
                     help="put Borland's emulated x87 instructions back and "
@@ -4044,10 +4199,31 @@ def main():
     ap.add_argument("--status-every", type=float, default=30.0)
     ap.add_argument("--unpacked", default="Ducks.unpacked.exe",
                     help="unpacked image, used to name functions when profiling")
-    args = ap.parse_args()
+    ap.add_argument("--snapshot-dir", default=snapshot.SNAP_DIR,
+                    help="where F2 and snapshot.request write their snapshots")
+    ap.add_argument("--snapshot-at", default="",
+                    help="comma-separated frame numbers to snapshot at, for "
+                         "unattended capture, e.g. 400,900")
+    ap.add_argument("--load-snapshot", default="",
+                    help="restore this snapshot once the natives are installed, "
+                         "instead of starting from the program's entry point")
+    ap.add_argument("--force-snapshot", action="store_true",
+                    help="restore even if the snapshot was taken on a different "
+                         "image, where every address in it may mean something else")
+    return ap
 
-    pygame.init()
-    pygame.font.init()
+
+def build_machine(args):
+    """Construct the machine and install everything the flags ask for.
+
+    Split out of main() so replay.py builds an identical machine instead of a
+    second copy of this sequence that drifts from it. Returns (machine, image).
+
+    One ordering constraint worth keeping in view: install_native_fp() runs FINIT
+    to set the control word a real FPU powers up with, so it has to happen before
+    a snapshot restore writes the register file - and the natives have to be
+    installed before a restored frame runs, or the guest draws it itself.
+    """
     m = Native(args.exe, blaster=args.blaster, profile=args.profile,
                keep_diagnostics=args.keep_diagnostics, verify=args.verify,
                native_sound=args.native_sound,
@@ -4055,10 +4231,19 @@ def main():
                native_keyboard=args.native_keyboard,
                native_file=args.native_file, native_xms=args.native_xms,
                native_setup=args.native_setup,
+               native_flip=args.native_flip,
                skip_natives={n.strip() for n in args.skip_natives.split(",")
                              if n.strip()},
                persist=not args.read_only,
                max_insns=1 << 62)
+    # Recorded so a snapshot can refuse to restore onto a different image.
+    m.exe_path = args.exe
+    # Reached from the flip, which has no access to the parsed arguments.
+    m.snapshot_dir = args.snapshot_dir
+    # Flip pacing. flip_due is the wall-clock time the next flip is owed at;
+    # flip_late counts the frames that missed their slot, which is this
+    # emulator's measure of the game not holding its frame rate.
+    m.flip_hz = getattr(args, "flip_hz", 0.0) or 0.0
     m.voices = NativeVoices(m, bank=m.bank) if args.native_sound else None
     if args.native_sound or args.sound_bank:
         m.capture_loader()
@@ -4097,6 +4282,65 @@ def main():
                             if x.strip()])
     print(f"=== native-I/O port: {len(m.natives)} routine(s) serviced "
           f"natively, everything else emulated ===")
+    return m, img
+
+
+def step_frame(m, addr, args, img):
+    """Run one display frame's worth of guest CPU. Returns (addr, running).
+
+    Split out of main() so replay.py runs frames exactly the way a played session
+    does. The slicing is not incidental: one sound service per chunk leaves the
+    sound IRQ hundreds of thousands of instructions late, and the game then
+    refills its DMA buffer too slowly to produce continuous audio.
+    """
+    slices = max(1, args.sound_slices if m.sb is not None else 1)
+    step = max(1000, args.chunk // slices)
+    for _ in range(slices):
+        try:
+            m.uc.emu_start(addr, 0, count=step)
+        except UcError as e:
+            print(f"  [cpu] {e} at {m._reg(UC_X86_REG_CS):04x}:"
+                  f"{m._reg(UC_X86_REG_IP):04x}")
+            m.crash_report(img)
+            return addr, False
+        if m.finished:
+            print(f"  [dos] program exited: {m.finished}")
+            return addr, False
+        if m.quit_requested:
+            # Seen by pump() inside the flip hook. emu_stop() ended this slice;
+            # without this the next one would start and quitting would take
+            # another chunk - about a second under 70 Hz pacing - to be noticed.
+            return addr, False
+        addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
+        m.service_sound()
+        # Read again after servicing: an injected sound IRQ pushes a frame and
+        # moves CS:IP, so the address to resume from is not the one above.
+        addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
+    return addr, True
+
+
+def take_snapshot(m, args, note):
+    """Capture the machine. Only called at the main loop's frame boundary.
+
+    That is the only point where this is safe: the x87 stack is empty there, and
+    no native handler is part-way through reading its arguments off the live
+    stack frame. snapshot.py checks the tag word and says so if it is not.
+    """
+    p = snapshot.save(m, snapshot.next_path(args.snapshot_dir), note=note)
+    print(f"  [snap] wrote {p} ({os.path.getsize(p) / 1e6:.1f} MB, "
+          f"frame {getattr(m, 'frames', 0)}, mode {m.mode:#04x}, {note})")
+    return p
+
+
+def main():
+    ap = make_parser()
+    args = ap.parse_args()
+    pygame.init()
+    pygame.font.init()
+    m, img = build_machine(args)
+    if args.load_snapshot:
+        snapshot.restore_file(m, args.load_snapshot, force=args.force_snapshot)
+    snap_at = {int(x, 0) for x in args.snapshot_at.split(",") if x.strip()}
     audio = None
     if args.blaster and not args.no_audio and not args.native_sound:
         audio = AudioSink()
@@ -4114,42 +4358,44 @@ def main():
     pygame.display.set_caption("Ducks! - native I/O")
     clock = pygame.time.Clock()
 
-    addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
-    running, frames, next_status = True, 0, args.status_every
-    while running:
-        # Run the chunk in slices, servicing the sound card between each. One
-        # service per chunk leaves the sound IRQ hundreds of thousands of
-        # instructions late, and the game then refills its DMA buffer too
-        # slowly to produce continuous audio.
-        slices = max(1, args.sound_slices if m.sb is not None else 1)
-        step = max(1000, args.chunk // slices)
-        for _ in range(slices):
-            try:
-                m.uc.emu_start(addr, 0, count=step)
-            except UcError as e:
-                print(f"  [cpu] {e} at {m._reg(UC_X86_REG_CS):04x}:"
-                      f"{m._reg(UC_X86_REG_IP):04x}")
-                m.crash_report(img)
-                running = False
-                break
-            if m.finished:
-                print(f"  [dos] program exited: {m.finished}")
-                running = False
-                break
-            addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
-            m.service_sound()
-            addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
-        if audio is not None:
-            audio.push(m.sb)
-        if m.voices is not None:
-            m.voices.reap()
+    def present():
+        """Put the current state on screen. Called per page flip when the flip is
+        native, and once per chunk otherwise."""
+        nonlocal screen, bw, bh
+        nb = base_size()
+        if nb != (bw, bh):
+            bw, bh = nb
+            screen = pygame.display.set_mode((bw * args.scale, bh * args.scale))
+        surf = make_surface(m, font, CELL).convert(screen)
+        pygame.transform.scale(surf, screen.get_size(), screen)
+        pygame.display.flip()
 
+    # Reached from native_page_flip. Set here rather than in build_machine
+    # because it closes over the window, which a headless replay does not have.
+    m.present = present
+
+    def pump():
+        """Service the window: events in, and the quit key.
+
+        Called by native_page_flip once per game frame, and by the display
+        loop when the guest did not flip. A paced chunk spans dozens of
+        frames, so pumping only per chunk would leave input responding less
+        than twice a second.
+        """
+        nonlocal running
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT or (
                     ev.type == pygame.KEYDOWN and ev.key == pygame.K_F12):
                 running = False
+                m.quit_requested = True   # survives step_frame's return value
+                m.uc.emu_stop()   # end the slice now, not in a second
             elif ev.type == pygame.KEYDOWN:
-                if ev.key == pygame.K_F5:
+                if ev.key == pygame.K_F2:
+                    # Recorded, not taken: see Native.snapshot_requested.
+                    m.snapshot_requested = f"F2 at frame {frames}"
+                    print("  [snap] capture requested; taking it at the next "
+                          "page flip")
+                elif ev.key == pygame.K_F5:
                     on = m.enable_profiling() or not m.disable_profiling()
                     print(f"  [trace] {'ON (counters reset)' if m.profiling else 'OFF'}")
                 elif ev.key == pygame.K_F6:
@@ -4195,11 +4441,29 @@ def main():
                         m.release_count[idx] += 1
                         m.release_pos[idx] = m.mouse_pos
 
+    m.pump = pump
+
+    addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
+    running, frames, next_status = True, 0, args.status_every
+    while running:
+        flips_before = m.flips
+        addr, ok = step_frame(m, addr, args, img)
+        # Deliberately not `running = ok`: pump() may have set running False from
+        # inside the flip hook during this very slice, and step_frame's return
+        # value knows nothing about that.
+        running = ok and not m.quit_requested
+        if audio is not None:
+            audio.push(m.sb)
+        if m.voices is not None:
+            m.voices.reap()
+
+        pump()
         # Shell-side control, so tracing can be driven without window focus.
         for name, action in (("trace.on", "on"), ("trace.off", "off"),
                              ("trace.report", "report"),
                              ("verify.on", "von"), ("verify.off", "voff"),
-                             ("rate.report", "rate")):
+                             ("rate.report", "rate"),
+                             ("snapshot.request", "snap")):
             if os.path.exists(name):
                 os.remove(name)
                 if action == "on":
@@ -4214,18 +4478,27 @@ def main():
                     m.set_verify(False)
                 elif action == "rate":
                     m.report_rates()
+                elif action == "snap":
+                    take_snapshot(m, args,
+                                  f"snapshot.request at frame {frames}")
                 else:
                     m.profile_report(img)
 
-        nb = base_size()
-        if nb != (bw, bh):
-            bw, bh = nb
-            screen = pygame.display.set_mode((bw * args.scale, bh * args.scale))
-        surf = make_surface(m, font, CELL).convert(screen)
-        pygame.transform.scale(surf, screen.get_size(), screen)
-        pygame.display.flip()
+        # The game's own flip presents now, so only present here if it did not
+        # flip during this chunk - a text screen, a load, or --no-native-flip.
+        # Without this a state that never flips would leave a frozen window.
+        if m.flips == flips_before:
+            present()
         frames += 1
         m.frames = frames
+        # Fallback only: the flip normally honours this within a frame. This
+        # covers --no-native-flip and states that never flip, such as a text
+        # screen, which would otherwise ignore F2 entirely.
+        if m.snapshot_requested:
+            take_snapshot(m, args, m.snapshot_requested)
+            m.snapshot_requested = None
+        if frames in snap_at:
+            take_snapshot(m, args, f"--snapshot-at {frames}")
         clock.tick(60)
 
         if args.run_seconds and m._elapsed() >= args.run_seconds:
@@ -4238,6 +4511,15 @@ def main():
 
     m.flush_open_files()
     print(f"\n=== finished after {frames} frames, {m._elapsed():.1f}s ===")
+    if m.flips:
+        el = max(m._elapsed(), 1e-6)
+        rate = m.flips / el
+        print(f"  page flips      : {m.flips} ({rate:.1f}/s"
+              + (f", target {m.flip_hz:.0f}" if m.flip_hz else ", unlimited")
+              + f"), {m.flip_late} late, {m.flip_slept:.1f}s slept")
+        if m.flip_hz and m.flip_late > m.flips * 0.05:
+            print(f"  ^ {100 * m.flip_late / m.flips:.0f}% of frames missed "
+                  f"their slot: this state cannot hold {m.flip_hz:.0f} Hz here")
     if m.native_calls:
         print(f"  native calls    : {dict(m.native_calls)}")
         print(f"  pixels drawn natively: {m.native_pixels}")

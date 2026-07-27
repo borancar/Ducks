@@ -223,6 +223,137 @@ One structural win worth knowing: the sprite blitter draws only pixels whose
 four times the loop iterations for one sprite's pixels. A native does all planes
 in one pass.
 
+## Snapshots, so a test does not need a player
+
+```sh
+venv/bin/python native.py                       # F2 captures; snapshots/ fills up
+venv/bin/python native.py --load-snapshot snapshots/snap001.snap   # resume there
+venv/bin/python replay.py snapshots/snap001.snap --frames 200 \
+      --verify-only compose_scroll,draw_entities
+```
+
+Verifying a native needs the game to be *in* the state that calls it, and those
+states are only reachable by playing: the in-game frame loop runs during a level,
+the HUD loop twice a level, the tally loop when a level ends. That is what made
+verification expensive — and why a 900-second session that never left the text
+screen recorded zero comparisons.
+
+So: play once, press **F2** (or `touch snapshot.request`, which needs no window
+focus), and start from there afterwards. `--snapshot-at 400,900` captures by frame
+number for an unattended run.
+
+`replay.py` runs a snapshot headlessly — no window, no keyboard, no audio device —
+and exits non-zero on a failure, so it can be a test. Any flag it does not
+recognise goes to `native.py`'s parser, which is the point: the same captured state
+can be replayed with a native on and off, and the difference attributed to that
+native rather than to having played differently.
+
+It can assert three things:
+
+- `--verify-only <names>` byte-compares natives against the code they replace.
+  This needs no determinism to mean anything: the comparison is between a native
+  and the original body **on the same call inside one run**, so the host clock and
+  the game's RNG cannot make it flaky.
+- `--require <names>` fails if a named routine never ran. Zero mismatches over a
+  state that never reaches the routine proves nothing, and this is what stops that
+  reading as a pass — the same trap as `mode=0x03`.
+- `--compare-restore` checks the machinery rather than the game: save, restore into
+  a second machine, save again, and diff every byte.
+
+What a snapshot holds: the 2 MB of guest memory (one flat Unicorn mapping, so one
+read), the register file including flags, the four VGA planes and the register
+state around them, the input state the game polls, every XMS block — the samples
+live there, so a snapshot without them has no sound — the Sound Blaster model, the
+open files with their positions, and the sample bank.
+
+Three things it deliberately does not hold:
+
+- **Hooks and natives are not state.** They come from `build_machine()` and the
+  flags, which is what lets a state captured with everything on be replayed with
+  one piece off.
+- **Playing voices are not resumed.** They are stopped, and the guest's voice table
+  is reset to agree. Restoring it as captured would leave slots busy forever — the
+  game asks that table, not the mixer, so nothing new would ever start.
+- **The floating-point site table is not captured, and does not need to be.** Sites
+  patch themselves by overwriting two bytes in the image, and those bytes live in
+  guest memory, so they restore with it. A restored machine sees an empty cache and
+  never consults it, because a patched site raises no interrupt.
+
+**Capture only at a frame boundary.** That is the one point where the x87 stack is
+empty — Borland's FP now runs on the real FPU, whose register file Unicorn will not
+reliably hand back — and where no native is part-way through reading its arguments
+off the live stack frame. The tag word is checked at capture and says so if the
+stack is not empty, rather than writing a snapshot that looks fine and restores
+wrong.
+
+**Snapshots are as copyrighted as the executable they came from**, holding the
+game's own decompressed code and data. `snapshots/` and `*.snap` are git-ignored
+by directory and again by extension, the same belt and braces as `game/`.
+
+## The page flip, and where the frame rate comes from
+
+```sh
+venv/bin/python native.py                        # native flip, paced at 70 Hz
+venv/bin/python native.py --flip-hz 0            # unpaced: as fast as it emulates
+venv/bin/python native.py --no-native-flip       # the guest's own flip, waits and all
+```
+
+`0x04d4b` is the page flipper, reached from 31 sites by the `push cs; call near`
+idiom - three of them the instruction immediately after a plane loop's exit. In
+full:
+
+```c
+void far page_flip(void) {
+    delay(0x1f - [0x1fd4]);              /* Borland delay(), timed on the PIT */
+    while (inp(0x3da) & 1) ;             /* wait for display enable to fall */
+    swap(&[0x1725], &[0x1727]);          /* the two page start addresses */
+    outpw(0x3d4, (hi << 8) | 0x0c);      /* CRTC start address high */
+    outpw(0x3d4, (lo << 8) | 0x0d);      /* ... and low */
+    while (!(inp(0x3da) & 8)) ;          /* wait for vertical retrace */
+    [0xd61] = ([0xd61] + 1) % 10;        /* frame phase, 0..9 */
+}
+```
+
+Two measurements made this worth replacing. The retrace wait spins **~1836 reads
+of `0x3da` per flip** - 94-95% of all port I/O in every state measured, each one a
+Python callback - and it consumes the guest instruction budget that would otherwise
+draw. The game was reaching a true 70 flips per second while the display loop
+presented only ~8 of them, because a display frame was one fixed chunk of
+instructions and most of that chunk went into spinning.
+
+So the flip is now the frame boundary: the native swaps the pages, programs the
+CRTC through the same `_crtc_write` an `OUT` would reach, advances the phase, and
+presents. Every game frame reaches the screen. Dropping the waits removes the
+pacing too, so the game ran ~250 fps until `--flip-hz` put it back as a sleep
+rather than a spin - the guest is idle either way, but a sleep costs no
+instructions and no callbacks. Overruns reset the schedule instead of accumulating
+debt, because the original does not catch up either: it waits out the next retrace
+and shows fewer frames. `flip_late` counts those, so "this state cannot hold 70 Hz"
+is a number - the bonus screen misses ~7% of its slots at 15.0 ms a frame.
+
+**Input moved to the flip as well, and had to.** A paced chunk spans dozens of
+frames and most of a second, so events pumped once per chunk responded less than
+twice a second. `pump()` is called from the flip, which puts input at the game's
+own frame rate.
+
+What the port trace exposed along the way, all of it from
+[`trace_ports.py`](trace_ports.py) against a snapshot:
+
+- The PIT traffic - 96 latch-and-read pairs a frame - was entirely `delay()`
+  called *by* the flipper. With the flip native, port I/O in a menu frame falls
+  from 6739 accesses to 7, and only the Sound Blaster IRQ remains.
+- `0x2203` is `read_pit()`: latch counter 0, read low and high with the classic
+  `call ret` I/O-settle idiom, `not bx` to turn the countdown into an up-counter.
+  `0x221d` calibrates and stores 1193 - PIT ticks per millisecond - at `[0x30c0]`,
+  which makes `0x223e` Borland's `delay(ms)`.
+- The two `0x3da` waits differ by 1400x in cost for a reason particular to this
+  emulator: bit 0 is toggled per read, deliberately, because the snow-avoidance
+  blit waits for a bit-0 transition per word copied. Bit 3 is derived from wall
+  clock and true only ~8% of each period, so that loop spins.
+- The hovered menu costs ~15.5 ms a frame of almost pure guest CPU - ~112,700
+  instructions against ~16,300 for the unhovered one. It was invisible until the
+  pacing came off, because the retrace wait padded every frame to 14.3 ms.
+
 ## The drawing path
 
 Mode X puts column `x` in plane `x & 3` at byte `x >> 2`, so every drawing routine
@@ -495,6 +626,9 @@ so this is architectural, not an optimisation.
 | `validate.py` | verifies the unpack, incl. the round-trip check |
 | `emulation.py` | DOS + VGA + SDL; runs the game interactively |
 | `native.py` | the native port; what you launch to play |
+| `snapshot.py` | captures and restores the whole machine, at a frame boundary |
+| `replay.py` | runs a snapshot headlessly; the harness a test hangs off |
+| `trace_ports.py` | every port read and write from a snapshot, attributed to the code |
 | `coverage.py` | measures how much of the image has been reimplemented |
 | `test_fn_start.py` | pins function-boundary attribution to known answers |
 | `test_retire.py` | drives the guest's own code to reach a state play cannot |
