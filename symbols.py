@@ -146,7 +146,7 @@ VARIABLES = {
     0x1798: "fade_level",               # 0..15, scales the palette
     0x179A: "fade_direction",           # 0xff seen when a fade is armed
     0x179B: "fade_start_colour",        # where the fade upload begins
-    0x18F6: "last_key",                 # ASCII; startup_screen spins until non-zero
+    0x18F6: "last_key",                 # ASCII; init spins until non-zero
     0x1FD4: "game_speed",               # page_flip delays (0x1f - this) ms
     0x1FD5: "gamma",                    # (gamma + 6) / 19 scales every palette
     0x201E: "blink_enable_src",         # only ever written zero
