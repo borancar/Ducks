@@ -7,6 +7,27 @@ Names live in [`symbols.py`](../../symbols.py), which the control socket's
 `where` — and so `stack`, `until`, `finish` and `step` — prints alongside the
 offset. A name ending in `?` there is tentative and is printed as such.
 
+## main, in full
+
+Every branch target below was resolved by the socket rather than by hand:
+
+```
+0x144d7  push bp / mov bp, sp
+0x144da  push 05da:f82d
+0x144e0  lcall install_int23         ; the Ctrl-C handler
+0x144e8  call init                   ; the whole startup screen
+0x144ec  push [video_mode]           ; [0x4fe], not a literal
+0x144f1  call set_mode_x
+0x144f7  mov [0x20a7], 1
+0x144fd  push 0 / push 0
+0x14502  call dac_set_black
+0x14508  push 200 / push 320
+0x1450f  call input_poll
+```
+
+So main installs a Ctrl-C handler, runs `init`, and sets the video mode - the
+mode number coming from `[0x4fe]` rather than being hardcoded.
+
 ## The chain
 
 ```

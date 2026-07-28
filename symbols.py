@@ -31,6 +31,7 @@ is what the notes are indexed by.
 # Image offset -> name. Sorted by offset; it reads as a map of the binary.
 FUNCTIONS = {
     0x0014E: "crt_startup",             # no prologue; calls main
+    0x00EB5: "install_int23",           # the Ctrl-C handler installer
     0x01238: "isatty",                  # native
     0x012EB: "dos_lseek",               # native
     0x014A3: "dos_read",                # native
@@ -53,6 +54,7 @@ FUNCTIONS = {
     0x04D04: "set_bios_mode",           # AH=0, AL=mode, then int86(0x10)
     0x04D2A: "clear_vram",              # native
     0x04D4B: "page_flip",               # native
+    0x0572A: "dac_set_black?",          # writes an index, then three zeros
     0x05761: "plot_pixel",              # native
     0x057EE: "set_plane",               # native; map mask + [0x177d]
     0x05AC2: "blit_rows_masked",        # native
@@ -147,6 +149,7 @@ VARIABLES = {
     0x179A: "fade_direction",           # 0xff seen when a fade is armed
     0x179B: "fade_start_colour",        # where the fade upload begins
     0x18F6: "last_key",                 # ASCII; init spins until non-zero
+    0x04FE: "video_mode",               # main passes this to set_mode_x
     0x1FD4: "game_speed",               # page_flip delays (0x1f - this) ms
     0x1FD5: "gamma",                    # (gamma + 6) / 19 scales every palette
     0x201E: "blink_enable_src",         # only ever written zero
