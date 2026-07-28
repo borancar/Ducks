@@ -82,11 +82,62 @@ speedup ([drawing-port-goal](drawing-port-goal.md)), and it makes the remaining
 traffic legible. But it is not a speedup, and the timing was measured three times
 alternating rather than once because of [flip-transient](flip-transient.md).
 
+## 0x3da, chased: it is one routine, and it is CGA snow avoidance
+
+A static scan for `mov dx, 0x3da` (`ba da 03`) finds **three sites in the whole
+image**, which is a complete answer where sampling a run is not:
+
+| site | in | what |
+| --- | --- | --- |
+| `0x01dc3` | `0x01d8e` | the snow-avoidance blit |
+| `0x04d66` | `0x04d4b` | page_flip waiting for display enable |
+| `0x04daf` | `0x04d4b` | page_flip waiting for retrace |
+
+Two are inside the function the native flip already replaces. Everything left is
+`0x01d8e`, a **word-wise memmove** with a flag that selects a CGA-safe path:
+
+```
+0x01dbf  rep movsw                 ; flag clear: the fast path
+...
+0x01dce  cli
+0x01dcf  in al, dx / ror al,1 / jb   ; wait for bit 0 to fall
+0x01dd4  in al, dx / ror al,1 / jae  ; wait for it to rise
+0x01dd9  movsw                     ; copy ONE word
+0x01dda  sti
+0x01ddb  loop 0x1dce
+```
+
+**Two port reads and a cli/sti per word copied**, and the `ES == DS` branch at
+`0x01ddf` splits it into `lodsw`/`stosw` with two waits each — *four* reads per
+word. This is the 1980s technique for avoiding CGA snow, which no VGA needs.
+
+Traced from program start rather than from a snapshot: all 1,047 reads in a
+400-frame boot land in the first 20 frames, split 524/523 between `0x01dcf` and
+`0x01dd4` — the two-reads-per-word path, ~523 words. Every snapshot in the
+library is captured after this, which is why replaying them only ever showed
+page_flip.
+
+That also explains the number that started this: two different played sessions
+each reported **exactly 9,475** reads of `0x3da`. An identical count across
+different play is not a coincidence, it is a deterministic startup path.
+
+**A note on measuring it.** `replay.py` forces `--flip-hz 0` and `trace_ports.py`
+does not, and an unpaced retrace spin burns far more reads waiting for the same
+wall-clock retrace — 9,156 against 576 on the same snapshot and frame count. The
+port is a poll against a clock, so its count is a function of pacing, not only of
+the guest. Compare like with like.
+
 ## What is next
 
-`0x3da` again, at 72.5% of what remains: 9,663 reads over 200 frames. The native
-flip removed the spin from `page_flip`, so this is something else still waiting on
-retrace, and `trace_ports.py` will name it.
+Replacing the two loops in `0x01d8e` would take the last `0x3da` traffic to
+nothing. The function ends `ret 0xa` — the Pascal convention, callee pops — which
+the native dispatcher does not model, so this wants the loop-level treatment the
+plane loops and the fade already use, hooking `0x01dce` and `0x01ddf` rather than
+the function.
+
+It is a startup cost of about half a second, not a per-frame one, so it is worth
+doing for tidiness rather than for speed — and that should be said out loud, not
+discovered later.
 
 ## Reading the report
 
