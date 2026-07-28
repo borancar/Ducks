@@ -659,7 +659,9 @@ so this is architectural, not an optimisation.
 | `replay.py` | runs a snapshot headlessly; the harness a test hangs off |
 | `trace_ports.py` | every port read and write from a snapshot, attributed to the code |
 | `coverage.py` | measures how much of the image has been reimplemented |
+| `symbols.py` | names for identified image offsets; printed by the control socket |
 | `test_fn_start.py` | pins function-boundary attribution to known answers |
+| `test_symbols.py` | every native and hooked loop head is named, and the names agree |
 | `test_retire.py` | drives the guest's own code to reach a state play cannot |
 | `probe_plot_ptr.py` | resolves which pixel plotter `[0x53e]` points at |
 | `export_sessions.py` | regenerates `docs/sessions/` from a session transcript |
