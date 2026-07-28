@@ -65,6 +65,14 @@ rather than code.
 So main installs a Ctrl-C handler, runs `init`, and sets the video mode - the
 mode number coming from `[0x4fe]` rather than being hardcoded.
 
+Immediately after the first `input_poll` it calls **`scan_save_slots`**
+(`0x13fea`), which is the `GAME1.SG` ... `GAME5.SG` probing visible in every
+startup log. The names are not five constants: `save_name` holds the template
+`"GAME-.SG"` and the loop patches the digit into offset 4 -
+`mov [0x21a9], al` after `add al, 0x30` - then calls `fopen(name, "rb")` and, if
+the handle is non-null, reads the slot. The bound is `cmp [bp-2], 6`, so slots 1
+to 5.
+
 ## The chain
 
 ```
