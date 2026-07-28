@@ -44,11 +44,13 @@ bisect cost four minutes.
 
 ## Two traps
 
-**`disasm` prints linear addresses, and so do branch operands.** Every note in
-this project uses image offsets, which are `0x1100` lower. The instruction column
-is tagged `i+0x…`; the operands are not. A `call 0xcaea` there is image
-`0x0b9ea` — see [entry-points](entry-points.md), where that nearly became a
-wrong name in the notes.
+**`disasm` prints linear addresses, and so do capstone's branch operands.** Every
+note in this project uses image offsets, which are `image_base` lower. The
+instruction column is tagged `i+0x…`, and each branch now also carries
+`-> i+0x…` with the symbol if it has one — resolved through the segment, so the
+64 KB wrap of `call rel16` is handled rather than left to whoever reads it. Both
+wrong addresses recorded on 2026-07-28 came from doing that conversion by hand;
+see [address-spaces](address-spaces.md).
 
 **A command is serviced at a frame boundary, so two commands are a chunk apart.**
 `key return` followed by `step` does not step from the keypress: the machine has

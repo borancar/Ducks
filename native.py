@@ -4866,11 +4866,42 @@ class Control:
             lines.append(f"  {lin + i:#07x}  {chunk.hex(' '):<47}  {text}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _branch_target(m, ins, seg):
+        """The image offset a jump or call goes to, resolved in segment space.
+
+        Capstone gives the target in the address space it disassembled in, which
+        is linear here. That is wrong twice over for a near branch: the notes use
+        image offsets, and the arithmetic wraps at 0x10000 within the segment, so
+        a target computed linearly can be a whole 64 KB out.
+        """
+        if not ins.op_str.startswith("0x"):
+            return None                      # register or memory indirect
+        if not (ins.mnemonic.startswith("j") or ins.mnemonic == "call"
+                or ins.mnemonic == "loop" or ins.mnemonic.startswith("loop")):
+            return None
+        try:
+            linear_target = int(ins.op_str, 16)
+        except ValueError:
+            return None
+        base = seg * 16                      # linear base of the segment
+        nxt = ins.address + ins.size
+        disp = linear_target - nxt           # what the encoding held
+        off = ((nxt - base) + disp) & 0xFFFF
+        return base + off - m.image_base
+
     def _disasm(self, m, lin, n):
         md = _disasm16()
         if md is None:
             return "error: capstone is not available"
         n = max(1, min(n, 64))
+        # Resolving a near branch needs the segment it executes in. CS is right
+        # when disassembling where the machine is; elsewhere assume the segment
+        # whose base is the largest paragraph boundary within 64 KB below the
+        # address, which is what CS would have to be for the address to be
+        # reachable at all.
+        cs = m._reg(UC_X86_REG_CS)
+        seg = cs if 0 <= lin - cs * 16 < 0x10000 else (lin >> 4) & 0xF000
         code = bytes(m.uc.mem_read(lin, min(n * 8, 512)))
         out = []
         for i, ins in enumerate(md.disasm(code, lin)):
@@ -4878,8 +4909,13 @@ class Control:
                 break
             off = ins.address - m.image_base
             tag = f"i+{off:#07x}" if 0 <= off < DGROUP_IMAGE_OFF else " " * 10
+            tgt = self._branch_target(m, ins, seg)
+            arrow = ""
+            if tgt is not None and 0 <= tgt < DGROUP_IMAGE_OFF:
+                named = symbols.describe(tgt)
+                arrow = f"   -> i+{tgt:#07x}" + (f" {named}" if named else "")
             out.append(f"  {ins.address:#07x} {tag}  {ins.bytes.hex(' '):<16} "
-                       f"{ins.mnemonic} {ins.op_str}")
+                       f"{ins.mnemonic} {ins.op_str}{arrow}")
         return "\n".join(out) or "  (nothing decoded)"
 
     @staticmethod
