@@ -15,15 +15,29 @@ Every branch target below was resolved by the socket rather than by hand:
 0x144d7  push bp / mov bp, sp
 0x144da  push 05da:f82d
 0x144e0  lcall install_int23         ; the Ctrl-C handler
-0x144e8  call init                   ; the whole startup screen
+0x144e9  call init                   ; the whole startup screen
 0x144ec  push [video_mode]           ; [0x4fe], not a literal
 0x144f1  call set_mode_x
 0x144f7  mov [0x20a7], 1
 0x144fd  push 0 / push 0
-0x14502  call dac_set_black
+0x14502  call dac_set_black          ; image 0x0572a
 0x14508  push 200 / push 320         ; the resolution
-0x1450f  call input_poll
+0x1450f  call input_poll             ; image 0x06869
+0x14516  call scan_save_slots        ; image 0x13fea
+0x14519  push 100 / push ds:0x28ff   ; a far pointer and 100
+0x14520  call 0x102d7                ; unnamed; prologue reserves 0x32 locals
+0x14527  call 0x0c156                ; the loader pass
+0x1452f  call 0x04ca0 (0x2b, 1)      ; unnamed; tests [0x4f4] first
 ```
+
+Every address above is the **call instruction**, taken from the disassembly of
+this run of bytes rather than from a backtrace — see
+[the addresses a stack walk gives](#the-addresses-a-stack-walk-gives-are-return-addresses).
+Each is preceded by the `push cs` of the `push cs; call near` idiom, one byte
+earlier. The three call targets that wrap 64 KB in image space (`0x0572a`,
+`0x06869`, `0x0c156`) were resolved by the prologue rule from
+[address-spaces](address-spaces.md), checked first against the four targets
+already known.
 
 ### Why input_poll takes a resolution
 
@@ -230,14 +244,38 @@ breakpointing the INT 10h wrapper, which is called 1,493 times a session for
 cursor moves and palette blocks:
 
 ```
-main 0x144d7  at 0x144f4
+main 0x144d7  at 0x144f1
   └─ 0x13519  set_mode_x
        └─ 0x04d04  set_bios_mode
             └─ int86 0x0293a  ->  INT 10h, AX=0x0013
 ```
 
-So **main sets the mode directly, at `0x144f4`** — before the loader passes it
-calls at `0x1452a`. `set_bios_mode` builds `AH=0, AL=mode` into a register struct
+So **main sets the mode directly, at `0x144f1`** — before the loader passes it
+calls at `0x14527`.
+
+### The addresses a stack walk gives are return addresses
+
+**Settled 2026-07-29.** This section previously said `0x144f4` and `0x1452a`,
+against `0x144f1` in the listing at the top of this note. Disassembling main's
+opening from its prologue settles it, and explains both numbers rather than
+choosing between them:
+
+```
+0x144ec  ff36fe04   push word ptr [0x4fe]
+0x144f0  0e         push cs
+0x144f1  e825f0     call 0x13519          <- the call
+0x144f4  83c402     add sp, 2             <- where it returns to
+```
+
+`call rel16` is `E8` plus two bytes, so **a call site read off a backtrace is
+three higher than the call instruction**. Both figures here were observed
+correctly; they are just answers to a different question. The same +3 accounts
+for `0x1452a`, which is where the loader pass called at `0x14527` returns to.
+
+Worth carrying, because everything in this note was established by breakpointing
+a live machine: when the socket reports a frame, subtract 3 to name the call
+instruction — and the `push cs` of the `push cs; call near` idiom sits one byte
+before that again. `set_bios_mode` builds `AH=0, AL=mode` into a register struct
 and hands it to `int86`; `set_mode_x` then unchains the result in place:
 
 ```
