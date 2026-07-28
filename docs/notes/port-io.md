@@ -261,6 +261,44 @@ This is a startup cost of about half a second, not a per-frame one, so it was
 worth doing for tidiness rather than for speed — said out loud rather than
 discovered later.
 
+## Where this stops
+
+`0x057ee` is `set_plane(n)`: store the plane at `DGROUP+0x177d`, set the
+sequencer index to 2, write `1 << n` as the map mask. It was the last non-trivial
+source — 460 index writes and 460 mask writes in 60 frames — and it is now
+native. The ordinary `--verify` harness **cannot** check it, because that harness
+diffs the four planes and what this changes is the sequencer; a native that did
+nothing at all would pass. It is checked instead by unregistering it, letting the
+guest's body run, and comparing the sequencer state the guest produced against
+what the native produces from the same argument: **460 calls, 0 mismatched.**
+
+Sixty frames of `teleporter-level`, before and after everything above:
+
+| | accesses | per frame |
+| --- | --- | --- |
+| session that started this | 401,427 in 57s | ~7,000/s |
+| after the flip, DAC and snow work | 2,707 | 45 |
+| after `set_plane` | **938** | **15.6** |
+
+**And 92.7% of what remains is one acknowledge sequence.** Every sound IRQ reads
+`0x22e` — the DSP status read that acknowledges the card — then writes an EOI to
+`0x0a0` and `0x020`. Three accesses per interrupt, all from `0x1580c`, counts
+exactly equal because it is one of each, every time.
+
+That is not waste. It is what an interrupt handler on this hardware has to do,
+and unlike the retrace spin or the snow waits there is no version of the program
+that skips it. Removing it would mean moving the acknowledge into the Sound
+Blaster and PIC models and replacing the handler's tail — three Python callbacks
+per interrupt collapsed into one, at roughly three microseconds each, 43 times a
+second. **So port I/O is finished**, and the remaining 60 writes to `0x3c8` are
+single index writes outside any loop, one per fade.
+
+The thing worth measuring next is not ports at all. In the same session the time
+report puts `page_flip` at 4.0% of the run — nearly all of it the deliberate 70 Hz
+sleep — and the two hot plane loops at 2.0% between them, against 19.01s of native
+time in a 310.9s guest run. Whatever is expensive now is the emulated CPU, not the
+emulated hardware.
+
 ## Reading the report
 
 The line `N palette byte(s) did NOT reach port 0x3c9` is there so that absence is

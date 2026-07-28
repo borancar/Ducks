@@ -3481,6 +3481,20 @@ def native_page_flip(m, args):
     return None
 
 
+def native_set_plane(m, args):
+    """0x057ee: select one write plane, and record which one it was.
+
+    `shl al, cl` shifts by CL & 31 on a 186 and later, so a plane number of 8 or
+    more clears the mask rather than wrapping it back to plane 0. Only 0..3 have
+    ever been seen, but the guest is what defines this.
+    """
+    n = struct.unpack("<H", m.uc.mem_read(args, 2))[0] & 0xFF
+    m.write(m.dgroup_base + 0x177D, bytes([n]))
+    m.seq_index = 0x02
+    m._seq_write(0x02, (1 << (n & 31)) & 0xFF)
+    return None
+
+
 def native_clear_vram(m, args):
     """Native replacement for the full-screen clear at 0x04d2a. Takes no args.
 
@@ -4328,6 +4342,7 @@ NATIVE_TABLE = [
     (0x05DC4, "compose_scroll", native_compose_scroll, "far"),
     (0x05AC2, "blit_rows_masked", native_blit_rows_masked, "far"),
     (0x05761, "plot_pixel", native_plot_pixel, "far"),
+    (0x057EE, "set_plane", native_set_plane, "far"),
     (0x04D2A, "clear_vram", native_clear_vram, "far"),
     (0x0ABA5, "draw_entities", native_draw_entities, "far"),
     (0x065F1, "outline_sprite", native_outline_sprite, "far"),
