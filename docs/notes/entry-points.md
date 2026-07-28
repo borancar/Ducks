@@ -21,9 +21,17 @@ Every branch target below was resolved by the socket rather than by hand:
 0x144f7  mov [0x20a7], 1
 0x144fd  push 0 / push 0
 0x14502  call dac_set_black
-0x14508  push 200 / push 320
+0x14508  push 200 / push 320         ; the resolution
 0x1450f  call input_poll
 ```
+
+`input_poll` takes the screen resolution, not two arbitrary constants - 320 x 200,
+which is what the mouse code needs to clamp and scale against. The same pair is
+passed in `init`'s key-wait loop, **before the video mode has been set at all**,
+so the game treats 320 x 200 as its logical input space regardless of the mode it
+is currently in. That sits alongside the note in the README that INT 33h reports
+in a virtual 640 x 200 space for mode 13h: the driver's space and the game's are
+not the same, and the game converts.
 
 So main installs a Ctrl-C handler, runs `init`, and sets the video mode - the
 mode number coming from `[0x4fe]` rather than being hardcoded.

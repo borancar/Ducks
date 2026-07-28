@@ -65,7 +65,8 @@ FUNCTIONS = {
     0x056D2: "palette_upload",          # full 768-byte DAC upload, unscaled
     0x063D6: "draw_sprite",             # native
     0x065F1: "outline_sprite",          # native
-    0x06869: "input_poll",              # the mouse/keyboard poll; takes (w, h)
+    0x06869: "input_poll",              # the mouse/keyboard poll; takes the
+                                        # screen resolution, always 320 x 200
     0x0675B: "mouse_motion",            # native
     0x0678E: "mouse_presses",           # native
     0x067BA: "mouse_releases",          # native
