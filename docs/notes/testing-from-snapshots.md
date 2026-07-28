@@ -137,6 +137,20 @@ missed.
 | `level-start` | the opening of a level |
 | `menu-flip-transient` | between-level menu; see [flip-transient](flip-transient.md) |
 | `readme-before-crash` | readme page 3 of 3 - send Down over the control socket and it crashes |
+| `click-castle` | in play, grey stone/castle level, waiting for a mouse click |
+| `click-snow` | in play, snow-and-hedge level, waiting for a mouse click |
+| `click-cave-1/2/3` | the same cave moment at frames 2249, 2256 and 2266 |
+
+The five `click-*` states are all mid-play, stopped at the point where the game
+is waiting for a mouse click. They are the states to reach for when a native
+needs exercising against real gameplay rather than against the demo — see
+"Still untested", which they do not by themselves resolve, since they were
+captured during human play but replay them and the demo drives on.
+
+`click-cave-3` is the base for the synthetic blink verification in
+[port-io](port-io.md): the DAC loops at `0x0b1c9` and `0x0b202` are behind a flag
+nothing ever sets, so they are reached by forcing `[0x201e]`/`[0x2157]` open
+rather than by playing.
 
 Each carries its own description, `elapsed` and `chain4`, and each was verified
 byte-for-byte after being renamed.
