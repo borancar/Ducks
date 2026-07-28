@@ -146,9 +146,28 @@ relate to the shifted string block: they do not. The shifted strings live in the
 egg's information block, and the names the second array points at are **already
 decoded** — something copies them out and subtracts the one on the way.
 
-The remaining unknown is small: which routine does that copy, and what the flag
-at `+0x0c` means. `1` on `DUCKING HELL` alone is consistent with "last", and with
-a shareware lock, and nothing here distinguishes them.
+## The flag at `+0x0c` means "last"
+
+**Settled 2026-07-29, by playing it.** The reading recorded here was that `1` on
+`DUCKING HELL` alone is consistent with "last" *and* with a shareware lock, and
+that nothing in the tables distinguishes them. Playing does: `SO FAR SO GOOD?` —
+record 2, flag `0` — refuses to start without registering and says so, only in
+the full version. A lock would have to be set on that record. It is not, so the
+flag is the terminator: set on the last record of each array, which is why the
+readme array carries it on `DUCKS EDITOR SUITE` and nowhere else.
+
+That relocates the question rather than closing it, and narrows where to look.
+The gate does not fall on an episode edge: reported from the game's own message,
+it lands somewhere inside `SHALLOW END`, which is levels 11 to 30 — the exact
+level is not pinned. So it cannot be a test on the episode ordinal, and no
+per-episode field can express it. It is a **level-number threshold**, compared
+against a registration state held outside the index; the 14-byte record has no
+part in it. Worth noting that the machine these tables were read from prints
+`MAIN.EGG: Full Version` and the gate still applies, so that label describes the
+egg's contents and not whether the copy is registered.
+
+The remaining unknown from the original read is smaller: which routine copies the
+names out of the information block and subtracts the one on the way.
 
 ## Reproducing it
 
