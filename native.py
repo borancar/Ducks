@@ -4638,6 +4638,16 @@ class Control:
         status                frame, mode, flips, pending keys, CS:IP
         quit                  ask the run to stop, as F12 does
 
+        where                 CS:IP as an image offset, and its function
+        regs                  the register file and the flags
+        read <addr> [len]     hex and ASCII, default 64 bytes
+        disasm <addr> [n]     n instructions, default 16
+        stack [depth]         the BP chain, each frame's return named
+
+    Addresses take a prefix, so an answer can be pasted back in as a question:
+    `i+0x04d4b` is an image offset, `d+0x1798` a DGROUP offset, `05da:010f` a
+    segment and offset, and a bare number is linear.
+
     Key names are pygame's - `down`, `escape`, `return`, `a` - which avoids a
     second name-to-scancode table: the name resolves to a pygame key and
     emulation.KEYMAP, the same table the window's own event loop uses, turns
@@ -4740,7 +4750,116 @@ class Control:
         if cmd == "quit":
             m.quit_requested = True
             return "ok: quitting"
+        if cmd == "where":
+            return self._where(m, m._reg(UC_X86_REG_CS) * 16
+                               + m._reg(UC_X86_REG_IP))
+        if cmd == "regs":
+            return self._regs(m)
+        if cmd == "read":
+            a, _, n = rest.partition(" ")
+            return self._read(m, self._addr(m, a), int(n, 0) if n.strip() else 64)
+        if cmd == "disasm":
+            a, _, n = rest.partition(" ")
+            return self._disasm(m, self._addr(m, a),
+                                int(n, 0) if n.strip() else 16)
+        if cmd == "stack":
+            return self._stack(m, int(rest, 0) if rest.strip() else 8)
         return f"error: unknown command {cmd!r}"
+
+    @staticmethod
+    def _addr(m, s):
+        """Resolve one of the four address forms to a linear address."""
+        s = s.strip()
+        if not s:
+            raise ValueError("expected an address")
+        if s.startswith("i+"):
+            return m.image_base + int(s[2:], 0)
+        if s.startswith("d+"):
+            return m.dgroup_base + int(s[2:], 0)
+        if ":" in s:
+            seg, off = s.split(":", 1)
+            return int(seg, 16) * 16 + int(off, 16)
+        return int(s, 0)
+
+    def _where(self, m, lin):
+        """Name a linear address the way the notes do, or say what it is not."""
+        off = lin - m.image_base
+        img = getattr(m, "report_img", None)
+        if not (0 <= off < (len(img) if img else 0)):
+            return f"{lin:#07x} outside the image"
+        if off >= DGROUP_IMAGE_OFF:
+            return (f"{lin:#07x} = image {off:#07x} = DGROUP+"
+                    f"{off - DGROUP_IMAGE_OFF:#07x} (data)")
+        fn = find_function_start(img, off)
+        return (f"{lin:#07x} = image {off:#07x}"
+                + (f" in {fn:#07x}" if fn is not None else " (no prologue found)"))
+
+    @staticmethod
+    def _regs(m):
+        r = [("ax", UC_X86_REG_AX), ("bx", UC_X86_REG_BX), ("cx", UC_X86_REG_CX),
+             ("dx", UC_X86_REG_DX), ("si", UC_X86_REG_SI), ("di", UC_X86_REG_DI),
+             ("bp", UC_X86_REG_BP), ("sp", UC_X86_REG_SP), ("cs", UC_X86_REG_CS),
+             ("ds", UC_X86_REG_DS), ("es", UC_X86_REG_ES), ("ss", UC_X86_REG_SS),
+             ("ip", UC_X86_REG_IP)]
+        out = "  ".join(f"{n}={m._reg(v):04x}" for n, v in r)
+        f = m.uc.reg_read(UC_X86_REG_EFLAGS)
+        names = [n for bit, n in ((0, "CF"), (6, "ZF"), (7, "SF"), (8, "TF"),
+                                  (9, "IF"), (10, "DF"), (11, "OF"))
+                 if f & (1 << bit)]
+        return f"{out}\n  flags={f:04x} [{' '.join(names)}]"
+
+    @staticmethod
+    def _read(m, lin, n):
+        n = max(1, min(n, 1024))
+        data = bytes(m.uc.mem_read(lin, n))
+        lines = []
+        for i in range(0, n, 16):
+            chunk = data[i:i + 16]
+            text = "".join(chr(c) if 32 <= c < 127 else "." for c in chunk)
+            lines.append(f"  {lin + i:#07x}  {chunk.hex(' '):<47}  {text}")
+        return "\n".join(lines)
+
+    def _disasm(self, m, lin, n):
+        md = _disasm16()
+        if md is None:
+            return "error: capstone is not available"
+        n = max(1, min(n, 64))
+        code = bytes(m.uc.mem_read(lin, min(n * 8, 512)))
+        out = []
+        for i, ins in enumerate(md.disasm(code, lin)):
+            if i >= n:
+                break
+            off = ins.address - m.image_base
+            tag = f"i+{off:#07x}" if 0 <= off < DGROUP_IMAGE_OFF else " " * 10
+            out.append(f"  {ins.address:#07x} {tag}  {ins.bytes.hex(' '):<16} "
+                       f"{ins.mnemonic} {ins.op_str}")
+        return "\n".join(out) or "  (nothing decoded)"
+
+    def _stack(self, m, depth):
+        """Walk the BP chain, naming each frame's return address.
+
+        Borland's large model pushes CS even for a same-segment call - the
+        `push cs; call near` idiom - so a frame's return is the far pair at
+        [BP+2] and [BP+4]. The chain ends when BP stops increasing, which is
+        also how it ends when the frame it is reading is not a frame at all.
+        """
+        ss = m._reg(UC_X86_REG_SS)
+        bp = m._reg(UC_X86_REG_BP)
+        out = []
+        for i in range(max(1, min(depth, 32))):
+            try:
+                nxt, ip, cs = struct.unpack("<HHH",
+                                            m.uc.mem_read(ss * 16 + bp, 6))
+            except Exception:
+                out.append(f"  frame {i}: BP={bp:04x} unreadable")
+                break
+            out.append(f"  frame {i}: BP={bp:04x} ret {cs:04x}:{ip:04x} -> "
+                       + self._where(m, cs * 16 + ip))
+            if nxt <= bp:
+                out.append(f"  (chain ends: next BP {nxt:04x} does not grow)")
+                break
+            bp = nxt
+        return "\n".join(out)
 
     def _press(self, m, name, hold):
         code = pygame.key.key_code(name)
