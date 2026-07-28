@@ -13,6 +13,8 @@ Current, and kept current. Where these disagree with
   socket: press keys, capture, ask where it is
 - [flip-transient](flip-transient.md) — the "first 120 frames run 4x slow" was
   load on the measuring machine; what is left of it, and why the control hid it
+- [open-episode-index](open-episode-index.md) — the 303-slice index built
+  from MAIN.EGG at startup, worth extracting; and why `snap` cannot capture there
 - [open-game-speed](open-game-speed.md) — the game's `[<]`/`[>]` speed control
   was never reimplemented; the native flip drops the delay it worked through
 - [verification-lessons](verification-lessons.md) — broken instrumentation gives
