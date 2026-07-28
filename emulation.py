@@ -28,8 +28,6 @@ import sys
 import time
 from collections import Counter, deque
 
-os.environ.setdefault("SDL_VIDEODRIVER", "x11")
-
 import pygame
 from unicorn import *
 from unicorn.x86_const import *
@@ -1108,7 +1106,11 @@ def main():
             elif ev.type == pygame.MOUSEMOTION:
                 mx, my = ev.pos
                 # INT 33h reports in a virtual 640x200 space for mode 13h.
-                m.mouse_pos = (int(mx / win_w * 640), int(my / win_h * 200))
+                # Against the window's real size, for the same reason the blit
+                # below uses it: win_w/win_h are what was asked for, and the
+                # pointer arrives in the window that actually exists.
+                sw, sh = screen.get_size()
+                m.mouse_pos = (int(mx / sw * 640), int(my / sh * 200))
                 # ev.rel is in window pixels, so at --scale 3 every movement is
                 # reported 3x too large. Divide it back out so one game pixel of
                 # cursor travel matches one game pixel of pointer travel, and
@@ -1164,7 +1166,12 @@ def main():
         # Convert the 8-bit palettised surface to the display format before
         # scaling: transform.scale needs matching source/destination formats.
         surf = make_surface(m, font, CELL).convert(screen)
-        pygame.transform.scale(surf, (win_w, win_h), screen)
+        # The display surface's own size, not the size that was asked for. A
+        # window manager can hand back a smaller window than set_mode requested
+        # - and can resize it later - and transform.scale requires the
+        # destination to be exactly the size given, so anything else is a crash
+        # on the first frame. native.py has always done it this way.
+        pygame.transform.scale(surf, screen.get_size(), screen)
         pygame.display.flip()
         frames += 1
 

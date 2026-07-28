@@ -14,6 +14,20 @@ commands recorded in old logs remain valid.
 The `--no-` forms are the way to test whether a native is responsible for
 something — turn one off, reproduce, compare.
 
+## Running the reference instead
+
+`venv/bin/python emulation.py --blaster` runs the full emulation, which is the
+baseline natives are checked against. Two things about it were written on a
+different machine and only broke here:
+
+- it forced `SDL_VIDEODRIVER=x11`, which on a Wayland desktop means XWayland.
+  Removed — SDL picks, and `SDL_VIDEODRIVER=…` in the environment still overrides.
+- it scaled each frame to the size it *asked* `set_mode` for. The compositor
+  handed back a smaller window (1920x1200 requested, 1600x1000 real), and
+  `transform.scale` requires the destination to be exactly the size given, so it
+  died on the first frame. It now uses `screen.get_size()`, as `native.py` always
+  has. The mouse mapping had the same stale divisor.
+
 ## The unpacked image is required
 
 `--native-setup` writes one-shot interrupt stubs into the image. With the packed

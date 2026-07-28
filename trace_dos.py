@@ -169,6 +169,19 @@ class DosMachine:
         self.start = (self.load_seg + cs) * 16 + ip
 
     # ----------------------------------------------------------------- utils
+    @staticmethod
+    def device_info(handle):
+        """The device-information word DOS returns for AH=44h AL=00h.
+
+        Bit 7 marks a character device. The three standard handles are the
+        console and everything this machine opens is a real file, so the answer
+        is that simple - and it is deterministic, which reading an untouched DX
+        was not. Lives here rather than in a caller because native.py serves
+        isatty()/ioctl() at the function level and the two answers must agree;
+        it delegates to this one.
+        """
+        return 0x80 if handle in (0, 1, 2) else 0x00
+
     def _rd(self, seg, off, n):
         return bytes(self.uc.mem_read(seg * 16 + off, n))
 
@@ -425,7 +438,9 @@ class DosMachine:
             else:
                 self._cf(False)                         # set attrs: accept
             return
-        if ah in (0x49, 0x4A, 0x33, 0x38, 0x44, 0x0B, 0x62):
+        # 0x44 was in this list, which is why the answer below never ran: an
+        # accepted-and-ignored call leaves DX holding whatever it held before.
+        if ah in (0x49, 0x4A, 0x33, 0x38, 0x0B, 0x62):
             if ah == 0x62:
                 self._set(UC_X86_REG_BX, PSP_SEG)
             if ah == 0x0B:
@@ -549,6 +564,18 @@ class DosMachine:
             h.pos = max(0, min(h.pos, len(h.data)))
             self._set(UC_X86_REG_AX, h.pos & 0xFFFF)
             self._set(UC_X86_REG_DX, (h.pos >> 16) & 0xFFFF)
+            return
+        if ah == 0x44 and al == 0x00:
+            # IOCTL get-device-info. Ignoring this left the game reading
+            # whatever happened to be in DX, and it uses the answer to decide
+            # how a stream is buffered: told stdout was a file, it buffered the
+            # startup messages and never flushed them, so nothing was written
+            # and the BIOS cursor never moved. The game positions the text it
+            # pokes into 0xb8000 itself by asking INT 10h 03h where the cursor
+            # is, which is why the visible symptom was its 80-column rules
+            # starting mid-line and running over the messages.
+            self._set(UC_X86_REG_DX, self.device_info(bx))
+            self._set(UC_X86_REG_AX, self.device_info(bx))
             return
         if ah == 0x41:
             name = self._str(ds, dx)

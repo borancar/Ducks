@@ -3936,13 +3936,13 @@ def native_int86(m, args):
 def _device_info(handle):
     """The device-information word DOS returns for AH=44h AL=00h.
 
-    Bit 7 marks a character device. The shim ignores AH=44h entirely, so today
-    the game reads whatever happened to be in DX - it works only because the
-    answer is used to pick stream buffering. Answering properly is both
-    deterministic and correct: the three standard handles are the console, and
-    everything the game opens is a file.
+    One definition, in the shim, because these natives remove the interrupt but
+    must not change the answer: with --no-native-file the same request falls
+    through to emulation.VgaDos and has to come back the same. The shim used to
+    ignore AH=44h altogether, which is what made the startup console unreadable
+    under emulation.py - see DosMachine.device_info.
     """
-    return 0x80 if handle in (0, 1, 2) else 0x00
+    return emulation.VgaDos.device_info(handle)
 
 
 def native_isatty(m, args):
