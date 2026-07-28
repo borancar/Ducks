@@ -25,13 +25,42 @@ Every branch target below was resolved by the socket rather than by hand:
 0x1450f  call input_poll
 ```
 
-`input_poll` takes the screen resolution, not two arbitrary constants - 320 x 200,
-which is what the mouse code needs to clamp and scale against. The same pair is
-passed in `init`'s key-wait loop, **before the video mode has been set at all**,
-so the game treats 320 x 200 as its logical input space regardless of the mode it
-is currently in. That sits alongside the note in the README that INT 33h reports
-in a virtual 640 x 200 space for mode 13h: the driver's space and the game's are
-not the same, and the game converts.
+### Why input_poll takes a resolution
+
+Because **the game keeps the cursor position itself**, and the resolution is the
+clamp bound. The width and height are loaded into SI and DI at the top and are
+not passed on - `mouse_motion` receives only two far pointers, `&mouse_dx` and
+`&mouse_dy`:
+
+```
+mov si, [bp+6] / mov di, [bp+8]        ; 320, 200 - kept in registers
+push ds / push 0x18dd                  ; &mouse_dy
+push ds / push 0x18db                  ; &mouse_dx
+call mouse_motion                      ; 8 bytes popped: the two pointers only
+...
+mov ax, [mouse_dx] / cdq
+add [mouse_x], ax / adc [mouse_x+2], dx    ; accumulate into a 32-bit position
+mov ax, [mouse_dy] / cdq
+add [mouse_y], ax / adc [mouse_y+2], dx
+cmp si, [mouse_x] / ja ok / mov ax, si / dec ax / mov [mouse_x], ax   ; clamp to w-1
+cmp di, [mouse_y] / ja ok / mov ax, di / dec ax / mov [mouse_y], ax   ; clamp to h-1
+                                                                      ; and to 0 below
+```
+
+That is the whole reason. INT 33h is only ever asked for **relative** motion -
+the README notes the game never calls function `0x03`, so absolute position is
+irrelevant to it - which means the position is the game's own running total, and
+a total accumulated from deltas has to be bounded by something. The bound is
+passed in rather than assumed, which is why the same 320 x 200 appears in
+`init`'s key-wait loop **before the video mode has been set at all**.
+
+The position is kept as a **32-bit** value with the clamp done on the pair, so a
+fast drag cannot wrap it - the high word is tested first, and both bounds close
+at zero as well as at the resolution.
+
+Buttons go through an indirection on the way: `[0x20e4]`, `[0x20e6]` and
+`[0x20e8]` hold which INT 33h button index means what, so the mapping is data
+rather than code.
 
 So main installs a Ctrl-C handler, runs `init`, and sets the video mode - the
 mode number coming from `[0x4fe]` rather than being hardcoded.

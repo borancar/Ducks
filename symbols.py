@@ -65,8 +65,8 @@ FUNCTIONS = {
     0x056D2: "palette_upload",          # full 768-byte DAC upload, unscaled
     0x063D6: "draw_sprite",             # native
     0x065F1: "outline_sprite",          # native
-    0x06869: "input_poll",              # the mouse/keyboard poll; takes the
-                                        # screen resolution, always 320 x 200
+    0x06869: "input_poll",              # accumulates relative motion into a
+                                        # position and clamps it to (w, h)
     0x0675B: "mouse_motion",            # native
     0x0678E: "mouse_presses",           # native
     0x067BA: "mouse_releases",          # native
@@ -149,6 +149,15 @@ VARIABLES = {
     0x1798: "fade_level",               # 0..15, scales the palette
     0x179A: "fade_direction",           # 0xff seen when a fade is armed
     0x179B: "fade_start_colour",        # where the fade upload begins
+    0x18D3: "mouse_x",                  # 32-bit, accumulated from deltas
+    0x18D7: "mouse_y",                  # 32-bit
+    0x18DB: "mouse_dx",                 # one poll's relative motion
+    0x18DD: "mouse_dy",
+    0x18DF: "button_a_down",            # via the mapping in [0x20e4]
+    0x18E7: "button_b_down",
+    0x20E4: "button_map_a",             # which INT 33h button is which
+    0x20E6: "button_map_b",
+    0x20E8: "button_map_c",
     0x18F6: "last_key",                 # ASCII; init spins until non-zero
     0x04FE: "video_mode",               # main passes this to set_mode_x
     0x1FD4: "game_speed",               # page_flip delays (0x1f - this) ms
