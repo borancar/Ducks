@@ -1008,6 +1008,45 @@ class Native(VgaDos):
                         site)] += 1
         return super()._on_intr(uc, intno, user)
 
+    def port_report(self):
+        """Every port touched, with its share of the traffic and its rate.
+
+        The share is what this is for. Absolute counts say little on their own -
+        a session is as long as someone played it - but "0x3da is 94% of all
+        port I/O" is what identified the retrace spin as the thing worth
+        replacing, and the same column now says what took its place.
+
+        Reads and writes are kept apart because they mean different things: a
+        read is the guest waiting for hardware, a write is it programming
+        hardware. Ports that only ever get written are configuration; ports read
+        thousands of times a second are a poll.
+        """
+        reads, writes = sum(self.port_in.values()), sum(self.port_out.values())
+        if not (reads or writes):
+            return
+        el = max(1e-6, self._elapsed())
+        print(f"\n=== port I/O: {reads + writes} access(es) in {el:.1f}s "
+              f"({reads} in, {writes} out) ===")
+        rows = []
+        for port in sorted(set(self.port_in) | set(self.port_out)):
+            rows.append((self.port_in.get(port, 0) + self.port_out.get(port, 0),
+                         port, self.port_in.get(port, 0),
+                         self.port_out.get(port, 0)))
+        for total, port, rd, wr in sorted(rows, reverse=True):
+            pct = 100.0 * total / max(1, reads + writes)
+            print(f"  {port:#05x}  {total:>9}  {pct:5.1f}%  "
+                  f"{total / el:>9.0f}/s  in {rd:<9} out {wr:<7} "
+                  f"{emulation.PORTS.get(port, '')}")
+        # Named because it is the one that was 94-95% of the total before the
+        # native flip, and the only one whose absence is the result.
+        spin = self.port_in.get(0x3DA, 0)
+        if spin:
+            print(f"  0x3da is {100.0 * spin / max(1, reads + writes):.1f}% of "
+                  f"all port I/O; before the native flip the retrace spin alone "
+                  f"was ~1836 reads per page flip")
+        print("  for which routine made each access, run trace_ports.py "
+              "against a snapshot")
+
     def int_report(self, img):
         """Remaining interrupts, grouped by service and attributed to a caller.
 
@@ -4537,6 +4576,7 @@ def main():
         """
         print(f"  [stat] t={run_elapsed():6.1f}s clock={m._elapsed():6.1f}s "
               f"frames={frames} flips={m.flips} mode={m.mode:#04x} "
+              f"ports={sum(m.port_in.values())}in/{sum(m.port_out.values())}out "
               f"natives={dict(m.native_calls)}")
 
     grabbed = False
@@ -4773,6 +4813,7 @@ def main():
     m.kbd_report(img)
     m.native_time_report()
     m.fp_report(img)
+    m.port_report()
     m.int_report(img)
     m.file_report(img)
     if m.native_file:

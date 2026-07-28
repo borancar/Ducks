@@ -38,30 +38,10 @@ import native                                                 # noqa: E402
 import pygame                                                 # noqa: E402
 import snapshot                                               # noqa: E402
 
-# What each port is, so the output reads as hardware rather than as numbers.
-PORTS = {
-    0x40: "PIT ch0 counter", 0x41: "PIT ch1", 0x42: "PIT ch2",
-    0x43: "PIT mode/command",
-    0x60: "keyboard data", 0x61: "keyboard control",
-    0x201: "joystick",
-    0x3C0: "attribute controller", 0x3C2: "misc output",
-    0x3C4: "sequencer index", 0x3C5: "sequencer data (map mask at index 2)",
-    0x3C6: "DAC pel mask", 0x3C7: "DAC read index",
-    0x3C8: "DAC write index", 0x3C9: "DAC data",
-    0x3CE: "graphics ctlr index", 0x3CF: "graphics ctlr data",
-    0x3D4: "CRTC index", 0x3D5: "CRTC data",
-    0x3DA: "input status 1 (bit 0 display enable, bit 3 vertical retrace)",
-    0x220: "SB DSP reset", 0x22C: "SB DSP write", 0x22A: "SB DSP read",
-    0x22E: "SB DSP read-buffer status", 0x226: "SB reset",
-    0x00A: "DMA mask", 0x00B: "DMA mode", 0x00C: "DMA flip-flop clear",
-    0x002: "DMA ch1 address", 0x003: "DMA ch1 count", 0x083: "DMA ch1 page",
-    0x020: "PIC 1 command (0x20 = end of interrupt)", 0x021: "PIC 1 mask",
-    0x0A0: "PIC 2 command", 0x0A1: "PIC 2 mask",
-}
-
-
 def describe(port):
-    return PORTS.get(port, "")
+    # One table, in emulation.py next to the handlers that decide which ports
+    # this machine models at all. native.py's port_report reads the same one.
+    return emulation.PORTS.get(port, "")
 
 
 def main():
