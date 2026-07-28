@@ -3,6 +3,10 @@
 Established 2026-07-28 by breakpointing a live machine over the control socket,
 not by reading the disassembly — every frame below was observed.
 
+Names live in [`symbols.py`](../../symbols.py), which the control socket's
+`where` — and so `stack`, `until`, `finish` and `step` — prints alongside the
+offset. A name ending in `?` there is tentative and is printed as such.
+
 ## The chain
 
 ```

@@ -43,6 +43,7 @@ from collections import Counter, defaultdict, deque
 
 import numpy as np
 import pygame
+import symbols
 from unicorn import *
 from unicorn.x86_const import *
 
@@ -4829,8 +4830,11 @@ class Control:
             return (f"{lin:#07x} = image {off:#07x} = DGROUP+"
                     f"{off - DGROUP_IMAGE_OFF:#07x} (data)")
         fn = find_function_start(img, off)
-        return (f"{lin:#07x} = image {off:#07x}"
-                + (f" in {fn:#07x}" if fn is not None else " (no prologue found)"))
+        if fn is None:
+            return f"{lin:#07x} = image {off:#07x} (no prologue found)"
+        named = symbols.describe(fn)
+        return (f"{lin:#07x} = image {off:#07x} in {fn:#07x}"
+                + (f"  {named}" if named else ""))
 
     @staticmethod
     def _regs(m):
