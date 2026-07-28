@@ -127,16 +127,54 @@ wall-clock retrace — 9,156 against 576 on the same snapshot and frame count. T
 port is a poll against a clock, so its count is a function of pacing, not only of
 the guest. Compare like with like.
 
-## What is next
+## 0x3da, removed: the waits are NOPed out
 
-Replacing the two loops in `0x01d8e` would take the last `0x3da` traffic to
-nothing. The function ends `ret 0xa` — the Pascal convention, callee pops — which
-the native dispatcher does not model, so this wants the loop-level treatment the
-plane loops and the fade already use, hooking `0x01dce` and `0x01ddf` rather than
-the function.
+Not replaced natively — **deleted from the guest**. `--snow-nops` (on by default)
+overwrites all three ten-byte wait blocks with `0x90`. The copy itself stays the
+guest's own `movsw`, so the direction flag, the overlap handling and the count
+are untouched; only the waiting disappears.
 
-It is a startup cost of about half a second, not a per-frame one, so it is worth
-doing for tidiness rather than for speed — and that should be said out loud, not
+The whole ten bytes go, not just the `in`: leaving `ror al, 1` and its
+conditional jump behind would spin on a stale `AL`. Each site is verified byte
+for byte before it is written, because these addresses hold compressed data until
+the game is unpacked — a site that does not match is skipped and reported, the
+same way the interrupt stubs handle it.
+
+`page_flip`'s own two reads are deliberately left alone. They are inside the
+function `--native-flip` replaces so they never execute, and NOPing the retrace
+wait would silently unpace the guest's own flip — which is the whole point of the
+`--no-native-flip` control.
+
+**Checked on what it copies, not on what it counts.** A patch to a routine that
+moves memory has to be judged on the memory. Hooking the blit's entry to decode
+its arguments and its exit to compare the destination against a Python memmove,
+over a 400-frame boot:
+
+| | calls | words | mismatched | 0x3da reads |
+| --- | --- | --- | --- | --- |
+| `--no-snow-nops` | 523 | 523 | 0 | 1,047 |
+| default | 523 | 523 | **0** | **0** |
+
+Identical work, identical results, no traffic. (523 calls copying one word each —
+the caller invokes it per word, which is why two reads per word mattered.)
+
+### A restore used to undo it
+
+Restoring any snapshot captured before the patch brought the original bytes back,
+so `replay.py --snow-nops` on an existing capture quietly ran without it. Which
+way to fix that is settled by what [testing-from-snapshots](testing-from-snapshots.md)
+already claims: hooks and natives are *deliberately* not captured, "which come
+from `build_machine()` and the flags — that is what lets a capture made with
+everything on be replayed with one piece off". A guest-memory patch is
+configuration in exactly that sense.
+
+So `snapshot.restore()` now calls `m.after_restore()` if the machine has one, and
+`Native.after_restore()` re-applies. Verified both ways: default is NOPs after a
+restore of a pre-patch capture, `--no-snow-nops` is the original bytes. Anything
+else that is configuration-rather-than-state can hang off the same seam.
+
+This is a startup cost of about half a second, not a per-frame one, so it was
+worth doing for tidiness rather than for speed — said out loud rather than
 discovered later.
 
 ## Reading the report

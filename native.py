@@ -112,6 +112,8 @@ class Native(VgaDos):
         self.rows_done = 0                      # set by a handler, then banked
         self.native_fp = False       # set by install_native_fp()
         self.dac_bytes = 0           # palette bytes written by dac_loop_fade
+        self.snow_nops = 0           # snow waits removed by install_snow_nops
+        self.want_snow_nops = False  # so after_restore() knows to re-apply
         self.fp_sites = {}           # linear site -> interrupt it replaced
         self.fp_unknown = Counter()
         self.persist = persist
@@ -756,6 +758,61 @@ class Native(VgaDos):
         self._set(UC_X86_REG_IP, (self._reg(UC_X86_REG_IP) + 2) & 0xFFFF)
         self.native_calls[name] += 1
 
+    # The ten bytes of a snow-avoidance wait pair, and where they occur. One
+    # pattern, three sites: `in al,dx; ror al,1; jb` waits for display enable to
+    # fall, then `in al,dx; ror al,1; jae` waits for it to rise.
+    SNOW_WAIT = bytes([0xEC, 0xD0, 0xC8, 0x72, 0xFB,
+                       0xEC, 0xD0, 0xC8, 0x73, 0xFB])
+    SNOW_SITES = (0x01DCF, 0x01DE0, 0x01DEE)
+
+    def install_snow_nops(self):
+        """Delete the CGA snow waits from the blit at 0x01d8e.
+
+        Verified byte for byte before writing: these addresses hold compressed
+        data until the game is unpacked, and a blind write would corrupt
+        whatever was there. A site that does not match is skipped and reported,
+        the same way the interrupt stubs handle it.
+        """
+        self.want_snow_nops = True
+        done = b"\x90" * len(self.SNOW_WAIT)
+        ok, bad = 0, []
+        for off in self.SNOW_SITES:
+            lin = self.image_base + off
+            found = bytes(self.uc.mem_read(lin, len(self.SNOW_WAIT)))
+            if found == done:
+                ok += 1              # already patched: a re-apply, not a failure
+                continue
+            if found != self.SNOW_WAIT:
+                bad.append(f"{off:#07x} holds {found.hex()}")
+                continue
+            self.uc.mem_write(lin, b"\x90" * len(self.SNOW_WAIT))
+            try:
+                self.uc.ctl_remove_cache(lin, lin + len(self.SNOW_WAIT))
+            except Exception:
+                pass
+            ok += 1
+        self.snow_nops = ok
+        print(f"  [snow] {ok}/{len(self.SNOW_SITES)} CGA snow wait(s) removed "
+              f"from the blit at 0x01d8e - the copy itself is untouched")
+        if bad:
+            print(f"  [snow] {len(bad)} site(s) did not match and were left "
+                  f"alone - is this the packed Ducks.exe?")
+            for b in bad:
+                print(f"  [snow]   {b}")
+
+    def after_restore(self):
+        """Put back what is configuration rather than captured machine state.
+
+        Called by snapshot.restore(). Hooks and natives survive a restore because
+        they were never in the snapshot, but a patch written into guest memory is
+        overwritten by the memory that comes back - and a capture taken before
+        the patch existed carries the original bytes. Without this,
+        `replay.py --snow-nops` against any older snapshot quietly ran with the
+        waits back in place.
+        """
+        if getattr(self, "want_snow_nops", False):
+            self.install_snow_nops()
+
     def install_native_fp(self):
         """Hand the game's floating point to the real FPU.
 
@@ -1145,6 +1202,10 @@ class Native(VgaDos):
             print(f"  0x3da is {100.0 * spin / max(1, reads + writes):.1f}% of "
                   f"all port I/O; before the native flip the retrace spin alone "
                   f"was ~1836 reads per page flip")
+        if self.snow_nops:
+            print(f"  the {self.snow_nops} CGA snow wait(s) in the blit at "
+                  f"0x01d8e were removed, so 0x3da traffic from there is absent "
+                  f"by design; --no-snow-nops puts them back")
         if self.dac_bytes:
             print(f"  {self.dac_bytes} palette byte(s) did NOT reach port 0x3c9 "
                   f"- dac_loop_fade wrote them straight to the DAC. Without "
@@ -4400,6 +4461,10 @@ def make_parser():
                     action=argparse.BooleanOptionalAction,
                     help="replace the palette fade's 768-write DAC upload loop, "
                          "which is 94%% of all port I/O")
+    ap.add_argument("--snow-nops", default=True,
+                    action=argparse.BooleanOptionalAction,
+                    help="NOP the CGA snow-avoidance waits in the blit at "
+                         "0x01d8e - two port reads per word copied, on a VGA")
     ap.add_argument("--native-flip", default=True,
                     action=argparse.BooleanOptionalAction,
                     help="serve the game's page flip natively and present from "
@@ -4479,6 +4544,8 @@ def build_machine(args):
         m.install_int_stubs()
     if args.native_xms:
         m.install_native_xms()
+    if args.snow_nops:
+        m.install_snow_nops()
     if args.native_fp:
         m.install_native_fp()
     if args.native_plane_loop:

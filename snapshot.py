@@ -516,6 +516,14 @@ def restore(m, man, blobs, force=False, verbose=True):
 
     m.frames = man.get("frames", 0)
     m.text_mode = _dec(man["vga"].get("text_mode", False))
+    # Configuration, not state. Hooks and natives survive a restore because they
+    # were never captured, but anything patched *into* guest memory is
+    # overwritten by the memory coming back - and a capture taken before a patch
+    # existed carries the original bytes. This is the seam where the layer that
+    # installed such a thing puts it back; a machine without one is unaffected.
+    again = getattr(m, "after_restore", None)
+    if again is not None:
+        again()
     if verbose:
         print(f"  [snap] restored {describe(man)}")
     return m
