@@ -4638,6 +4638,13 @@ class Control:
         status                frame, mode, flips, pending keys, CS:IP
         quit                  ask the run to stop, as F12 does
 
+        break <addr>          stop when this address executes
+        breaks                list armed breakpoints
+        delete [addr]         disarm one, or all
+        cont                  resume after a breakpoint
+        step [n] (or `s`)     execute n instructions, one by one; default 1
+        until <addr> [max]    run until an address is reached
+        finish                run until the current function returns
         where                 CS:IP as an image offset, and its function
         regs                  the register file and the flags
         read <addr> [len]     hex and ASCII, default 64 bytes
@@ -4694,10 +4701,12 @@ class Control:
                 try:
                     # Bounded: a client must not hang forever on a machine that
                     # has crashed or is stuck inside one long emu_start.
-                    ans = reply.get(timeout=15.0)
+                    # Generous, because `until` and `finish` legitimately run
+                    # for a long time before they can answer.
+                    ans = reply.get(timeout=120.0)
                 except queue.Empty:
-                    ans = ("timeout: no frame boundary reached in 15s - "
-                           "the machine may be stopped")
+                    ans = ("timeout: no answer in 120s - the machine may be "
+                           "stopped, or a run verb is still going")
                 try:
                     conn.sendall((ans + "\n").encode())
                 except OSError:
@@ -4764,6 +4773,35 @@ class Control:
                                 int(n, 0) if n.strip() else 16)
         if cmd == "stack":
             return self._stack(m, int(rest, 0) if rest.strip() else 8)
+        if cmd in ("step", "s"):
+            return self._step(m, int(rest, 0) if rest.strip() else 1)
+        if cmd == "until":
+            a, _, mx = rest.partition(" ")
+            return self._until(m, self._addr(m, a),
+                               int(mx, 0) if mx.strip() else 20_000_000)
+        if cmd == "finish":
+            return self._finish(m)
+        if cmd in ("break", "b"):
+            return self._break(m, self._addr(m, rest))
+        if cmd == "breaks":
+            armed = sorted(getattr(m, "ctl_breaks", {}))
+            if not armed:
+                return "  nothing armed"
+            return "\n".join("  " + self._where(m, a) for a in armed)
+        if cmd == "delete":
+            brk = getattr(m, "ctl_breaks", {})
+            if not rest.strip():
+                n = len(brk)
+                brk.clear()
+                return f"ok: disarmed {n}"
+            a = self._addr(m, rest)
+            return ("ok: disarmed " + self._where(m, a)) if brk.pop(a, None) \
+                else f"  {a:#07x} was not armed"
+        if cmd == "cont":
+            if not getattr(m, "ctl_paused", False):
+                return "  not paused"
+            m.ctl_paused = False
+            return "ok: running"
         return f"error: unknown command {cmd!r}"
 
     @staticmethod
@@ -4835,6 +4873,92 @@ class Control:
                        f"{ins.mnemonic} {ins.op_str}")
         return "\n".join(out) or "  (nothing decoded)"
 
+    @staticmethod
+    def _here(m):
+        return m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
+
+    @staticmethod
+    def _runnable(m):
+        """Emulation cannot be started while it is already running."""
+        return bool(getattr(m, "ctl_can_run", False))
+
+    def _break(self, m, lin):
+        """Arm an address. The hook is installed once and consults the set.
+
+        Installed per address rather than one hook over everything, because a
+        code hook with no range is called for every instruction and would slow
+        the machine to a crawl while armed.
+        """
+        brk = getattr(m, "ctl_breaks", None)
+        if brk is None:
+            brk = m.ctl_breaks = {}
+        if lin in brk:
+            return "  already armed: " + self._where(m, lin)
+
+        def on_hit(uc, address, size, user):
+            if address in m.ctl_breaks and not getattr(m, "ctl_paused", False):
+                m.ctl_paused = True
+                m.ctl_hit = address
+                uc.emu_stop()
+
+        h = m.uc.hook_add(UC_HOOK_CODE, on_hit, None, lin, lin)
+        try:
+            m.uc.ctl_remove_cache(lin, lin + 2)
+        except Exception:
+            pass
+        brk[lin] = h
+        return "ok: armed " + self._where(m, lin)
+
+    def _step(self, m, n):
+        if not self._runnable(m):
+            return ("error: not at a frame boundary - the machine is inside "
+                    "emu_start. Try again in a moment.")
+        md = _disasm16()
+        out = []
+        for _ in range(max(1, min(n, 200))):
+            lin = self._here(m)
+            if md is not None:
+                code = bytes(m.uc.mem_read(lin, 16))
+                ins = next(iter(md.disasm(code, lin)), None)
+                text = f"{ins.mnemonic} {ins.op_str}" if ins else "?"
+            else:
+                text = "?"
+            off = lin - m.image_base
+            tag = f"i+{off:#07x}" if 0 <= off < DGROUP_IMAGE_OFF else " " * 10
+            out.append(f"  {m._reg(UC_X86_REG_CS):04x}:"
+                       f"{m._reg(UC_X86_REG_IP):04x} {tag}  {text}")
+            try:
+                m.uc.emu_start(lin, 0, count=1)
+            except Exception as e:
+                out.append(f"  stopped: {e}")
+                break
+        out.append("  now at " + self._where(m, self._here(m)))
+        return "\n".join(out)
+
+    def _until(self, m, target, max_insns):
+        if not self._runnable(m):
+            return ("error: not at a frame boundary - the machine is inside "
+                    "emu_start. Try again in a moment.")
+        try:
+            m.uc.emu_start(self._here(m), target, count=max(1, max_insns))
+        except Exception as e:
+            return f"  stopped by {e}\n  at " + self._where(m, self._here(m))
+        here = self._here(m)
+        hit = "reached" if here == target else "did NOT reach (budget spent)"
+        return f"  {hit} {target:#07x}\n  at " + self._where(m, here)
+
+    def _finish(self, m):
+        """Run to this frame's return address, read the same way `stack` reads it."""
+        if not self._runnable(m):
+            return "error: not at a frame boundary. Try again in a moment."
+        ss, bp = m._reg(UC_X86_REG_SS), m._reg(UC_X86_REG_BP)
+        try:
+            _nxt, ip, cs = struct.unpack("<HHH", m.uc.mem_read(ss * 16 + bp, 6))
+        except Exception as e:
+            return f"error: cannot read the frame at SS:BP - {e}"
+        return (f"  returning to {cs:04x}:{ip:04x}\n"
+                + self._until(m, cs * 16 + ip, 20_000_000))
+
     def _stack(self, m, depth):
         """Walk the BP chain, naming each frame's return address.
 
@@ -4873,11 +4997,20 @@ class Control:
         return sc
 
 
-def _service_control(m):
-    """Drain the control socket, if one was asked for. Emulator thread only."""
+def _service_control(m, can_run=False):
+    """Drain the control socket, if one was asked for. Emulator thread only.
+
+    `can_run` says whether the caller is between emu_start calls. The flip hook
+    is not - it runs inside one - and Unicorn cannot start emulation reentrantly,
+    so the stepping verbs refuse rather than crash the machine.
+    """
     c = getattr(m, "control", None)
     if c is not None:
-        c.service(m)
+        m.ctl_can_run = can_run
+        try:
+            c.service(m)
+        finally:
+            m.ctl_can_run = False
 
 
 def step_frame(m, addr, args, img):
@@ -4888,7 +5021,20 @@ def step_frame(m, addr, args, img):
     sound IRQ hundreds of thousands of instructions late, and the game then
     refills its DMA buffer too slowly to produce continuous audio.
     """
-    _service_control(m)
+    _service_control(m, can_run=True)
+    # Re-read: a `step` or `until` over the socket has just moved CS:IP, and
+    # resuming from the address the loop was holding would jump back.
+    addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
+    if getattr(m, "ctl_paused", False):
+        # Stopped at a breakpoint. Do not run the guest, but keep returning so
+        # the loop keeps servicing the socket - that is the only way back out.
+        hit = getattr(m, "ctl_hit", None)
+        if hit is not None:
+            print(f"  [ctl] stopped at {hit:#07x} "
+                  f"(image {hit - m.image_base:#07x}); `cont` to resume")
+            m.ctl_hit = None
+        time.sleep(0.01)
+        return addr, True
     slices = max(1, args.sound_slices if m.sb is not None else 1)
     step = max(1000, args.chunk // slices)
     for _ in range(slices):
@@ -4902,6 +5048,12 @@ def step_frame(m, addr, args, img):
         if m.finished:
             print(f"  [dos] program exited: {m.finished}")
             return addr, False
+        if getattr(m, "ctl_paused", False):
+            # A breakpoint fired inside this chunk. Stop here rather than
+            # finishing the remaining slices, or the machine runs on for up to a
+            # chunk past the address that was armed - which is exactly the gap
+            # breakpoints exist to close.
+            return addr, True
         if m.quit_requested:
             # Seen by pump() inside the flip hook. emu_stop() ended this slice;
             # without this the next one would start and quitting would take

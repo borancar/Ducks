@@ -13,6 +13,8 @@ Current, and kept current. Where these disagree with
   socket: press keys, capture, ask where it is
 - [flip-transient](flip-transient.md) — the "first 120 frames run 4x slow" was
   load on the measuring machine; what is left of it, and why the control hid it
+- [entry-points](entry-points.md) — the chain from the C runtime: main at
+  0x144d7, game_main tentatively 0x0c156, and the linear/image address trap
 - [episode-index](episode-index.md) — the egg's directory: episode names and
   readme titles, every string shifted by one
 - [open-episode-index](open-episode-index.md) — the 303-slice index built

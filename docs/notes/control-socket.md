@@ -42,6 +42,20 @@ that breaks it, and send the input. See
 [open-readme-crash](open-readme-crash.md), where it made the long-deferred flag
 bisect cost four minutes.
 
+## Two traps
+
+**`disasm` prints linear addresses, and so do branch operands.** Every note in
+this project uses image offsets, which are `0x1100` lower. The instruction column
+is tagged `i+0x…`; the operands are not. A `call 0xcaea` there is image
+`0x0b9ea` — see [entry-points](entry-points.md), where that nearly became a
+wrong name in the notes.
+
+**A command is serviced at a frame boundary, so two commands are a chunk apart.**
+`key return` followed by `step` does not step from the keypress: the machine has
+already run up to 400,000 instructions in between. Arm a `break` first, then send
+the key. Breakpoints stop inside the slice loop, not just at the top of a frame,
+which is what makes them land on the exact instruction.
+
 ## The one rule
 
 Nothing the listener receives touches the machine on the listener's thread.
