@@ -134,6 +134,9 @@ missed.
 | `level-frameskip` | level 2, cave - heavier, and where the timer drains quicker |
 | `level1-bonus` | end of level 1, counters mid-count |
 | `level2-bonus` | end of level 2, same loops, different values |
+| `level-start` | the opening of a level |
+| `menu-flip-transient` | between-level menu; see [flip-transient](flip-transient.md) |
+| `readme-before-crash` | readme page 3 of 3 - send Down over the control socket and it crashes |
 
 Each carries its own description, `elapsed` and `chain4`, and each was verified
 byte-for-byte after being renamed.

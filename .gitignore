@@ -52,3 +52,6 @@ edit_*.py
 
 __pycache__/
 *.pyc
+
+# The control socket, created by --control-socket.
+control.sock

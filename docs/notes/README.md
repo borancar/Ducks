@@ -5,8 +5,10 @@ Current, and kept current. Where these disagree with
 
 - [drawing-port-goal](drawing-port-goal.md) — why the drawing port exists, the
   four plane loops, and what "progress" means when the speedup is not the point
-- [open-readme-crash](open-readme-crash.md) — the one open bug: navigating the
-  in-game readme jumps into DGROUP data
+- [open-readme-crash](open-readme-crash.md) — the one open bug: the readme runs
+  out of stack, and every symptom after that follows mechanically
+- [control-socket](control-socket.md) — drive a running machine over a Unix
+  socket: press keys, capture, ask where it is
 - [flip-transient](flip-transient.md) — the "first 120 frames run 4x slow" was
   load on the measuring machine; what is left of it, and why the control hid it
 - [verification-lessons](verification-lessons.md) — broken instrumentation gives

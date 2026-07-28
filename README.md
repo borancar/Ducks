@@ -260,6 +260,27 @@ It can assert three things:
 - `--compare-restore` checks the machinery rather than the game: save, restore into
   a second machine, save again, and diff every byte.
 
+### Driving one: `--control-socket`
+
+A snapshot gets you to a state; a socket lets you act on it. `--control-socket
+PATH` makes a running machine — played or replayed — answer one-line commands:
+
+```sh
+venv/bin/python replay.py snapshots/readme-before-crash.snap --frames 300 \
+      --control-socket /tmp/ducks.sock &
+printf 'status\n'    | nc -U /tmp/ducks.sock     # frame, mode, flips, CS:IP
+printf 'key down\n'  | nc -U /tmp/ducks.sock     # press a key
+printf 'snap note\n' | nc -U /tmp/ducks.sock     # capture, as F2 does
+```
+
+Key names are pygame's, and go through the same `emulation.KEYMAP` the window's
+event loop uses. Commands are queued on the listener thread and applied from the
+emulator thread at a frame boundary, never underneath a running `emu_start`.
+
+A capture taken just before an input that breaks something, plus the input, is a
+bug report that runs — which is how the readme crash stopped needing a
+play-through. See [`docs/notes/control-socket.md`](docs/notes/control-socket.md).
+
 What a snapshot holds: the 2 MB of guest memory (one flat Unicorn mapping, so one
 read), the register file including flags, the four VGA planes and the register
 state around them, the input state the game polls, every XMS block — the samples

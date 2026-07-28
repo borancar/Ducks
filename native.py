@@ -33,8 +33,11 @@ runs them headlessly.
 import argparse
 import bisect
 import os
+import queue
+import socket
 import struct
 import sys
+import threading
 import time
 from collections import Counter, defaultdict, deque
 
@@ -3172,6 +3175,7 @@ def native_page_flip(m, args):
     pump = getattr(m, "pump", None)
     if pump is not None:
         pump()
+    _service_control(m)
     return None
 
 
@@ -4113,6 +4117,9 @@ def make_parser():
     ap.add_argument("--blaster", default=True,
                     action=argparse.BooleanOptionalAction,
                     help="emulate the Sound Blaster")
+    ap.add_argument("--control-socket", default="",
+                    help="listen on this Unix socket for key presses, capture "
+                         "requests and status queries while the game runs")
     ap.add_argument("--profile", action="store_true",
                     help="report which routines do the drawing, then exit")
     ap.add_argument("--profile-sound", action="store_true",
@@ -4284,9 +4291,145 @@ def build_machine(args):
     if args.trace_calls:
         m.add_call_tracers([int(x, 0) for x in args.trace_calls.split(",")
                             if x.strip()])
+    if getattr(args, "control_socket", ""):
+        m.control = Control(args.control_socket)
     print(f"=== native-I/O port: {len(m.natives)} routine(s) serviced "
           f"natively, everything else emulated ===")
     return m, img
+
+
+class Control:
+    """A Unix socket into a running machine, so keys can be sent while it runs.
+
+    One line in, one line back, connection closes:
+
+        key <name> [frames]   press a key, held for `frames` display frames
+        text <string>         press each character of the string in turn
+        snap [note]           capture at the next page flip
+        status                frame, mode, flips, pending keys, CS:IP
+        quit                  ask the run to stop, as F12 does
+
+    Key names are pygame's - `down`, `escape`, `return`, `a` - which avoids a
+    second name-to-scancode table: the name resolves to a pygame key and
+    emulation.KEYMAP, the same table the window's own event loop uses, turns
+    that into the scancode and ASCII pair the guest reads.
+
+    The listener thread never touches the machine. It queues the command and
+    waits for the answer, and `service()` applies it from the emulator thread at
+    a frame boundary - anywhere else would be writing guest state underneath a
+    running emu_start.
+
+    A press is held rather than being instantaneous: `key_buf` is a queue the
+    guest drains at its own pace, but `last_scancode` is the port 0x60 view,
+    where a key that is never released stays down forever.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self.q = queue.Queue()
+        self.releases = []            # (scancode, display frame it lifts on)
+        if os.path.exists(path):
+            os.remove(path)           # a stale socket file refuses to bind
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.bind(path)
+        self.sock.listen(4)
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+        print(f"  [ctl] listening on {path} - one command per connection")
+
+    def _serve(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return                # closed, or the machine is going away
+            with conn:
+                try:
+                    line = conn.makefile("r").readline().strip()
+                except OSError:
+                    continue
+                if not line:
+                    continue
+                reply = queue.Queue(1)
+                self.q.put((line, reply))
+                try:
+                    # Bounded: a client must not hang forever on a machine that
+                    # has crashed or is stuck inside one long emu_start.
+                    ans = reply.get(timeout=15.0)
+                except queue.Empty:
+                    ans = ("timeout: no frame boundary reached in 15s - "
+                           "the machine may be stopped")
+                try:
+                    conn.sendall((ans + "\n").encode())
+                except OSError:
+                    pass
+
+    def service(self, m):
+        """Apply anything queued. Called from the emulator thread only."""
+        frame = getattr(m, "frames", 0)
+        # Releases first, so pressing the same key twice in a row does not merge
+        # into one long press that the guest sees as a single key-down.
+        for held in list(self.releases):
+            sc, due = held
+            if frame >= due:
+                m.last_scancode = sc | 0x80
+                self.releases.remove(held)
+        while True:
+            try:
+                line, reply = self.q.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                answer = self._apply(m, line)
+            except Exception as e:
+                answer = f"error: {e}"
+            try:
+                reply.put_nowait(answer)
+            except queue.Full:
+                pass
+
+    def _apply(self, m, line):
+        cmd, _, rest = line.partition(" ")
+        cmd, rest = cmd.lower(), rest.strip()
+        if cmd == "key":
+            name, _, hold = rest.partition(" ")
+            sc = self._press(m, name, int(hold) if hold.strip() else 2)
+            return f"ok: pressed {name} (scancode {sc:#04x})"
+        if cmd == "text":
+            for ch in rest:
+                self._press(m, ch, 2)
+            return f"ok: pressed {len(rest)} key(s)"
+        if cmd == "snap":
+            m.snapshot_requested = rest or "control socket"
+            return "ok: capture requested, taken at the next page flip"
+        if cmd == "status":
+            return (f"frame={getattr(m, 'frames', 0)} mode={m.mode:#04x} "
+                    f"flips={getattr(m, 'flips', 0)} "
+                    f"keys_pending={len(m.key_buf)} "
+                    f"cs:ip={m._reg(UC_X86_REG_CS):04x}:"
+                    f"{m._reg(UC_X86_REG_IP):04x}")
+        if cmd == "quit":
+            m.quit_requested = True
+            return "ok: quitting"
+        return f"error: unknown command {cmd!r}"
+
+    def _press(self, m, name, hold):
+        code = pygame.key.key_code(name)
+        mapped = emulation.KEYMAP.get(code)
+        if mapped is None:
+            raise ValueError(f"{name!r} is not a key this machine reads")
+        sc, _asc = mapped
+        m.key_buf.append(mapped)
+        m.last_scancode = sc
+        self.releases.append((sc, getattr(m, "frames", 0) + max(1, hold)))
+        return sc
+
+
+def _service_control(m):
+    """Drain the control socket, if one was asked for. Emulator thread only."""
+    c = getattr(m, "control", None)
+    if c is not None:
+        c.service(m)
 
 
 def step_frame(m, addr, args, img):
@@ -4297,6 +4440,7 @@ def step_frame(m, addr, args, img):
     sound IRQ hundreds of thousands of instructions late, and the game then
     refills its DMA buffer too slowly to produce continuous audio.
     """
+    _service_control(m)
     slices = max(1, args.sound_slices if m.sb is not None else 1)
     step = max(1000, args.chunk // slices)
     for _ in range(slices):
