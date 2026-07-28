@@ -24,6 +24,18 @@ import native                                                     # noqa: E402
 import symbols                                                    # noqa: E402
 
 
+# Entries that are genuine call targets without a Borland frame, each checked by
+# hand: the C runtime's entry, an inner entry inside the INT 10h wrapper, and a
+# leaf that keeps no frame pointer.
+NO_PROLOGUE = {0x0014E, 0x02067, 0x029FC}
+
+
+def image():
+    import struct
+    d = open("Ducks.unpacked.exe", "rb").read()
+    return d[struct.unpack_from("<13H", d, 2)[3] * 16:]
+
+
 def natives():
     return (native.NATIVE_TABLE + native.SOUND_NATIVES
             + native.MOUSE_NATIVES + native.KEYBOARD_NATIVES
@@ -56,6 +68,20 @@ def main():
     for off, name in {**symbols.FUNCTIONS, **symbols.LOOPS}.items():
         if name.endswith("?") and "(tentative)" not in symbols.describe(off):
             bad.append(f"{off:#07x} is tentative but does not print as such")
+
+    # Every FUNCTIONS entry must actually begin a function. This is the check
+    # that catches a near-call target read off a disassembly: `call rel16` wraps
+    # within its segment, and image offsets are not segment offsets, so a target
+    # computed in image space can be a whole 64 KB out. egg_find_block was
+    # recorded at 0x15232 - mid-instruction inside play_sample - when it is at
+    # 0x05232, and only the prologue check found it.
+    img = image()
+    for off, name in symbols.FUNCTIONS.items():
+        if off in NO_PROLOGUE:
+            continue
+        if img[off:off + 3] != b"\x55\x8b\xec":
+            bad.append(f"{off:#07x} {name!r} does not start with push bp; "
+                       f"mov bp, sp - it is {img[off:off+4].hex()}")
 
     n = len(natives()) + len(native.PLANE_LOOPS) + len(native.DAC_LOOPS)
     if bad:

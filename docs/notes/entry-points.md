@@ -38,7 +38,7 @@ call 0x0b9ea(ds:0x13f1)    ; restore the buffer
 ```
 
 `[0x20ad]` is the open-egg-file count from [episode-index](episode-index.md), and
-the shape matches the index builder's `0x15232(0x5a, 1, si)` — a pass over every
+the shape matches the index builder's `egg_find_block(0x5a, 1, si)` at `0x05232` — a pass over every
 open egg for one resource type, `0x48` here against `0x5a` there. So main calls a
 sequence of these, and **the real game loop is a different call from main** —
 look at what else `0x144d7` calls around `0x1452a`.

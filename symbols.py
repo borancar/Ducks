@@ -10,6 +10,13 @@ pass. Read the body first.
 
 Names ending in `?` are tentative and print as "(tentative)".
 
+**A near-call target read off a disassembly is not an image offset.** `call rel16`
+wraps within its 16-bit segment, and image offsets are not segment offsets, so a
+target computed in image space can be a whole 64 KB out. `egg_find_block` was
+recorded at `0x15232` - which is mid-instruction inside `play_sample` - when it is
+at `0x05232`. test_symbols.py now requires every entry to start with a prologue,
+which is what catches this.
+
 `FUNCTIONS` holds function entry points. `LOOPS` holds inline loop heads, which
 are *not* function starts - they sit inside a larger routine and are hooked where
 they begin, so `find_function_start` will never return one.
@@ -50,6 +57,7 @@ FUNCTIONS = {
     0x05C09: "blit_rows",               # native
     0x05D3A: "compose_layer",           # native
     0x05DC4: "compose_scroll",          # native
+    0x05232: "egg_find_block",          # (type, ?, index) -> block; reads [0x20ad]
     0x056D2: "palette_upload",          # full 768-byte DAC upload, unscaled
     0x063D6: "draw_sprite",             # native
     0x065F1: "outline_sprite",          # native
@@ -72,7 +80,6 @@ FUNCTIONS = {
     0x144D7: "main",                    # the frame the runtime calls
     0x15176: "stop_voice",              # native
     0x151D2: "play_sample",             # native
-    0x15232: "egg_find_block",          # (type, ?, index) -> block
     0x15267: "stop_sound_by_id",        # native
     0x15298: "is_sound_playing",        # native
     0x156CC: "mix_voice",               # native
