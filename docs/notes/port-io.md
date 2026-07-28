@@ -171,6 +171,46 @@ it happen at all.
 
 **2,352 calls to `0x0b1c9`, 2,304 to `0x0b202`, 4,656 comparisons, 0 mismatched.**
 
+### Pencilled for later: it is not a blink, and something else is
+
+Called a "blink" on first reading. It is not. Dumping both sets shows `0x0b202`
+writes the level's **normal** ramp and `0x0b1c9` writes a washed copy of the same
+ramp, built once at `0x0876a`:
+
+```
+v   = [0x14b1 + i]                the level's own ramp
+a   = (v >> 1) + (v >> 2) + 0x40  contrast x 0.75, lifted by 64
+out = min(a * (gamma + 6) / 19, 255)
+```
+
+`(gamma + 6) / 19` is the same factor the normal palette gets, so stripped of
+gamma the alternate is simply `v * 0.75 + 64` — dark entries lifted to a grey
+floor, bright ones unchanged. These are the **terrain** colours, so the whole
+scene would lift at once. A full-screen wash, not a local shimmer.
+
+The colours themselves, for three levels:
+<https://claude.ai/code/artifact/eac90152-cb72-4f51-8353-0583d3688cae>
+
+**The open thread.** Chasing this started from a hunch that the cave captures were
+about teleporting. Six captures across two sessions all read `[0x2157] = 0`, and
+the loops have never executed — so whatever a teleporter does on screen, it is
+not these. Two candidates, and the second is cheap to rule out first:
+
+- a sprite or tile animation, no palette involvement at all;
+- the fade at `0x0b15f` being driven rapidly, which would show as a burst of
+  `dac_loop 0x0b15f` calls against a small frame count in the exit report.
+
+The second already looks unlikely. A 94-second session played from the teleporter
+capture recorded **58** calls to `0x0b15f` and 2 to `0x056e0` — the handful of
+ordinary screen fades you would expect, not a burst — and zero to either blink
+loop. So if something visible happened on that screen, the palette was barely
+touched while it did, which points at the first candidate.
+
+**And a caveat on the deadness.** "`[0x201e]` is only ever written zero" comes
+from a static scan for the two-byte address literal, which would miss a write
+made through a pointer. Six captures reading zero corroborates it; it is not
+proof of a negative.
+
 ## 0x3da, removed: the waits are NOPed out
 
 Not replaced natively — **deleted from the guest**. `--snow-nops` (on by default)
