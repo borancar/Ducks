@@ -111,6 +111,7 @@ class Native(VgaDos):
         self.native_rows = Counter()            # routine -> inner iterations
         self.rows_done = 0                      # set by a handler, then banked
         self.native_fp = False       # set by install_native_fp()
+        self.dac_bytes = 0           # palette bytes written by dac_loop_fade
         self.fp_sites = {}           # linear site -> interrupt it replaced
         self.fp_unknown = Counter()
         self.persist = persist
@@ -605,6 +606,106 @@ class Native(VgaDos):
         except Exception:
             pass
 
+    def install_dac_loops(self):
+        """Replace the palette-upload loops that dominate port I/O."""
+        for head, (exit_off, _) in DAC_LOOPS.items():
+            lin = self.image_base + head
+            self.uc.hook_add(UC_HOOK_CODE, self._on_dac_loop, None, lin, lin)
+            try:
+                self.uc.ctl_remove_cache(lin, lin + 2)
+            except Exception:
+                pass
+            print(f"  [dac] palette loop {head:#07x} native, exit "
+                  f"{exit_off:#07x}")
+
+    def _on_dac_loop(self, uc, address, size, user):
+        head = address - self.image_base
+        entry = DAC_LOOPS.get(head)
+        if entry is None:
+            return
+        exit_off, handler = entry
+        label = f"dac_loop {head:#07x}"
+        self.native_calls[label] += 1
+        if self.verify and ("dac_loop" in self.verify_only
+                            or not self.verify_only):
+            return self._verify_dac_loop(uc, head, exit_off, handler)
+        t0 = time.perf_counter()
+        n = handler(self)
+        dt = time.perf_counter() - t0
+        self.native_secs[label] += dt
+        self.native_time += dt
+        self.dac_bytes += n or 0
+        self._set(UC_X86_REG_IP,
+                  (self._reg(UC_X86_REG_IP) + (exit_off - head)) & 0xFFFF)
+
+    def _verify_dac_loop(self, uc, head, exit_off, handler):
+        """Run the native into a copy of the DAC state, let the loop run, diff.
+
+        The plane-loop harness cannot be reused: what this loop changes is the
+        palette and the DAC latch, not the planes. Everything the native touches
+        is compared - the 256 palette entries, the write index, a partial latch
+        and the converted-colour count - plus the three registers it sets, since
+        a native that got the arithmetic right and left SI wrong would still be
+        wrong.
+        """
+        before = (list(self.palette), self.dac_index, list(self.dac_latch),
+                  self.palette_writes)
+        regs = {r: self._reg(r) for r in
+                (UC_X86_REG_SI, UC_X86_REG_AX, UC_X86_REG_DX)}
+        try:
+            handler(self)
+        except Exception as e:
+            print(f"  [verify] dac_loop {head:#07x} raised {e!r}")
+            self.palette, self.dac_index, self.dac_latch, self.palette_writes \
+                = list(before[0]), before[1], list(before[2]), before[3]
+            for r, v in regs.items():
+                self._set(r, v)
+            return
+        predicted = (list(self.palette), self.dac_index, list(self.dac_latch),
+                     self.palette_writes,
+                     {r: self._reg(r) for r in regs})
+        self.palette, self.dac_index, self.dac_latch, self.palette_writes = \
+            list(before[0]), before[1], list(before[2]), before[3]
+        for r, v in regs.items():
+            self._set(r, v)
+
+        exit_lin = self.image_base + exit_off
+        state = {"h": None}
+
+        def on_exit(uc2, a2, s2, u2):
+            if a2 != exit_lin:
+                return
+            uc2.hook_del(state["h"])
+            self.verify_calls += 1
+            bad = []
+            for i, (a, b) in enumerate(zip(predicted[0], self.palette)):
+                if a != b:
+                    bad.append(f"palette[{i}] native={a} real={b}")
+            for name, a, b in (("dac_index", predicted[1], self.dac_index),
+                               ("dac_latch", predicted[2], self.dac_latch),
+                               ("palette_writes", predicted[3],
+                                self.palette_writes)):
+                if a != b:
+                    bad.append(f"{name} native={a!r} real={b!r}")
+            for r, a in predicted[4].items():
+                b = self._reg(r)
+                if a != b:
+                    bad.append(f"reg {r} native={a:#06x} real={b:#06x}")
+            if bad:
+                self.verify_bad += 1
+                print(f"  [verify] dac_loop {head:#07x} MISMATCH "
+                      f"{len(bad)} field(s), first: {bad[0]}")
+            else:
+                print(f"  [verify] dac_loop {head:#07x}: match "
+                      f"#{self.verify_calls}")
+
+        self.verify_pending += 1
+        state["h"] = uc.hook_add(UC_HOOK_CODE, on_exit, None, exit_lin, exit_lin)
+        try:
+            uc.ctl_remove_cache(exit_lin, exit_lin + 1)
+        except Exception:
+            pass
+
     def install_int_stubs(self):
         """Answer interrupts at the instruction itself, where no entry will do.
 
@@ -1044,6 +1145,10 @@ class Native(VgaDos):
             print(f"  0x3da is {100.0 * spin / max(1, reads + writes):.1f}% of "
                   f"all port I/O; before the native flip the retrace spin alone "
                   f"was ~1836 reads per page flip")
+        if self.dac_bytes:
+            print(f"  {self.dac_bytes} palette byte(s) did NOT reach port 0x3c9 "
+                  f"- dac_loop_fade wrote them straight to the DAC. Without "
+                  f"--no-native-dac that traffic is absent by design")
         print("  for which routine made each access, run trace_ports.py "
               "against a snapshot")
 
@@ -2869,6 +2974,75 @@ PLANE_LOOPS = {
 }
 
 
+def _dac_run(m, values):
+    """Apply a run of bytes to the DAC exactly as that many OUT 0x3c9 would.
+
+    Deliberately a re-statement of the 0x3C9 branch of emulation.VgaDos._on_out
+    rather than a call into it: that branch is the reference this is checked
+    against, and it stays untouched. The parts that look like bookkeeping are the
+    parts that matter - a run can begin with one or two bytes already latched
+    from an earlier write, and the index wraps at 256 rather than running off the
+    end of the palette.
+    """
+    latch = m.dac_latch
+    idx = m.dac_index
+    pal = m.palette
+    for v in values:
+        latch.append(v & 0x3F)
+        if len(latch) == 3:
+            r, g, b = (c * 255 // 63 for c in latch)
+            pal[idx & 0xFF] = (r, g, b)
+            idx = (idx + 1) & 0xFF
+            latch = []
+            m.palette_writes += 1
+    m.dac_latch = latch
+    m.dac_index = idx
+
+
+def dac_loop_fade(m):
+    """0x0b15f: scale the stored palette by the fade level and upload it.
+
+    SI is a byte index into the 768-byte palette at DGROUP+0x10e1, not a colour
+    index, and it is whatever the caller left it at - the loop is entered with
+    SI = [0x179b] * 3, so a fade can start part-way up the palette. The count is
+    therefore 0x300 - SI, not 768.
+
+    The arithmetic is reproduced as the CPU does it, not as it is meant: AL is
+    zero-extended to AX, `imul` makes a *signed* 16-bit product, and `sar ax, 6`
+    is an arithmetic shift. With the level in 0..15 and the byte in 0..255 the
+    product cannot go negative, but the guest is what defines this, not the
+    intent, and a level that ever went negative would otherwise diverge silently.
+    """
+    si = m._reg(UC_X86_REG_SI)
+    n = 0x300 - si
+    if n <= 0:
+        return 0
+    level = struct.unpack("<H", m.read(m.dgroup_base + 0x1798, 2))[0]
+    if level >= 0x8000:
+        level -= 0x10000
+    src = np.frombuffer(m.read(m.dgroup_base + 0x10E1 + si, n), dtype=np.uint8)
+    prod = (src.astype(np.int32) * level) & 0xFFFF
+    prod = np.where(prod >= 0x8000, prod - 0x10000, prod)
+    out = ((prod >> 6) & 0xFF).astype(np.uint8)
+    _dac_run(m, out.tolist())
+
+    # What the loop leaves behind. Nothing between the exit and the function's
+    # `pop si` reads any of these, but a verify that ignored them would be
+    # checking less than the loop does.
+    m._set(UC_X86_REG_SI, 0x300)
+    m._set(UC_X86_REG_AX, int(out[-1]) if len(out) else m._reg(UC_X86_REG_AX))
+    m._set(UC_X86_REG_DX, 0x3C9)
+    return n
+
+
+# Loop head -> (exit offset, handler). The handler returns how many bytes it
+# wrote, for the report; the head is the loop *body*, which is only reached when
+# the test at the bottom has already passed, so the count is never zero there.
+DAC_LOOPS = {
+    0x0B15F: (0x0B177, dac_loop_fade),
+}
+
+
 def native_particles(m, args):
     """The particle plotter at 0x0ab09, replacing the loop rather than the pixel.
 
@@ -4222,6 +4396,10 @@ def make_parser():
                     action=argparse.BooleanOptionalAction,
                     help="replace the guest's four four-plane drawing loops "
                          "natively")
+    ap.add_argument("--native-dac", default=True,
+                    action=argparse.BooleanOptionalAction,
+                    help="replace the palette fade's 768-write DAC upload loop, "
+                         "which is 94%% of all port I/O")
     ap.add_argument("--native-flip", default=True,
                     action=argparse.BooleanOptionalAction,
                     help="serve the game's page flip natively and present from "
@@ -4305,6 +4483,8 @@ def build_machine(args):
         m.install_native_fp()
     if args.native_plane_loop:
         m.install_plane_loops()
+    if args.native_dac:
+        m.install_dac_loops()
     if args.verify_only:
         m.verify_only = {n.strip() for n in args.verify_only.split(",") if n.strip()}
         m.verify = True

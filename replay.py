@@ -176,6 +176,7 @@ def main():
     # native.py's own reporters, rather than second implementations here. Both
     # return immediately when the flag that feeds them was not passed.
     m.native_time_report()
+    m.port_report()
     m.call_report(img)
 
     if args.png:

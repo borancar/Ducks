@@ -5,6 +5,8 @@ Current, and kept current. Where these disagree with
 
 - [drawing-port-goal](drawing-port-goal.md) — why the drawing port exists, the
   four plane loops, and what "progress" means when the speedup is not the point
+- [port-io](port-io.md) — what is left on the wire: the retrace spin, then the
+  palette fade, and 81% of traffic removed for no measurable speedup
 - [open-readme-crash](open-readme-crash.md) — the one open bug: the readme runs
   out of stack, and every symptom after that follows mechanically
 - [control-socket](control-socket.md) — drive a running machine over a Unix

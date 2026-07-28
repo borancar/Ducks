@@ -1,0 +1,95 @@
+# What is left on the wire
+
+`port_report()` runs at the end of every session and every replay: each port
+touched, its share of all traffic, its rate, reads and writes kept apart. The
+share is the useful column — a session is as long as someone played it, so counts
+alone say little, but a port holding 94% of the traffic names itself as the next
+thing to replace.
+
+## Two eras, and the same 94%
+
+`emulation.py` has always counted into `port_in`/`port_out`; nothing read them
+until 2026-07-28.
+
+**Before the native page flip**, `0x3da` was 94-95% of all port I/O: the retrace
+spin, ~1836 reads per page flip, the guest waiting for hardware that does not
+exist. Replacing the flip removed it.
+
+**After it**, a 57-second played session showed 401,427 accesses and `0x3c9` —
+DAC data — at **94.4%**, 379,056 writes. The same share had reappeared on a
+different port.
+
+`trace_ports.py` attributed 56,064 of 57,600 writes in a menu-to-level replay to
+one site, `0x0b16f` inside the fade at `0x0b10b`:
+
+```
+0x0b15f  mov al, [si + 0x10e1]     ; the stored palette
+0x0b165  imul word ptr [0x1798]    ; x the fade level
+0x0b169  sar ax, 6                 ; / 64
+0x0b16f  out dx, al                ; 768 of these per call
+0x0b171  cmp si, 0x300 / jl
+```
+
+A whole 256-colour upload per call, each byte an emulated `OUT` landing in a
+Python callback.
+
+## Where the traffic is not
+
+Steady play is nearly silent. Twenty frames of `level-start` is 61 accesses a
+frame and **all of it the sound IRQ handler** at `0x1580c` — a DSP status poll
+and two end-of-interrupts. The menu is 8 a frame of the same. The DAC flood is
+entirely screen transitions.
+
+## The fade native
+
+`dac_loop_fade` replaces the loop, not the function: the loop is inline in a fade
+state machine that also decides when to stop and what to do next, and none of
+that is worth reimplementing. Same technique as the four plane loops — hook the
+body head, run the remaining iterations, step IP to the exit.
+
+`--no-native-dac` turns it off. Two smaller DAC loops in the same function
+(`0x0b1c9`, `0x0b202`, 48 writes each) and one in `0x056d2` (768, and the 1,536
+writes still visible in the report below) are left alone: under 3% of the DAC
+traffic between them, and each needs its own handler.
+
+**Verified 44,544 times, 0 mismatched.** That number is 58 uploads x 768, because
+in verify mode the real loop runs and re-enters the hooked head on every
+iteration — so the native was checked from *every* possible starting `SI`, not
+just from zero. The harness compares all 256 palette entries, the write index, a
+partial latch, the converted-colour count and the three registers the loop
+leaves behind; a native with the arithmetic right and `SI` wrong would still
+fail.
+
+## The result, stated honestly
+
+200 frames from `main-menu-unhovered`:
+
+| | without | with |
+| --- | --- | --- |
+| all port I/O | 68,861 | **13,334** |
+| `0x3c9` | 57,600 | 1,536 |
+| `0x3da` share | 13.3% | 72.5% |
+| wall clock, best of 3 | 15.35s | 15.28s |
+
+**81% of all port traffic is gone, and the run is not measurably faster.** Three
+alternating pairs gave 15.28/16.03/15.89 against 15.35/17.66/16.21 — the spread
+between runs is larger than the difference between configurations. 56,064 writes
+cost on the order of 1% of a run that is dominated by drawing, and the native
+itself takes 9.3 ms across 73 calls.
+
+That is worth having anyway, on this project's own terms: reach is the goal, not
+speedup ([drawing-port-goal](drawing-port-goal.md)), and it makes the remaining
+traffic legible. But it is not a speedup, and the timing was measured three times
+alternating rather than once because of [flip-transient](flip-transient.md).
+
+## What is next
+
+`0x3da` again, at 72.5% of what remains: 9,663 reads over 200 frames. The native
+flip removed the spin from `page_flip`, so this is something else still waiting on
+retrace, and `trace_ports.py` will name it.
+
+## Reading the report
+
+The line `N palette byte(s) did NOT reach port 0x3c9` is there so that absence is
+not mistaken for the game having stopped fading — with the native on, that traffic
+is missing by design.
