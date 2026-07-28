@@ -111,6 +111,70 @@ a string, free it. So the whole point of the scan is that one running maximum.
 does not identify it; `0x14e88` would have to be read to know what the value is.
 Recorded as `max_save_value?`, tentative.
 
+## 0x102d7 is show_splash, and it holds a fifth plane loop
+
+**Read out 2026-07-29** by breakpointing its entry on a cold boot, then reading
+the body over the socket. `snapshots/snap001.snap` is captured at that entry, so
+this state is reachable without playing to it.
+
+```c
+void far show_splash(void far *image /* ds:0x28ff */, int frames /* 100 */)
+{
+    viewport a, b;                                  /* two 20-byte records */
+    di = frames; si = 0;
+    make_rect(&a, 80, 104, [0x53c], [0x53c] + 320); /* 0x0881d */
+    make_rect(&b, 320, 24);                         /* 0x08885 */
+    0x0615a(1, 0x53, &loc, 0xff);  0x056f7(0);
+    0x0b5cf(image, &loc, 0x12, &b, 0, 0x1c);        /* decodes it */
+    clear_vram();
+    fade_direction = 1;  fade_start_colour = 0;     /* [0x179a], [0x179b] */
+    do {
+        input_poll(320, 200);
+        if (si == di || last_key || [0x18e5])       /* timeout, key or button */
+            fade_direction = 0xff;                  /* = -1, fade out */
+        si++;
+        for (plane = 0; plane < 4; plane++) {       /* <- the fifth plane loop */
+            set_plane(plane);
+            blit_rows(&b, <a, 20 bytes by value>, 0);
+        }
+        page_flip();
+        palette_fade_step(0);
+    } while ([0x1798] != 0);                        /* until the fade finishes */
+    0x05671(&b);  0x088b3(&loc);
+}
+```
+
+`si`/`di` are a frame counter against the second argument, which is why one
+exists: main's `show_splash(ds:0x28ff, 100)` holds the image for 100 frames
+unless a key or button cuts it short. That is also why an earlier `finish` over
+the socket timed out at 120 s on this call — it was sitting in this loop with
+nobody pressing anything, which was misread at the time as the call never
+returning.
+
+`fade_direction` and `fade_start_colour` were already named from the fade work,
+and land exactly on the two bytes this function sets before the loop, which is an
+independent check on the reading.
+
+### The plane loop at 0x10383-0x103b0 is not one of the four
+
+[drawing-port-goal](drawing-port-goal.md) lists four plane loops and says all
+four are native. This is a fifth: `set_plane` then `blit_rows` four times, then
+`page_flip`. It draws the splash and intro screens and still runs on the emulated
+CPU. It would not appear in any profile taken during a level, which is the likely
+reason it was missed.
+
+Confirmed from the snapshot rather than from the listing: replaying
+`snap001.snap` for five frames records exactly **4 `set_plane`, 4 `blit_rows`,
+one `page_flip`** — one iteration of this loop and nothing else drawing.
+
+### Still open here
+
+- `0x0b5cf`, `0x0615a`, `0x056f7`, `0x05671`, `0x088b3` and the two rect builders
+  `0x0881d`/`0x08885` are call targets, not identifications.
+- What `ds:0x28ff` holds. It is not a string — the static image has zeros there,
+  and `sound_state` sits nine bytes into the same region.
+- `[0x18e5]`, tested next to `last_key` as a second escape condition.
+
 ## The chain
 
 ```

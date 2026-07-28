@@ -23,12 +23,29 @@ still in `mode=0x03`. Two routes:
 - **`--snapshot-at N`**, which captures at the main loop's frame boundary. Around
   frame 275 with `--flip-hz 70` is inside the index build.
 
-**What does not work: `snap` over the control socket, or F2.** Both set
-`snapshot_requested`, which is serviced at the top of `native_page_flip` — and in
-text mode there are no page flips, so the request is never taken. The capture
-point was deliberately moved there because it is the only exact frame boundary
-([testing-from-snapshots](testing-from-snapshots.md)); the cost is that it cannot
-capture a text-mode state at all.
+~~**What does not work: `snap` over the control socket, or F2.**~~
+**Wrong, corrected 2026-07-29.** The claim was that both set
+`snapshot_requested`, which is serviced only at the top of `native_page_flip`, so
+a state that never flips can never be captured. There is a second service point:
+the main loop takes the request too, and its comment says exactly why — it
+"covers `--no-native-flip` and states that never flip, such as a text screen,
+which would otherwise ignore F2 entirely".
+
+It was not even stale. The fallback landed in `a80c82d`, and `e966f50` — the
+commit that wrote this paragraph — came after it. The limitation was asserted
+from a reading of one service point without grepping for the other, and it has
+been sitting here blocking the extraction this note asks for.
+
+Demonstrated on 2026-07-29: F2 pressed while the machine was paused at a
+breakpoint produced `snapshots/snap001.snap` with the flip counter unmoved at 1
+before and after, and `replay.py --compare-restore` reports the round trip
+byte-identical. That proves the fallback fires for a non-flipping state; it does
+not *directly* prove text mode, which is one cold boot away from being settled
+and is the thing to check first.
+
+The frame-boundary argument in
+[testing-from-snapshots](testing-from-snapshots.md) is unaffected and still the
+reason the flip is the preferred capture point.
 
 ## What to pull out
 

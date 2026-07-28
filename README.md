@@ -387,8 +387,8 @@ What the port trace exposed along the way, all of it from
 
 Mode X puts column `x` in plane `x & 3` at byte `x >> 2`, so every drawing routine
 in the game filters on the selected plane and every caller runs the whole thing
-four times. **Four** such loops draw everything on screen, and all four are now on
-this side:
+four times. **Four** such loops draw everything you see during a game, and all
+four are now on this side:
 
 | Loop | Where | Inside | Draws | Runs |
 |---|---|---|---|---|
@@ -411,9 +411,14 @@ the natives leave that counter alone. All eight references to it sit inside
 `0x0d7ee`-`0x0e8ac` and all eight belong to those two loops, so nothing after
 either reads it.
 
+A fifth lives in `show_splash` (`0x10383`-`0x103b0`) and draws the splash and
+intro screens. It is not native, and it never runs during a level, which is why a
+profile taken there does not show it.
+
 `function_extent()` in `native.py` gives those boundaries, cross-checked against an
 independent rule (the next prologue that resolves to itself); `test_fn_start.py`
-keeps the two agreeing.
+keeps the two agreeing — though not in every case, see
+[`docs/notes/open-function-attribution.md`](docs/notes/open-function-attribution.md).
 
 The in-game loop is the one that matters — `draw_entities` gets most of its ~34000
 calls a session from it. Per plane it does:

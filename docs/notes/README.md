@@ -23,6 +23,8 @@ Current, and kept current. Where these disagree with
   from MAIN.EGG at startup, worth extracting; and why `snap` cannot capture there
 - [open-game-speed](open-game-speed.md) — the game's `[<]`/`[>]` speed control
   was never reimplemented; the native flip drops the delay it worked through
+- [open-function-attribution](open-function-attribution.md) — find_function_start
+  reports show_splash as part of its neighbour, and nothing catches it
 - [verification-lessons](verification-lessons.md) — broken instrumentation gives
   coherent wrong answers; prove the tool before reading its shape
 - [accepting-is-not-answering](accepting-is-not-answering.md) — an ignored DOS

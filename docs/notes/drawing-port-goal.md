@@ -15,7 +15,15 @@ not be judged on their own immediate speedup.
 
 ## Where it stands
 
-All four plane loops are native and verified, and the compositors'
+**Corrected 2026-07-29: there is a fifth plane loop, and it is not native.**
+`0x10383`-`0x103b0`, inside `show_splash` (`0x102d7`), does `set_plane` then
+`blit_rows` four times and then `page_flip`, the same shape as the four below. It
+draws the splash and intro screens, so it never runs during a level and does not
+appear in a profile taken there — which is the likely reason four was ever the
+count. See [entry-points](entry-points.md). Everything below still holds for the
+four; only the claim that they are *all* of them was wrong.
+
+The four are native and verified, and the compositors'
 plane-independent work is hoisted out of them:
 
 | loop | exit | what it drives |

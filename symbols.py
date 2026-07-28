@@ -52,6 +52,8 @@ FUNCTIONS = {
     0x03AFE: "dos_open",                # native
     0x04B10: "dos_write",               # native
     0x04D04: "set_bios_mode",           # AH=0, AL=mode, then int86(0x10)
+    0x04CA0: "sound_play_guarded",      # if [0x4f4]: forward (id, mode) to
+                                        # 0x14750; 26 bytes and nothing else
     0x04D2A: "clear_vram",              # native
     0x04D4B: "page_flip",               # native
     0x0572A: "dac_set_black?",          # writes an index, then three zeros
@@ -79,6 +81,9 @@ FUNCTIONS = {
     0x0C0C2: "egg_load_one?",           # called per egg file with (0, type, i)
     0x0C156: "egg_load_pass_0x48",      # loops every open egg for type 0x48
     0x0D757: "draw_number2",            # native
+    0x102D7: "show_splash",             # (image far *, frames): fade an image
+                                        # in, hold for `frames` or until a key,
+                                        # fade out. Holds a fifth plane loop.
     0x11547: "print_newline?",          # no args, bracketing the banners
     0x11657: "build_episode_index",     # builds both indexes; prints the banner
     0x13F2:  "farmalloc?",              # sizes both index arrays
@@ -88,6 +93,8 @@ FUNCTIONS = {
     0x141FE: "init",                    # the whole startup: banner, objects,
                                         # hardware detection, key wait
     0x144D7: "main",                    # the frame the runtime calls
+    0x14750: "sound_play?",             # gated on sound_state; ids below 0x96;
+                                        # calls 0x14628(id, 0x20, 0xff)
     0x148A2: "detect_soundblaster",     # the sound check; probes the DSP
     0x14974: "detect_hardware",         # sound, then XMS, then prints
     0x149EA: "dsp_write",               # polls 0x22c, writes the byte
