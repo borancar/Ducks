@@ -12,7 +12,7 @@ offset. A name ending in `?` there is tentative and is printed as such.
 ```
 image 0x0014e   the C runtime's startup (no prologue; where main is called from)
   └─ 0x144d7    main
-       ├─ 0x141fe    the "Press a key to begin" wait, before graphics
+       ├─ 0x141fe    startup_screen — detects hardware, prints, waits for a key
        └─ 0x0c156    a loader pass, NOT game_main - see below
             └─ 0x0c0c2 ... and deeper
 ```
@@ -55,6 +55,34 @@ nothing else. Registers carry nothing either: `ax=0 bx=0 dx=0`, `ds` the DGROUP,
 every consumer reads them straight out of DGROUP — `[0x20a9]` the open egg files,
 `[0x20ba]` the episodes, `[0x20be]` the readme sections
 ([episode-index](episode-index.md)).
+
+## The startup screen and the sound check
+
+`0x141fe` is not only a key wait, which is what it was first named for. Caught by
+arming the BLASTER parser and the DSP write and pressing the key:
+
+```
+main 0x144d7
+  └─ 0x141fe  startup_screen
+       └─ 0x14974  detect_hardware
+            ├─ 0x148a2  detect_soundblaster      <- the sound check
+            │    └─ 0x149ea  dsp_write           (polls 0x22c, writes the byte)
+            │         └─ 0x15b37  parse_blaster_env
+            │              ├─ 0x0388b  getenv("BLASTER")
+            │              └─ 0x15a49  blaster_env_field
+            └─ the XMS half, inline
+```
+
+`detect_hardware` is the whole three-line block on the startup screen: it calls
+the sound check, gives up printing nothing if that fails, then checks XMS -
+`HIMEM.SYS not installed` if absent - and finally prints `Free XMS memory: %uk`.
+
+`parse_blaster_env` copies the variable into a 128-byte local and pulls out one
+field at a time through `blaster_env_field`, which takes the letter: `0x41` `A`
+for the base address, `0x49` `I` for the IRQ, and so on, each with an
+out-parameter. That is why a breakpoint on it fires repeatedly - it is called per
+field, not once - and why the routine that looked like a `getenv` wrapper is not
+one. The real `getenv` is `0x0388b`.
 
 ## main sets the video mode itself
 

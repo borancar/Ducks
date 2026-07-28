@@ -76,8 +76,13 @@ FUNCTIONS = {
     0x11657: "build_episode_index",     # builds both indexes; prints the banner
     0x13F2:  "farmalloc?",              # sizes both index arrays
     0x13519: "set_mode_x",              # BIOS 13h, then unchains to Mode X
-    0x141FE: "press_any_key_wait",      # the startup wait, before graphics
+    0x141FE: "startup_screen",          # detects hardware, prints, waits for a key
     0x144D7: "main",                    # the frame the runtime calls
+    0x148A2: "detect_soundblaster",     # the sound check; probes the DSP
+    0x14974: "detect_hardware",         # sound, then XMS, then prints
+    0x149EA: "dsp_write",               # polls 0x22c, writes the byte
+    0x15A49: "blaster_env_field",       # pulls one letter out of BLASTER
+    0x15B37: "parse_blaster_env",       # getenv("BLASTER"), fields A/I/D
     0x15176: "stop_voice",              # native
     0x151D2: "play_sample",             # native
     0x15267: "stop_sound_by_id",        # native
