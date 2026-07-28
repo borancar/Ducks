@@ -73,6 +73,30 @@ startup log. The names are not five constants: `save_name` holds the template
 the handle is non-null, reads the slot. The bound is `cmp [bp-2], 6`, so slots 1
 to 5.
 
+**It takes no arguments and returns nothing.** The prologue is
+`push bp; mov bp, sp; sub sp, 6; push si` - six bytes of locals and no reference
+to `[bp+6]` - and the epilogue is `pop si; leave; retf` with no `mov ax`
+beforehand, so AX is whatever the last call left. Its **only output is a single
+global**:
+
+```
+call 0x14e88(FILE*)          ; a value out of the save
+mov si, ax
+cmp si, [0x2055]
+jbe  skip
+mov [0x2055], si             ; keep the maximum across all five slots
+skip:
+lcall fclose
+```
+
+Everything else it reads it throws away - two values fetched through `0x14f4b`
+are each handed straight to `0x0edb` and not stored, which has the shape of read
+a string, free it. So the whole point of the scan is that one running maximum.
+
+`[0x2055]` reads **0** on a machine with no save files, which is consistent but
+does not identify it; `0x14e88` would have to be read to know what the value is.
+Recorded as `max_save_value?`, tentative.
+
 ## The chain
 
 ```
