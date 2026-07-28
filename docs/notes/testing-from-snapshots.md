@@ -140,6 +140,7 @@ missed.
 | `click-castle` | in play, grey stone/castle level, waiting for a mouse click |
 | `click-snow` | in play, snow-and-hedge level, waiting for a mouse click |
 | `click-cave-1/2/3` | the same cave moment at frames 2249, 2256 and 2266 |
+| `teleporter-level` | start of the red-brick-and-snow level with a teleporter |
 
 The five `click-*` states are all mid-play, stopped at the point where the game
 is waiting for a mouse click. They are the states to reach for when a native

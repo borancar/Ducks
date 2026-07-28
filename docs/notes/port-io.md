@@ -200,8 +200,8 @@ not these. Two candidates, and the second is cheap to rule out first:
 - the fade at `0x0b15f` being driven rapidly, which would show as a burst of
   `dac_loop 0x0b15f` calls against a small frame count in the exit report.
 
-The second already looks unlikely. A 94-second session played from the teleporter
-capture recorded **58** calls to `0x0b15f` and 2 to `0x056e0` — the handful of
+The second already looks unlikely. A 94-second session played from
+`teleporter-level.snap` recorded **58** calls to `0x0b15f` and 2 to `0x056e0` — the handful of
 ordinary screen fades you would expect, not a burst — and zero to either blink
 loop. So if something visible happened on that screen, the palette was barely
 touched while it did, which points at the first candidate.
