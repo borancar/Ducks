@@ -4859,11 +4859,23 @@ class Control:
     def _read(m, lin, n):
         n = max(1, min(n, 1024))
         data = bytes(m.uc.mem_read(lin, n))
+        # Anything inside DGROUP gets its known variables called out, since a
+        # bare hex dump of the data segment is otherwise unreadable.
+        dg = lin - m.dgroup_base
+        named = []
+        if 0 <= dg < 0x10000:
+            for off, _nm in sorted(symbols.VARIABLES.items()):
+                if dg <= off < dg + n:
+                    named.append(f"    d+{off:#07x} = +{off - dg:<4} "
+                                 f"{symbols.describe_variable(off)}")
         lines = []
         for i in range(0, n, 16):
             chunk = data[i:i + 16]
             text = "".join(chr(c) if 32 <= c < 127 else "." for c in chunk)
             lines.append(f"  {lin + i:#07x}  {chunk.hex(' '):<47}  {text}")
+        if named:
+            lines.append("  known variables in this range:")
+            lines.extend(named)
         return "\n".join(lines)
 
     @staticmethod

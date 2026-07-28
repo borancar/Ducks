@@ -83,14 +83,27 @@ def main():
             bad.append(f"{off:#07x} {name!r} does not start with push bp; "
                        f"mov bp, sp - it is {img[off:off+4].hex()}")
 
+    # Variables live in a third address space - DGROUP offsets - and the only
+    # thing that can be checked without a running machine is that they are
+    # plausible offsets and that tentative ones say so.
+    for off, name in symbols.VARIABLES.items():
+        if not 0 <= off < 0x10000:
+            bad.append(f"{off:#07x} {name!r} is not a DGROUP offset")
+        if name.endswith("?") and "(tentative)" not in symbols.describe_variable(off):
+            bad.append(f"d+{off:#07x} is tentative but does not print as such")
+    dupes = [v for v in set(symbols.VARIABLES.values())
+             if list(symbols.VARIABLES.values()).count(v) > 1]
+    for v in dupes:
+        bad.append(f"variable name {v!r} is used more than once")
+
     n = len(natives()) + len(native.PLANE_LOOPS) + len(native.DAC_LOOPS)
     if bad:
         print(f"FAIL: {len(bad)} problem(s) across {n} named address(es)")
         for b in bad:
             print(f"  {b}")
         return 1
-    print(f"OK: {n} natives and loop heads all named, and the names agree "
-          f"with native.py")
+    print(f"OK: {n} natives and loop heads all named, the names agree with "
+          f"native.py, and {len(symbols.VARIABLES)} variables check out")
     return 0
 
 

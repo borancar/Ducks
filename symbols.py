@@ -17,8 +17,9 @@ recorded at `0x15232` - which is mid-instruction inside `play_sample` - when it 
 at `0x05232`. test_symbols.py now requires every entry to start with a prologue,
 which is what catches this.
 
-`FUNCTIONS` holds function entry points. `LOOPS` holds inline loop heads, which
-are *not* function starts - they sit inside a larger routine and are hooked where
+`FUNCTIONS` holds function entry points. `VARIABLES` holds DGROUP offsets, which
+live in a different space again - relative to the data segment, not the image.
+`LOOPS` holds inline loop heads, which are *not* function starts - they sit inside a larger routine and are hooked where
 they begin, so `find_function_start` will never return one.
 
 Used by the control socket's `where`, and so by `stack`, `until`, `finish` and
@@ -116,6 +117,58 @@ def name(off):
 def describe(off):
     """`name (tentative)` for a tentative entry, plain name otherwise, or ''."""
     n = name(off)
+    if not n:
+        return ""
+    return f"{n[:-1]} (tentative)" if n.endswith("?") else n
+
+# DGROUP offsets we have identified. Read with `read d+0x…` over the control
+# socket, which prints the name. These are *not* image offsets - a DGROUP offset
+# is relative to the data segment, and `dgroup_base` is where that lands in
+# memory. Mixing the two is the mistake documented in
+# docs/notes/address-spaces.md.
+VARIABLES = {
+    0x054D: "draw_flag?",               # set to 4 around a loader pass
+    0x0DAD: "palette_washed",           # 48 bytes: the lifted terrain ramp
+    0x0D61: "flip_phase",               # 0..9, advanced by page_flip
+    0x0DDD: "blink_toggle",             # flips between the two blink palettes
+    0x0DDF: "blink_countdown",          # randomised frames until the next flip
+    0x10E1: "palette_stored",           # 768 bytes: the level's palette
+    0x14B1: "palette_source",           # 48 bytes: the ramp washed_ramp reads
+    0x1721: "current_buffer",           # far pointer, set by set_buffer
+    0x1723: "current_buffer_seg",       # its segment half
+    0x1725: "page_front",               # the visible page; page_flip swaps these
+    0x1727: "page_back",
+    0x177D: "current_plane",            # written by set_plane
+    0x1798: "fade_level",               # 0..15, scales the palette
+    0x179A: "fade_direction",           # 0xff seen when a fade is armed
+    0x179B: "fade_start_colour",        # where the fade upload begins
+    0x1FD4: "game_speed",               # page_flip delays (0x1f - this) ms
+    0x1FD5: "gamma",                    # (gamma + 6) / 19 scales every palette
+    0x201E: "blink_enable_src",         # only ever written zero
+    0x2104: "sound_available",          # detect_hardware's return
+    0x2157: "blink_enable",             # copied from blink_enable_src; dead
+    0x20A9: "egg_files",                # far pointer to the 23-byte descriptors
+    0x20AD: "egg_file_count",           # how many are open
+    0x20BA: "episode_index",            # far pointer to 14-byte records
+    0x20BE: "readme_index",             # far pointer to 14-byte records
+    0x20C2: "episode_count",            # sizes episode_index
+    0x20C4: "readme_count",             # sizes readme_index
+    0x20C6: "egg_stream",               # far pointer egg_getc reads through
+    0x2908: "sound_state?",             # cleared at the top of detect_hardware
+    0x3C78: "voice_table",              # 12-byte slots
+    0x3CD8: "voice_busy",
+    0x3D1C: "voice_active_count",
+}
+
+
+def variable(off):
+    """The name for a DGROUP offset, or None."""
+    return VARIABLES.get(off)
+
+
+def describe_variable(off):
+    """`name (tentative)` for a tentative entry, plain name otherwise, or ''."""
+    n = VARIABLES.get(off)
     if not n:
         return ""
     return f"{n[:-1]} (tentative)" if n.endswith("?") else n
