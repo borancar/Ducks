@@ -59,16 +59,56 @@ the page the [readme crash](open-readme-crash.md) happens on.
 | `[0x20c4]` | a second running total |
 | `[0x20c6]`/`[0x20c8]` | the source being read; `lcall 0, 0x3791` pulls the next value from it |
 
-Entries are indexed with `imul 0x17`, so the stride is **23 bytes**. Fields seen
-used: `+4` and `+6` (words, printed together), `+0x10` (a byte, written from the
-reader), `+0x14` (a word, and the entries where it is non-zero are the ones
-counted into `[0x20c2]`). The second array's records are **14 bytes**.
+## The 23-byte entries are loaded files, not episodes
 
-**Not yet established:** how the 23-byte entries relate to the string block — the
-strings begin at `+0x1a` from `2254:0000`, which is inside what would be the
-second stride, so either the entries are variable-length or the names are
-referenced rather than inline. Read the body at `0x116e4`-`0x11733` next; it was
-skipped here.
+That is what made the count confusing: `[0x20ad]` is **1**, because one egg file
+is open. Entry 0, read live, with `+0x0c` giving the game away:
+
+```
++0x00  dword  19a5:2e40   far pointer into DGROUP - per-file state
++0x04  dword  2277:0004   far pointer to the file name, "MAIN.EGG", unshifted
++0x08  word   0x0004
++0x0a  word   0x33b4
++0x0c  word   0x012f = 303    the slice count the banner printed
++0x0e  word   0x084b
++0x10  byte   written by the loop from the information block
++0x11  word   0x0006
++0x13  byte   format version - the loop rejects anything outside 4..6
++0x14  word   non-zero, so this file contributes to the [0x20c2] total
++0x16  byte
+```
+
+So the loop walks *open egg files*, fetches each one's information block, checks
+the version, and tallies how many episodes it holds.
+
+## The episode index itself
+
+`[0x20c2]` came out as **4**, so `[0x20c2] * 0x0e` allocated four 14-byte records
+at `33a4:0004`. Read live and cross-checked against the names they point to:
+
+| record | name | first | last | ordinal | flag |
+| --- | --- | --- | --- | --- | --- |
+| 0 | `TRAINING LEVELS` | 1 | 10 | 0 | 0 |
+| 1 | `SHALLOW END` | 11 | 30 | 1 | 0 |
+| 2 | `SO FAR SO GOOD?` | 31 | 50 | 2 | 0 |
+| 3 | `DUCKING HELL` | 51 | 80 | 3 | 1 |
+
+```
++0x00  dword  far pointer to the name, decoded - "TRAINING LEVELS" plainly
++0x04  word   first level  (0x06 is always zero, so this may be a long)
++0x08  word   last level
++0x0a  word   episode ordinal
++0x0c  word   flag, set only on the last episode
+```
+
+**Eighty levels in four episodes.** That also answers how the 23-byte entries
+relate to the shifted string block: they do not. The shifted strings live in the
+egg's information block, and the names the second array points at are **already
+decoded** — something copies them out and subtracts the one on the way.
+
+The remaining unknown is small: which routine does that copy, and what the flag
+at `+0x0c` means. `1` on `DUCKING HELL` alone is consistent with "last", and with
+a shareware lock, and nothing here distinguishes them.
 
 ## Reproducing it
 
