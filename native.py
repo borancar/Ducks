@@ -4831,7 +4831,12 @@ class Control:
                     f"{off - DGROUP_IMAGE_OFF:#07x} (data)")
         fn = find_function_start(img, off)
         if fn is None:
-            return f"{lin:#07x} = image {off:#07x} (no prologue found)"
+            # No prologue to walk back to, but the address itself may be named -
+            # the C runtime's entry has no Borland frame and is the one every
+            # stack walk ends on.
+            named = symbols.describe(off)
+            return (f"{lin:#07x} = image {off:#07x} (no prologue found)"
+                    + (f"  {named}" if named else ""))
         named = symbols.describe(fn)
         return (f"{lin:#07x} = image {off:#07x} in {fn:#07x}"
                 + (f"  {named}" if named else ""))
