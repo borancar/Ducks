@@ -12,7 +12,7 @@ offset. A name ending in `?` there is tentative and is printed as such.
 ```
 image 0x0014e   the C runtime's startup (no prologue; where main is called from)
   └─ 0x144d7    main
-       ├─ 0x141fe    startup_screen — detects hardware, prints, waits for a key
+       ├─ 0x141fe    init — the whole startup screen
        └─ 0x0c156    a loader pass, NOT game_main - see below
             └─ 0x0c0c2 ... and deeper
 ```
@@ -56,14 +56,30 @@ every consumer reads them straight out of DGROUP — `[0x20a9]` the open egg fil
 `[0x20ba]` the episodes, `[0x20be]` the readme sections
 ([episode-index](episode-index.md)).
 
-## The startup screen and the sound check
+## init, and the sound check
+
+`0x141fe` is the program's initialisation, not merely a key wait - the name it
+was first given, `press_any_key_wait`, described its last three instructions. It
+owns the entire startup screen. Its first act is to print `DUCKS v1.21`
+(`DGROUP+0x2808`), which is the first line the program shows at all, and in order
+it then:
+
+- allocates **three** 22-byte objects into `init_objects` (`[0x210c]`, far
+  pointers with a stride of 4), sets `+0xc = 316` and `+0xe = 15` on each, and
+  initialises them through `0x15388`
+- prints the remaining banners
+- calls `detect_hardware`, stores the result in `sound_available`, and inits the
+  sound module only if it is non-zero
+- spins on `input_poll` until `last_key` is set
+
+Caught by arming the BLASTER parser and the DSP write and pressing the key:
 
 `0x141fe` is not only a key wait, which is what it was first named for. Caught by
 arming the BLASTER parser and the DSP write and pressing the key:
 
 ```
 main 0x144d7
-  └─ 0x141fe  startup_screen
+  └─ 0x141fe  init
        └─ 0x14974  detect_hardware
             ├─ 0x148a2  detect_soundblaster      <- the sound check
             │    └─ 0x149ea  dsp_write           (polls 0x22c, writes the byte)
@@ -79,7 +95,7 @@ the sound check, gives up printing nothing if that fails, then checks XMS -
 
 ### What follows the sound check
 
-The rest of `startup_screen`, read at the breakpoint on the return:
+The rest of `init`, read at the breakpoint on the return:
 
 ```
 mov [sound_available], ax          ; detect_hardware's result

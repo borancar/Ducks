@@ -80,7 +80,8 @@ FUNCTIONS = {
     0x11657: "build_episode_index",     # builds both indexes; prints the banner
     0x13F2:  "farmalloc?",              # sizes both index arrays
     0x13519: "set_mode_x",              # BIOS 13h, then unchains to Mode X
-    0x141FE: "startup_screen",          # detects hardware, prints, waits for a key
+    0x141FE: "init",                    # the whole startup: banner, objects,
+                                        # hardware detection, key wait
     0x144D7: "main",                    # the frame the runtime calls
     0x148A2: "detect_soundblaster",     # the sound check; probes the DSP
     0x14974: "detect_hardware",         # sound, then XMS, then prints
@@ -150,6 +151,7 @@ VARIABLES = {
     0x1FD5: "gamma",                    # (gamma + 6) / 19 scales every palette
     0x201E: "blink_enable_src",         # only ever written zero
     0x2104: "sound_available",          # detect_hardware's return
+    0x210C: "init_objects",             # 3 far pointers to 22-byte objects
     0x2157: "blink_enable",             # copied from blink_enable_src; dead
     0x20A9: "egg_files",                # far pointer to the 23-byte descriptors
     0x20AD: "egg_file_count",           # how many are open
