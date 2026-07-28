@@ -163,6 +163,28 @@ which is how two perfectly good bonus-screen captures got reported as black.
 Still untested: whether demo play and human play exercise the same paths. Every
 in-game result above except the bonus screens comes from the demo.
 
+## Do all 45 hooks actually fire?
+
+A native hooked at a wrong address does not raise. It never runs, the original
+body executes instead, everything still works, and the port silently does less
+than it claims — the `--require` trap applied to the whole table. Worth asking
+after `egg_find_block` turned out to be recorded 64 KB out
+([entry-points](entry-points.md)).
+
+Unioning the call counts over a boot and seven snapshots: **34 of 45 fire in
+ordinary play.** The other eleven are all accounted for:
+
+| never fired | why |
+| --- | --- |
+| `compose_layer`, `compose_scroll`, `draw_entities`, `draw_number`, `plot_pixel`, `particles`, `blit_rows_masked` | bypassed by the native plane loops, which call their cores as plain Python. **All seven fire with `--no-native-plane-loop`** — 36,008 calls for `draw_entities` alone |
+| `dac_loop 0x0b1c9`, `dac_loop 0x0b202` | behind `[0x2157]`, which nothing sets; verified by forcing the gate ([port-io](port-io.md)) |
+| `outline_sprite` | its core runs — the "UNVERIFIED sprite outline" warning fires — but only from inside `draw_entities`, never through the dispatcher |
+| `draw_number2` (`0x0d757`) | **no evidence at all.** Valid prologue, never reached by any state tried |
+
+So no hook is demonstrably wrong, and `draw_number2` is the one with nothing
+behind it. That is a coverage gap rather than a fault, and saying so is the point:
+it is the one address whose correctness rests only on the disassembly.
+
 ## Two bugs the byte-level tests could not have caught
 
 Both were found by running the thing, and neither would ever have failed
