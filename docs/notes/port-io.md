@@ -127,6 +127,50 @@ wall-clock retrace — 9,156 against 576 on the same snapshot and frame count. T
 port is a poll against a clock, so its count is a function of pacing, not only of
 the guest. Compare like with like.
 
+## 0x3c9, finished: four loops, and one that no play-through can reach
+
+A static scan for `mov dx, 0x3c8` finds ten sites; attribution puts every
+remaining data write in three more loops, all the same shape as the fade —
+zero-extend a stored byte, shift right by two for a 6-bit DAC value, write it —
+differing only in source and range:
+
+| loop | source | range | what |
+| --- | --- | --- | --- |
+| `0x056e0` | `[si+0x10e1]` | 0 → 0x300 | a full palette, unscaled |
+| `0x0b1c9` | `[si+0x0dad]` | 0 → 0x30 | 16 colours at DAC index 0x40 |
+| `0x0b202` | `[si+0x10e1]` | 0xc0 → 0xf0 | the same 16, from the other palette |
+
+So one parameterised handler rather than three near-copies. `sar ax, 2` is
+arithmetic, but AH is zeroed first and the byte is unsigned, so no sign case
+exists here — unlike the fade, where the level is a variable and the general form
+was worth writing.
+
+With all four in, **`0x3c9` disappears from the port table completely**; only the
+75 index writes to `0x3c8` remain, which are single `out`s outside any loop.
+
+### The two that could not be reached
+
+`0x0b1c9` and `0x0b202` are a blink: they alternate 16 colours at DAC index 0x40
+between two palettes on a random 2-to-260-frame interval. They sit behind
+`[0x2157] != 0`, and **no play-through reaches them.** None of the eight
+snapshots in the library hit either; a 419-second session across menus, levels
+and bonus screens hit neither; and all five captures taken during it read
+`[0x2157] = 0`.
+
+Chasing the flag explains why. `[0x2157]` is only ever assigned from `[0x201e]`
+(at `0x0d854`), and the only write to `[0x201e]` in the image stores **zero** (at
+`0x0932f`). The branch is dead in this build.
+
+Unreachable is not verified — `0 mismatches` on code that never ran means
+nothing. The documented answer for a state that cannot be produced on demand is
+to drive the guest's own code on synthetic input, as `test_retire.py` does. So:
+restore a level, force `[0x201e]` and `[0x2157]` to 1 and the countdown to 0, and
+let the ordinary harness run. Forcing the flag cannot make the comparison pass
+falsely — it is still native-against-original on the same call — it can only make
+it happen at all.
+
+**2,352 calls to `0x0b1c9`, 2,304 to `0x0b202`, 4,656 comparisons, 0 mismatched.**
+
 ## 0x3da, removed: the waits are NOPed out
 
 Not replaced natively — **deleted from the guest**. `--snow-nops` (on by default)

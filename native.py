@@ -3096,11 +3096,39 @@ def dac_loop_fade(m):
     return n
 
 
+def dac_upload(src_off, limit):
+    """Build a handler for one of the plain `>> 2` palette uploads.
+
+    `src_off` is a DGROUP offset and `limit` the value SI is compared against,
+    both read straight off the loop. SI is where the guest left it - two of the
+    three start part-way up the palette - so the count is `limit - SI`.
+    """
+    def handler(m):
+        si = m._reg(UC_X86_REG_SI)
+        n = limit - si
+        if n <= 0:
+            return 0
+        src = np.frombuffer(m.read(m.dgroup_base + src_off + si, n),
+                            dtype=np.uint8)
+        out = src >> 2
+        _dac_run(m, out.tolist())
+        m._set(UC_X86_REG_SI, limit)
+        m._set(UC_X86_REG_AX, int(out[-1]))
+        m._set(UC_X86_REG_DX, 0x3C9)
+        return n
+
+    handler.__name__ = f"dac_upload_{src_off:#07x}_{limit:#06x}"
+    return handler
+
+
 # Loop head -> (exit offset, handler). The handler returns how many bytes it
 # wrote, for the report; the head is the loop *body*, which is only reached when
 # the test at the bottom has already passed, so the count is never zero there.
 DAC_LOOPS = {
     0x0B15F: (0x0B177, dac_loop_fade),
+    0x056E0: (0x056F4, dac_upload(0x10E1, 0x300)),
+    0x0B1C9: (0x0B1DC, dac_upload(0x0DAD, 0x030)),
+    0x0B202: (0x0B216, dac_upload(0x10E1, 0x0F0)),
 }
 
 
