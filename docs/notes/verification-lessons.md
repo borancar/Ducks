@@ -20,6 +20,16 @@ reasoning went from shape to conclusion without first asking whether the tool wa
 measuring the intended thing. Broken instrumentation produces coherent-looking
 wrong answers, which is exactly what makes it dangerous.
 
+A fourth, from the other direction: the page-flip "transient" was measured by an
+instrument that was **working correctly**, and the conclusion was still wrong. The
+quantity it reported — wall time per frame — depends on the host as much as on the
+program, and the host was not idle. See
+[flip-transient](flip-transient.md): the check that would have caught it was
+already in hand, because blocks entered per frame stayed flat the whole time.
+**A wall-clock number is a measurement of the program only if the machine is
+controlled**, and a control that is immune to the loose variable — there, a path
+that spins until the retrace, so contention never moves it — confirms nothing.
+
 **How to apply.** Before inferring anything from new instrumentation, prove it
 measures what it claims on a case whose answer is already known. When a
 measurement contradicts a careful reading of the disassembly, suspect the

@@ -7,8 +7,8 @@ Current, and kept current. Where these disagree with
   four plane loops, and what "progress" means when the speedup is not the point
 - [open-readme-crash](open-readme-crash.md) — the one open bug: navigating the
   in-game readme jumps into DGROUP data
-- [open-flip-transient](open-flip-transient.md) — the first ~120 frames after a
-  native flip run 4x slow, emulator-side; reproduces from a snapshot
+- [flip-transient](flip-transient.md) — the "first 120 frames run 4x slow" was
+  load on the measuring machine; what is left of it, and why the control hid it
 - [verification-lessons](verification-lessons.md) — broken instrumentation gives
   coherent wrong answers; prove the tool before reading its shape
 - [running-a-session](running-a-session.md) — how to launch, what a healthy
