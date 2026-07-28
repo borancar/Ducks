@@ -9,13 +9,35 @@ not by reading the disassembly — every frame below was observed.
 image 0x0014e   the C runtime's startup (no prologue; where main is called from)
   └─ 0x144d7    main
        ├─ 0x141fe    the "Press a key to begin" wait, before graphics
-       └─ 0x0c156    tentatively game_main
+       └─ 0x0c156    a loader pass, NOT game_main - see below
             └─ 0x0c0c2 ... and deeper
 ```
 
 `0x144d7` is **main**: it is the frame that never leaves the stack, present both
 while the startup screen waits for a key and while the game runs, and the only
 one the runtime at `0x0014e` calls.
+
+## 0x0c156 is a loader pass, not the main routine
+
+It was briefly marked "tentatively game_main" on the strength of being called
+from main with no arguments. Disassembling it settles that it is not — it is 86
+bytes:
+
+```
+sub sp, 0x302              ; a 770-byte scratch buffer
+call 0x0b9ea               ; register it: set_buffer(ss:buf)
+mov [0x54d], 4             ; set a flag for the duration
+  loop i over [0x20ad]     ; the open egg-file count
+    call 0x0c0c2(0, 0x48, i)
+mov [0x54d], <old>         ; restore the flag
+call 0x0b9ea(ds:0x13f1)    ; restore the buffer
+```
+
+`[0x20ad]` is the open-egg-file count from [episode-index](episode-index.md), and
+the shape matches the index builder's `0x15232(0x5a, 1, si)` — a pass over every
+open egg for one resource type, `0x48` here against `0x5a` there. So main calls a
+sequence of these, and **the real game loop is a different call from main** —
+look at what else `0x144d7` calls around `0x1452a`.
 
 ## What main passes to 0x0c156: nothing
 
