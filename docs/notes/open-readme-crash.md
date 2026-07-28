@@ -93,6 +93,18 @@ entry, at linear `0x000fa`.
   through `mov al, [bp+6]`, where the bytes happen to decode as `push es; int
   0x21`. Hooking both and logging every call shows neither is called on this path.
 
+## The page range it walks off
+
+[episode-index](episode-index.md) turned up the table this navigates. The readme
+index holds five records, and `DUCKS OVERVIEW` is **pages 1 to 3** — so the
+capture is on the last page of the first section, and Down is the step past
+`last`. The ranges are not contiguous (1-3, then 11-19, then 21), so page numbers
+address the egg rather than positions in a list, and "next" from 3 is not 4.
+
+That is a lead, not the cause: it says the input which breaks it is exactly the
+one that runs off a record's range, and nothing yet connects that to the stack
+being exhausted.
+
 ## What is left
 
 **Why is the stack exhausted?** 2.2 KB is what the program has: the MZ header asks

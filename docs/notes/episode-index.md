@@ -81,6 +81,19 @@ is open. Entry 0, read live, with `+0x0c` giving the game away:
 So the loop walks *open egg files*, fetches each one's information block, checks
 the version, and tallies how many episodes it holds.
 
+## Two indexes, not one
+
+The routine builds **two** arrays, allocates them the same way, and fills them in
+two passes over the same information block. They share a record layout.
+
+| | pointer | sized by | count | contents |
+| --- | --- | --- | --- | --- |
+| first | `[0x20ba]` = `33a4:0004` | `[0x20c2]` | 4 | episodes |
+| second | `[0x20be]` = `33a8:0004` | `[0x20c4]` | 5 | readme sections |
+
+Both are `count * 0x0e` bytes from the same allocator at `0x13f2`, and both fall
+back to the same error call when it returns null.
+
 ## The episode index itself
 
 `[0x20c2]` came out as **4**, so `[0x20c2] * 0x0e` allocated four 14-byte records
@@ -100,6 +113,33 @@ at `33a4:0004`. Read live and cross-checked against the names they point to:
 +0x0a  word   episode ordinal
 +0x0c  word   flag, set only on the last episode
 ```
+
+## The readme index, and the crash
+
+The second array, read the same way:
+
+| record | name | first | last | ordinal | flag |
+| --- | --- | --- | --- | --- | --- |
+| 0 | `DUCKS OVERVIEW` | 1 | **3** | 0 | 0 |
+| 1 | `THE OBJECTS` | 11 | 19 | 1 | 0 |
+| 2 | `HOW TO REGISTER` | 21 | 21 | 2 | 0 |
+| 3 | `THANKS` | 30 | 35 | 3 | 0 |
+| 4 | `DUCKS EDITOR SUITE` | 100 | 100 | 4 | 1 |
+
+Same fields, so `first`/`last` are page numbers here rather than level numbers,
+and the flag is again set only on the last record.
+
+**`DUCKS OVERVIEW` runs pages 1 to 3**, and
+[open-readme-crash](open-readme-crash.md) is captured on "DUCKS OVERVIEW, Page 3
+of 3" — the last page of the first section — pressing Down. So the crash is a
+navigation step off the end of a record's page range, and this table is the thing
+the range comes from. Whether that is *why* the stack is exhausted is not
+established: the connection is that the input which breaks it is exactly the one
+that runs past `last`, which is a lead worth following rather than a conclusion.
+
+Note also that the ranges are not contiguous — 1-3, then 11-19, then 21 — so page
+numbers are addresses into the egg, not positions in a list, and "next page" from
+3 is not 4.
 
 **Eighty levels in four episodes.** That also answers how the 23-byte entries
 relate to the shifted string block: they do not. The shifted strings live in the
