@@ -299,6 +299,56 @@ sleep — and the two hot plane loops at 2.0% between them, against 19.01s of na
 time in a 310.9s guest run. Whatever is expensive now is the emulated CPU, not the
 emulated hardware.
 
+## Going to zero: the inventory
+
+The goal changed on 2026-07-28 from "cheap enough" to **no privileged
+instructions at all** — the guest should never execute an `IN` or `OUT`. That is
+a different question, and a runtime count cannot answer it: it says what a
+session touched, not what exists.
+
+**Static sweep**, disassembling from each of the 423 Borland prologues to its
+`ret`: **125 IN/OUT instructions**. That is an upper bound and knowingly
+contaminated — it runs through data, and "port 0x0cd" is the `INT` opcode byte
+being read as code. 46 sites have a computed DX, nearly all in the sound driver,
+which builds its ports from the BLASTER base.
+
+**Runtime sweep** over a boot and five states, hooking every access: **11
+distinct sites**.
+
+| site | port | in | note |
+| --- | --- | --- | --- |
+| `0x158fc` `0x15902` `0x1590a` | 0x22e, 0x0a0, 0x020 | `0x1580c` | the IRQ acknowledge |
+| `0x0b14f` `0x056db` | 0x3c8 | fade, upload | index write before an already-native loop |
+| `0x02207` `0x0220c` `0x02213` | 0x043, 0x040 | `0x02108` | `read_pit` |
+| `0x149f3` `0x14a02` | 0x22c | `0x149ea` | DSP write, startup only |
+| `0x04db2` | 0x3da | `0x04d4b` | **not live — see below** |
+
+So the work is four groups, not 125 sites. The gap between 125 and 11 is what a
+"no privileged instructions" claim has to close honestly: everything unreached is
+*unknown*, not absent.
+
+### The 0x3da residue is two old snapshots, not a hole in the flip native
+
+`main-menu-unhovered` reads 0x3da; `teleporter-level` reads zero — and the second
+is the one that resumes *at* the flip's native entry. Catching the single arrival
+with an instruction trail explains it:
+
+```
+15ae:0f36  image 0x15916    iret          the sound IRQ handler returns
+05da:0115  image 0x04db5    test ax, 8    back inside page_flip's wait loop
+```
+
+That capture resumes at `0x1589c`, inside the sound IRQ, and the context it
+interrupted was already inside the guest's own retrace loop — a flip in flight
+from before the native existed. On restore the handler finishes, `iret`s back into
+the loop, and it spins once. The number of reads varies run to run (1 to 2,158)
+because it is one spin against the wall clock.
+
+Two hypotheses were refuted on the way, both worth not repeating: it is not a
+snapshot resuming at the native's entry (those read zero), and it is not an
+`emu_start` restart landing on the entry instruction (**zero** of 1,920 restarts
+did).
+
 ## Reading the report
 
 The line `N palette byte(s) did NOT reach port 0x3c9` is there so that absence is
