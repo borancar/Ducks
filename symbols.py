@@ -41,6 +41,7 @@ FUNCTIONS = {
     0x03791: "egg_getc",                # getc on the egg stream: count/ptr/seg
     0x03AFE: "dos_open",                # native
     0x04B10: "dos_write",               # native
+    0x04D04: "set_bios_mode",           # AH=0, AL=mode, then int86(0x10)
     0x04D2A: "clear_vram",              # native
     0x04D4B: "page_flip",               # native
     0x05761: "plot_pixel",              # native
@@ -66,6 +67,7 @@ FUNCTIONS = {
     0x0D757: "draw_number2",            # native
     0x11657: "build_episode_index",     # builds both indexes; prints the banner
     0x13F2:  "farmalloc?",              # sizes both index arrays
+    0x13519: "set_mode_x",              # BIOS 13h, then unchains to Mode X
     0x141FE: "press_any_key_wait",      # the startup wait, before graphics
     0x144D7: "main",                    # the frame the runtime calls
     0x15176: "stop_voice",              # native

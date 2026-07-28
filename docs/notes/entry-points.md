@@ -56,14 +56,39 @@ every consumer reads them straight out of DGROUP — `[0x20a9]` the open egg fil
 `[0x20ba]` the episodes, `[0x20be]` the readme sections
 ([episode-index](episode-index.md)).
 
-## It does not set the video mode
+## main sets the video mode itself
 
-At the instant `0x0c156` is entered, the machine is already `mode=0x13` with 116
-page flips behind it. Graphics is up well before the call. An earlier reading that
-put the mode change underneath `0x0c156` was from a *later* call — the function is
-entered repeatedly — and **who sets the mode first is still unattributed**. All
-nine `INT 10h` sites are in one wrapper, `0x202c`, so breakpointing that from a
-cold boot is the way to answer it.
+`0x0c156` does not: the machine is already `mode=0x13` with 116 page flips behind
+it when that function is entered. Catching the `0x03 -> 0x13` transition on a cold
+boot names the real path — watching the machine's `mode` rather than
+breakpointing the INT 10h wrapper, which is called 1,493 times a session for
+cursor moves and palette blocks:
+
+```
+main 0x144d7  at 0x144f4
+  └─ 0x13519  set_mode_x
+       └─ 0x04d04  set_bios_mode
+            └─ int86 0x0293a  ->  INT 10h, AX=0x0013
+```
+
+So **main sets the mode directly, at `0x144f4`** — before the loader passes it
+calls at `0x1452a`. `set_bios_mode` builds `AH=0, AL=mode` into a register struct
+and hands it to `int86`; `set_mode_x` then unchains the result in place:
+
+```
+out 0x3c4, 4 / out 0x3c5, 6      ; sequencer memory mode: chain-4 off
+out 0x3d4, 0x14 / out 0x3d5, 0   ; CRTC underline = 0
+out 0x3d4, 0x17 / ...            ; CRTC mode control
+```
+
+which matches the IN/OUT inventory in [port-io](port-io.md), where the image's
+only `0x3c2` write and one of its `0x3c4`/`0x3c5` pairs are attributed to
+`0x13519`.
+
+**A wrap worth knowing about.** `0x13519`'s call decodes statically as image
+`0x14d04`, and the runtime says `0x04d04` — 64 KB apart. `call rel16` wraps within
+its segment, and image offsets are not segment offsets, so a statically computed
+near-call target can land a segment away. The stack is the authority.
 
 ## What it does first
 
