@@ -77,6 +77,37 @@ main 0x144d7
 the sound check, gives up printing nothing if that fails, then checks XMS -
 `HIMEM.SYS not installed` if absent - and finally prints `Free XMS memory: %uk`.
 
+### What follows the sound check
+
+The rest of `startup_screen`, read at the breakpoint on the return:
+
+```
+mov [sound_available], ax          ; detect_hardware's result
+cmp [sound_available], 0
+je  skip                           ; no sound - skip the init entirely
+push 0x2af8 / lcall 0x15ae:0x346   ; sound module init
+skip:
+call print_newline
+push 0xf / lcall set_text_colour   ; colour 15
+push ds / push 0x28e7 / lcall puts ; "Press a key to begin..."
+call print_newline
+loop:
+  push 200 / push 320
+  call input_poll                  ; the same poll the mouse wrappers hang off
+  cmp [last_key], 0
+  je loop
+leave / retf                       ; main resumes at 0x144ec
+```
+
+`[0x18f6]` is `last_key` and holds the ASCII of the key: read at the breakpoint,
+after a Return had been sent, it contained `0x0d`. The loop simply spins on it.
+
+The word pushed to the sound module, `0x2af8`, is **11000** decimal, which fits
+the card being retuned to 11111 Hz immediately after. It is passed as a single
+word so it could in principle be a near pointer, but `DGROUP+0x2af8` lands
+mid-way through `"HIMEM.SYS not installed"`, which is not a string anyone meant
+to pass - so the numeric reading is the sane one. Not proven.
+
 `parse_blaster_env` copies the variable into a 128-byte local and pulls out one
 field at a time through `blaster_env_field`, which takes the letter: `0x41` `A`
 for the base address, `0x49` `I` for the IRQ, and so on, each with an

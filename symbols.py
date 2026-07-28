@@ -35,7 +35,8 @@ FUNCTIONS = {
     0x012EB: "dos_lseek",               # native
     0x014A3: "dos_read",                # native
     0x01D8E: "memmove_words",           # word-wise memmove; had the CGA snow waits
-    0x02012: "puts?",                   # takes (ds, offset); prints the banners
+    0x01E94: "set_text_colour?",        # called with 15 before a banner
+    0x02012: "puts",                    # (ds, offset); prints the banners
     0x02067: "bios_video",              # native; inside the INT 10h wrapper below
     0x0202C: "bios_video_int10",        # every INT 10h site in the image
     0x02108: "read_pit",                # the PIT latch-and-read
@@ -62,6 +63,7 @@ FUNCTIONS = {
     0x056D2: "palette_upload",          # full 768-byte DAC upload, unscaled
     0x063D6: "draw_sprite",             # native
     0x065F1: "outline_sprite",          # native
+    0x06869: "input_poll",              # the mouse/keyboard poll; takes (w, h)
     0x0675B: "mouse_motion",            # native
     0x0678E: "mouse_presses",           # native
     0x067BA: "mouse_releases",          # native
@@ -74,6 +76,7 @@ FUNCTIONS = {
     0x0C0C2: "egg_load_one?",           # called per egg file with (0, type, i)
     0x0C156: "egg_load_pass_0x48",      # loops every open egg for type 0x48
     0x0D757: "draw_number2",            # native
+    0x11547: "print_newline?",          # no args, bracketing the banners
     0x11657: "build_episode_index",     # builds both indexes; prints the banner
     0x13F2:  "farmalloc?",              # sizes both index arrays
     0x13519: "set_mode_x",              # BIOS 13h, then unchains to Mode X
@@ -142,6 +145,7 @@ VARIABLES = {
     0x1798: "fade_level",               # 0..15, scales the palette
     0x179A: "fade_direction",           # 0xff seen when a fade is armed
     0x179B: "fade_start_colour",        # where the fade upload begins
+    0x18F6: "last_key",                 # ASCII; startup_screen spins until non-zero
     0x1FD4: "game_speed",               # page_flip delays (0x1f - this) ms
     0x1FD5: "gamma",                    # (gamma + 6) / 19 scales every palette
     0x201E: "blink_enable_src",         # only ever written zero
