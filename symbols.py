@@ -92,6 +92,9 @@ FUNCTIONS = {
                                         # in, hold for `frames` or until a key,
                                         # fade out. Holds a fifth plane loop.
     0x11547: "print_newline?",          # no args, bracketing the banners
+    0x11EFB: "show_readme_section",     # (n) = ordinal into the readme index;
+                                        # 2 is HOW TO REGISTER. The viewer the
+                                        # readme crash happens in
     0x11657: "build_episode_index",     # builds both indexes; prints the banner
     0x13F2:  "farmalloc?",              # sizes both index arrays
     0x13519: "set_mode_x",              # BIOS 13h, then unchains to Mode X
@@ -104,8 +107,8 @@ FUNCTIONS = {
     0x141FE: "init",                    # the whole startup: banner, objects,
                                         # hardware detection, key wait
     0x144D7: "main",                    # the frame the runtime calls
-    0x146CD: "after_menu?",             # runs once main_menu has returned, just
-                                        # before the mode is restored. Was
+    0x146CD: "exit_cleanup",            # stop_sound_by_id(0..4) if sound_state,
+                                        # then walks a table at [0x290b]. Was
                                         # guessed as game_main from position
                                         # alone; the game is inside main_menu
     0x14750: "sound_play?",             # gated on sound_state; ids below 0x96;

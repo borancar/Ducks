@@ -146,12 +146,12 @@ that both rules are right is `install_int23` landing on its already-known
 0x145b1  call  main_menu             (ds:0x1916) <-+  does NOT return
 --- on the way out -----------------------------------------------------
 0x145b7  cmp [registered], 0 / jne 0x145fa  -------+  registered skips (6)-(8)
-0x145c9  call  show_resource         (0x4d, 0x64, 250, 0xff)   (6) unseen
-0x145da  call  show_resource         (0x4d, 0x65, 250, 0xff)   (7) unseen
-0x145eb  call  show_resource         (0x4d, 0x66, 250, 0xff)   (8) unseen
-0x145f4  call  0x11efb  ?            (2)           |
-0x14605  call  show_resource         (0x4d, 0x67, 250, 0xff)  <-+  (9) unseen
-0x1460b  lcall after_menu?           ()             0x146cd, no arguments
+0x145c9  call  show_resource         (0x4d, 0x64, 250, 0xff)   (6) gameplay collage
+0x145da  call  show_resource         (0x4d, 0x65, 250, 0xff)   (7) World Wide Webbed
+0x145eb  call  show_resource         (0x4d, 0x66, 250, 0xff)   (8) NOTHING - not in this egg
+0x145f4  call  show_readme_section   (2)            |   HOW TO REGISTER, waits for ESC
+0x14605  call  show_resource         (0x4d, 0x67, 250, 0xff)  <-+  (9) visit us on the web
+0x1460b  lcall exit_cleanup          ()             0x146cd, no arguments
 --- teardown -----------------------------------------------------------
 0x14613  call  set_bios_mode         (3)            back to text
 0x1461a  call  0x140b1  ?            ()
@@ -197,6 +197,48 @@ exactly where a publisher or distributor name would go, and this build has none.
 page is drawn from inside it, through `show_resource_loop`, and it holds until a
 key. That is the wait which read as a hang in an earlier session and has needed a
 keypress at this point in every run since.
+
+### The quit path, walked the same way
+
+Everything below `main_menu` runs only after the menu is quit, so none of it had
+been seen before. Same method: `0x0b142`, `snap`, render.
+
+| | call | what is on it |
+| --- | --- | --- |
+| (6) | `show_resource(0x4d, 0x64, 250)` | four-panel gameplay collage with the DUCKS logo |
+| (7) | `show_resource(0x4d, 0x65, 250)` | `DUCKS World Wide Webbed - Now available!` |
+| (8) | `show_resource(0x4d, 0x66, 250)` | **nothing at all** |
+| (*) | `show_readme_section(2)` | `HOW TO REGISTER`, page 1 of 1; waits for ESC |
+| (9) | `show_resource(0x4d, 0x67, 250)` | `VISIT HUNGRY SOFTWARE ON THE WEB AT ...` |
+| — | `exit_cleanup` | `stop_sound_by_id(0..4)`, then walks a table at `[0x290b]` |
+
+**(8) is a different kind of empty from (1).** No fade fired for it at all, so
+`0x05a67` failed and `show_resource` took its `if` and skipped the display
+entirely — that resource id is not in this egg. Screen (1) by contrast had a
+real, allocated bitmap that was simply blank. Two silent blanks, two causes.
+
+**`0x11efb` is `show_readme_section`, and the argument is an ordinal into the
+readme index.** `2` is `HOW TO REGISTER`, which is record 2 in the table
+[episode-index](episode-index.md) already recorded. That makes this the same
+viewer [open-readme-crash](open-readme-crash.md) crashes in — that note is
+captured on `DUCKS OVERVIEW` page 3 of 3, which is record 0 of the same index in
+this same routine. First time that bug has had a named function attached to it.
+
+Its page text also confirms the shareware boundary from a third direction, having
+nothing to do with `[0x54a]` or the version screen: *"Registration gives you
+access to the final 60 levels of the game (the rest of episode 2, plus episodes 3
+and 4)"*. 20 + 60 = 80, and "the rest of episode 2" is why the cutoff falls
+*inside* `SHALLOW END` rather than on an episode edge.
+
+**`exit_cleanup` is what `0x146cd` really is** — five `stop_sound_by_id` calls
+behind a `sound_state` test, then a table walk. Nothing resembling a game loop,
+which is the direct refutation of the `game_main?` guess rather than an inference
+from where the menu returns.
+
+A sound was heard during this sequence. `main` makes no `sound_play_guarded` call
+in the quit path — all three are in the intro — so it comes from inside one of
+these routines, `show_readme_section` being the likely one. Boran's reading, not
+verified.
 
 **`0x145b1` is the main menu, and `0x146cd` is not `game_main`. Corrected
 2026-07-29.** This paragraph used to argue that `lcall 0x146cd` had to be the
