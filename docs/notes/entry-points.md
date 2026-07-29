@@ -151,7 +151,7 @@ that both rules are right is `install_int23` landing on its already-known
 0x145eb  call  show_resource         (0x4d, 0x66, 250, 0xff)   (8) NOTHING - not in this egg
 0x145f4  call  show_readme_section   (2)            |   HOW TO REGISTER, waits for ESC
 0x14605  call  show_resource         (0x4d, 0x67, 250, 0xff)  <-+  (9) visit us on the web
-0x1460b  lcall exit_cleanup          ()             0x146cd, no arguments
+0x1460b  lcall release_sounds?       ()             0x146cd, no arguments
 --- teardown -----------------------------------------------------------
 0x14613  call  set_bios_mode         (3)            back to text
 0x1461a  call  save_settings         ()             settings.dat
@@ -489,6 +489,67 @@ route from a played or replayed session to an image.
   `0x0881d`/`0x08885` are call targets, not identifications. `0x0b5cf` is now the
   interesting one: it is what should have filled the buffer.
 - `[0x18e5]`, tested next to `last_key` as a second escape condition.
+
+## main_menu, mapped
+
+**Read out 2026-07-29**, resolved at `CS=0x05da` like main, since it is reached
+by `push cs; call near`. `0x13676`-`0x13a97`, about 1058 bytes. It takes **one**
+argument, a far pointer - `main` pushes `ds` then `0x1916` and cleans 4 bytes.
+
+Two loops and one exit:
+
+```
+0x13681  <-------------------------------- outer loop, from 0x13a6a
+  0x1368f  call 0x1271b (bp+6, bp+8, ss:ax, 1, si)   the pointer main passed
+  0x136cc  call clear_vram
+  0x136e2  call set_mode_x / dac_set_black
+  0x1372f  call show_splash (es:[bx+0x24], 200)
+  0x13743  call 0x13298     0x13752  call 0x13096
+  0x13763  call show_readme_section (ax)             <- READ ME!
+  0x1376d  call 0x12951
+0x137f6  <-------------------------------- inner loop, from 0x13a45 and 0x13a4f
+  0x13802  call sound_play_guarded (0x29, 1)
+  0x13820  call show_splash (es:[bx+0xa0], 200)
+  0x1382d  call 0x1102a ([0x21a3])                   small loop at 0x13835
+  0x13841  cmp ax, [0x2032] / cmp [registered], 0    <- the shareware gate
+  0x13862  call egg_load_one (0xfc, 0x48, 0xff)
+  0x1387e  call 0x0d7ee (0)                          <- the in-game frame
+  0x138ba  call show_resource (0x4d, 2, 50)
+  0x138f3  call show_splash (es:[bx+0xb8], 100)
+  0x1392f  call 0x0f5b1 / 0x0fc8b / 0x0f9fd / 0x0f825 / 0x0f913
+  0x1396e  call 0x100f4
+  0x139e5  call 0x4156 (ss:ax, ds:0x275c, es:[bx+0xd4], [0x2034])
+  0x139f6  call show_splash (ss:ax, 100)
+  0x13a25  call show_resource (0x4d, 6, 50)
+0x13a6f  retf                                        <- the only exit
+```
+
+**The shareware gate is in here.** `0x13841` - the `cmp ax, [0x2032]` /
+`cmp [registered], 0` pair [episode-index](episode-index.md) documents - sits in
+the inner loop, which is why refusal happens on starting a level rather than at
+startup.
+
+**`0x1387e call 0x0d7ee(0)` is the game.** `0x0d7ee` is the function holding
+`plane_loop_scroll` and `plane_loop_hud`, and `0` is the same argument the README
+records as selecting scene record 4. That is gameplay reached from inside the
+menu, observed rather than inferred.
+
+**The `0x0f...` cluster is the menu's own screens.** `0x0f5b1`, `0x0f825`,
+`0x0f913`, `0x0f9fd` and `0x0fc8b` are all called here, and every one of them
+turned up in the `set_plane` census as containing a four-iteration plane loop. So
+five of those 26 sites are menu screens reached from this one function - worth
+knowing for [drawing-port-goal](drawing-port-goal.md), since flat drawing has to
+cover them.
+
+**`0x146cd` is called four times from in here** (`0x138ff`, `0x13951`, `0x13971`,
+`0x139fc`), not only on the way out, so `exit_cleanup` was the wrong name for it.
+Everything it calls is in the sound and sample region - five `stop_sound_by_id`,
+then `0x15138` popping a stack at `[0x290b]`/`[0x298b]`, then `0x14ed7` and
+`0x14eb0`. Recorded as `release_sounds?`.
+
+Unidentified and reached only from here: `0x1271b`, `0x13298`, `0x13096`,
+`0x12951`, `0x1102a`, `0x128a5`, `0x11d54`, `0x0f55c`, `0x11c75`, `0x147c5`,
+`0x09329`, `0x0becb`.
 
 ## The chain
 

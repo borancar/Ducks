@@ -27,7 +27,12 @@ prologue and called the same way — is reported as interior to `0x0b284`. Found
 incidentally, by the `set_plane` census printing an enclosing function that did
 not match the function the call is plainly inside.
 
-Two in one session, both found by accident rather than by looking, is the
+A third, and the first that fails loudly: `function_extent(img, 0x13676)` -
+`main_menu` - raises `'NoneType' object cannot be interpreted as an integer`
+rather than returning a wrong answer. The next prologue after it is `0x13a98`, so
+there is nothing unusual about the function; the walker simply gives up.
+
+Three in one session, all found by accident rather than by looking, is the
 argument for doing the census below rather than continuing to trip over them.
 
 ## Why it matters

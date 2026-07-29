@@ -111,9 +111,11 @@ FUNCTIONS = {
     0x141FE: "init",                    # the whole startup: banner, objects,
                                         # hardware detection, key wait
     0x144D7: "main",                    # the frame the runtime calls
-    0x146CD: "exit_cleanup",            # stop_sound_by_id(0..4) if sound_state,
-                                        # then walks a table at [0x290b]. Was
-                                        # guessed as game_main from position
+    0x146CD: "release_sounds?",         # stop_sound_by_id(0..4) if sound_state,
+                                        # then pops a stack at [0x290b]/[0x298b]
+                                        # through 0x15138. Called four times
+                                        # inside main_menu, not only at exit.
+                                        # Was guessed as game_main from position
                                         # alone; the game is inside main_menu
     0x14750: "sound_play?",             # gated on sound_state; ids below 0x96;
                                         # calls 0x14628(id, 0x20, 0xff)
