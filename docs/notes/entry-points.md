@@ -132,7 +132,7 @@ that both rules are right is `install_int23` landing on its already-known
 0x14520  call  show_splash           (ds:0x28ff, 100)
 0x14527  call  egg_load_pass_0x48    ()
 0x1452f  call  sound_play_guarded    (0x2b, 1)
-0x1453f  call  show_resource         (0x4d, 5,     50, 0xff)
+0x1453f  call  show_resource         (0x4d, 5,     50, 0xff)   <- version/credits
 0x1455c  call  show_splash           (es:[bx+0x9c], 100)
 0x14567  call  sound_play_guarded    (0x28, 1)
 0x14577  call  show_resource         (0x4d, 8,    100, 0xff)
@@ -314,6 +314,36 @@ facts are the empty source, the empty string and the black planes.
 
 Either way the count changes. `main` makes nine calls that display something, but
 the first draws nothing, so there are at most eight things to see.
+
+### Resource 0x4d:5 is the version and credits screen
+
+**Seen 2026-07-29**, by pausing in the lit hold, `snap`ping, and re-rendering the
+four planes offline through the Mode X layout with the snapshot's own palette.
+The second of main's nine calls, `show_resource(0x4d, 5, 50)`, draws:
+
+```
+                       DUCKS v1.2
+                Programmed by Tim Furnish
+
+        Using data file MAIN.EGG (supplied with the game)
+                Final build: 1 August 2000
+
+              20 levels classed as shareware
+              80 levels for registered version
+
+               (c) Hungry Software 1998-2000
+```
+
+Which is where the shareware limit came from — see
+[episode-index](episode-index.md#the-registration-state-is-0x548), whose gate
+this settled.
+
+**Rendering one is worth knowing how to do**, since it is the only way to see
+what a resource id actually is. The snapshot carries the four planes plus
+`vga.palette`, `vga.start_addr` and `vga.start_mult`; the pixel at (x, y) is
+`plane[x & 3][start + y * 80 + (x >> 2)]` indexed into the palette. `native.py`
+does not honour `capture.request` - only `emulation.py` does - so this is the
+route from a played or replayed session to an image.
 
 ### Still open here
 

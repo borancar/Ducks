@@ -205,11 +205,36 @@ call egg_load_one(0xfc, 0x48, 0xff)
 So a level number against a threshold, gated on registration, with the content
 pulled from the egg — the shape this note predicted, found where it said to look.
 
-**Not established: which side refuses.** The branch is `jge skip`, so the block
-runs when the level is *below* the threshold, which reads more like a reminder
-shown on playable levels than the refusal itself. `[0x2032]` has not been read on
-a live machine, and neither has `[0x54a]` while playing, so the boundary
-observed mid-`SHALLOW END` is not yet tied to a number here.
+**The number is 20, and the block is the refusal. Settled 2026-07-29** by
+rendering the intro screen the game shows on its way in — `show_resource(0x4d, 5)`,
+captured to a snapshot and re-rendered from the planes offline. It says so in
+plain text:
+
+```
+        Using data file MAIN.EGG (supplied with the game)
+                Final build: 1 August 2000
+
+           20 levels classed as shareware
+           80 levels for registered version
+```
+
+`[0x54a]` reads **20** on a live machine, so it is the shareware *limit*, not a
+level number as first recorded here; `[0x2032]` is the level being attempted, and
+reads 0 before one is loaded. With those the right way round the gate reads:
+
+```
+mov al, [0x54a]      ; 20, the limit
+cmp ax, [0x2032]     ; against the level being attempted
+jge  skip            ; 20 >= level, so allowed
+cmp  [0x548], 0      ; unregistered?
+jne  skip
+...                  ; the refusal
+```
+
+So the block runs when the level **exceeds** 20 on an unregistered copy — the
+refusal, not the reminder this note first guessed at. That matches the boundary
+observed in play: `SHALLOW END` is levels 11 to 30, and it stops part-way
+through, at 20. `SO FAR SO GOOD?` starts at 31 and was never reachable.
 
 `main` also consults the flag twice: registered copies **skip** the third splash
 and the block of four `show_resource` calls. The extra intro screens are the

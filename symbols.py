@@ -161,7 +161,10 @@ VARIABLES = {
     0x0544: "registered_name_seg",      # out of the egg; valid only if 0x548
     0x0548: "registered",               # non-zero = registered. init prints
                                         # "Registered to: <name>" or UNREGISTERED
-    0x054A: "level_number?",            # tested against [0x2032] at 0x13841
+    0x054A: "shareware_limit",          # reads 20; the intro screen says "20
+                                        # levels classed as shareware"
+    0x2032: "level_attempted?",         # compared against shareware_limit at
+                                        # 0x13841; 0 before a level is loaded
     0x0DDF: "blink_countdown",          # randomised frames until the next flip
     0x10E1: "palette_stored",           # 768 bytes: the level's palette
     0x14B1: "palette_source",           # 48 bytes: the ramp washed_ramp reads
