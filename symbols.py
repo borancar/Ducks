@@ -66,6 +66,8 @@ FUNCTIONS = {
     0x05C09: "blit_rows",               # native
     0x05D3A: "compose_layer",           # native
     0x05DC4: "compose_scroll",          # native
+    0x051B7: "close_egg_files",         # walks egg_files backwards,
+                                        # fclose then free, stride 0x17
     0x05232: "egg_find_block",          # (type, ?, index) -> block; reads [0x20ad]
     0x056D2: "palette_upload",          # full 768-byte DAC upload, unscaled
     0x063D6: "draw_sprite",             # native
@@ -104,6 +106,8 @@ FUNCTIONS = {
                                         # reached from inside it
     0x13FEA: "scan_save_slots",         # GAME1.SG..GAME5.SG; no args, no return;
                                         # its only output is [0x2055]
+    0x140B1: "save_settings",           # fopen("settings.dat","wb") and
+                                        # writes the word array at [0x4f4]
     0x141FE: "init",                    # the whole startup: banner, objects,
                                         # hardware detection, key wait
     0x144D7: "main",                    # the frame the runtime calls

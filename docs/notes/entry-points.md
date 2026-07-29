@@ -154,9 +154,9 @@ that both rules are right is `install_int23` landing on its already-known
 0x1460b  lcall exit_cleanup          ()             0x146cd, no arguments
 --- teardown -----------------------------------------------------------
 0x14613  call  set_bios_mode         (3)            back to text
-0x1461a  call  0x140b1  ?            ()
-0x1461e  call  0x051b7  ?            ()
-0x14621  lcall 0x01e6b               ()             exit; no prologue
+0x1461a  call  save_settings         ()             settings.dat
+0x1461e  call  close_egg_files       ()             fclose + free, every egg
+0x14621  lcall 0x01e6b               ()             crt exit; no prologue
 0x14627  retf
 ```
 
@@ -197,6 +197,31 @@ exactly where a publisher or distributor name would go, and this build has none.
 page is drawn from inside it, through `show_resource_loop`, and it holds until a
 key. That is the wait which read as a hang in an earlier session and has needed a
 keypress at this point in every run since.
+
+### Teardown, and main is fully mapped
+
+The last three calls, read out 2026-07-29. With these, every call `main` makes is
+identified.
+
+- **`0x140b1` is `save_settings`.** `fopen(ds:[0x21d2], "wb")` where the pointer
+  reaches `settings.dat`, then it writes the word array indexed as `[bx + 0x4f4]`
+  — the same block whose first word `[0x4f4]` guards `sound_play_guarded`. So the
+  settings are a contiguous run of words at `0x4f4`, written out on exit.
+- **`0x051b7` is `close_egg_files`.** It walks `egg_files` backwards —
+  `dec egg_file_count`, index by stride `0x17`, which is the 23-byte entry
+  [episode-index](episode-index.md) documents — `fclose`ing each and freeing the
+  pointer at `+8`.
+- **`0x01e6b`** has no prologue and belongs to the C runtime. It pushes bytes from
+  `[0x3076..0x3079]` and ends by setting the cursor through `bios_video` with
+  `AH=2`. Not added to `symbols.py`, because `test_symbols.py` requires a
+  prologue and this is genuinely one of the runtime's frameless routines.
+
+A trap worth recording, because it caught the tool written to avoid it: `0x01e6b`
+is reached by `lcall 0, 0x1e6b`, so it executes with segment base 0, **not**
+main's `CS=0x05da`. Disassembling it with main's segment resolved its calls to
+`0x12c9b` and `0x12067` - both a clean 64 KB out. The right answers are `0x02c9b`
+and `0x02067`, `bios_video`. The segment belongs to the code being read, not to
+whatever called it.
 
 ### The quit path, walked the same way
 
