@@ -7,9 +7,12 @@ Names live in [`symbols.py`](../../symbols.py), which the control socket's
 `where` — and so `stack`, `until`, `finish` and `step` — prints alongside the
 offset. A name ending in `?` there is tentative and is printed as such.
 
-## main, in full
+## main's opening, instruction by instruction
 
-Every branch target below was resolved by the socket rather than by hand:
+The complete map is [further down](#main-in-full); this is the opening read out
+first, kept because the addresses here are call *instructions* and the section
+after it explains why that distinction matters. Every branch target was resolved
+by the socket rather than by hand:
 
 ```
 0x144d7  push bp / mov bp, sp
@@ -132,7 +135,7 @@ that both rules are right is `install_int23` landing on its already-known
 0x14520  call  show_splash           (ds:0x28ff, 100)
 0x14527  call  egg_load_pass_0x48    ()
 0x1452f  call  sound_play_guarded    (0x2b, 1)
-0x1453f  call  show_resource         (0x4d, 5,     50, 0xff)   <- version/credits
+0x1453f  call  show_resource         (0x4d, 5,     50, 0xff)   <- Hungry Software logo
 0x1455c  call  show_splash           (es:[bx+0x9c], 100)
 0x14567  call  sound_play_guarded    (0x28, 1)
 0x14577  call  show_resource         (0x4d, 8,    100, 0xff)
@@ -315,11 +318,36 @@ facts are the empty source, the empty string and the black planes.
 Either way the count changes. `main` makes nine calls that display something, but
 the first draws nothing, so there are at most eight things to see.
 
-### Resource 0x4d:5 is the version and credits screen
+### egg_load_pass_0x48 draws the version screen; 0x4d:5 is the logo
 
-**Seen 2026-07-29**, by pausing in the lit hold, `snap`ping, and re-rendering the
-four planes offline through the Mode X layout with the snapshot's own palette.
-The second of main's nine calls, `show_resource(0x4d, 5, 50)`, draws:
+**Seen 2026-07-29**, by breaking at `0x0b142` — the instruction inside
+`palette_fade_step` reached once per fade, immediately after `palette_upload`
+puts the palette at full — then `snap`ping and re-rendering the four planes
+offline through the Mode X layout with the snapshot's own palette.
+
+**This was first written up here as `show_resource(0x4d, 5)`, and that was
+wrong.** The stack at the break says otherwise:
+
+```
+frame 0: ret -> image 0x0b5c2   show_resource_loop's palette_fade_step call
+frame 1: ret -> image 0x0c133   in egg_load_one
+frame 2: ret -> image 0x0c189   in egg_load_pass_0x48
+frame 3: ret -> image 0x1452a   in main   <- main's call at 0x14527
+```
+
+`egg_load_pass_0x48` is not only a loader: it displays this screen through
+`show_resource_loop` and holds it until a key. That is the wait which looked like
+a hang in an earlier session, and which has needed a keypress at this point in
+every run since. `show_resource(0x4d, 5)` is main's *next* call, at `0x1453f`,
+and draws the fractal Hungry Software logo instead.
+
+The first attribution came from timing rather than from the stack — a screen was
+rendered at flips 9845 and assumed to belong to the call being walked to. The
+call it was assumed to be did not enter until flips 23595, which is what
+eventually gave it away. **The stack was available the whole time and would have
+said so at once.**
+
+What it draws:
 
 ```
                        DUCKS v1.2
@@ -336,7 +364,8 @@ The second of main's nine calls, `show_resource(0x4d, 5, 50)`, draws:
 
 Which is where the shareware limit came from — see
 [episode-index](episode-index.md#the-registration-state-is-0x548), whose gate
-this settled.
+this settled. That reading is unaffected by the misattribution: the text is on
+the screen and `[0x54a]` reads 20 live, whichever call put it there.
 
 **Rendering one is worth knowing how to do**, since it is the only way to see
 what a resource id actually is. The snapshot carries the four planes plus

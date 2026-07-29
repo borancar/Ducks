@@ -206,9 +206,11 @@ So a level number against a threshold, gated on registration, with the content
 pulled from the egg — the shape this note predicted, found where it said to look.
 
 **The number is 20, and the block is the refusal. Settled 2026-07-29** by
-rendering the intro screen the game shows on its way in — `show_resource(0x4d, 5)`,
-captured to a snapshot and re-rendered from the planes offline. It says so in
-plain text:
+rendering the intro screen the game shows on its way in — drawn from inside
+`egg_load_pass_0x48`, captured to a snapshot and re-rendered from the planes
+offline. (First recorded here as `show_resource(0x4d, 5)`; the stack says
+otherwise, see [entry-points](entry-points.md). The text below and the live read
+of `[0x54a]` are unaffected by which call drew it.) It says so in plain text:
 
 ```
         Using data file MAIN.EGG (supplied with the game)
