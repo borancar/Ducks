@@ -4815,9 +4815,9 @@ class Control:
         if cmd == "cont":
             if not getattr(m, "ctl_paused", False):
                 return "  not paused"
-            m.ctl_resume_from = self._here(m)
+            note = self._step_off(m)
             m.ctl_paused = False
-            return "ok: running"
+            return "ok: running" + (f"\n{note}" if note else "")
         return f"error: unknown command {cmd!r}"
 
     @staticmethod
@@ -4968,12 +4968,9 @@ class Control:
             return "  already armed: " + self._where(m, lin)
 
         def on_hit(uc, address, size, user):
-            # Resuming from a breakpoint means the first instruction run is
-            # the one that is armed. Firing there would pause immediately and
-            # the machine could never leave, so that single hit is declined.
-            if getattr(m, "ctl_resume_from", None) == address:
-                m.ctl_resume_from = None
-                return
+            # No special case for resuming: the caller steps off an armed
+            # address before clearing ctl_paused, and this declines while
+            # paused, so that step cannot re-trigger it.
             if address in m.ctl_breaks and not getattr(m, "ctl_paused", False):
                 m.ctl_paused = True
                 m.ctl_hit = address
@@ -4987,6 +4984,29 @@ class Control:
             pass
         brk[lin] = h
         return "ok: armed " + self._where(m, lin)
+
+    def _step_off(self, m):
+        """Execute the instruction the machine is paused on, if it is armed.
+
+        Resuming with the machine sitting on a breakpoint makes the hook fire
+        again on the very first instruction, so it pauses immediately and can
+        never leave. Stepping that one instruction here is what a debugger
+        does, and it is safe because `ctl_paused` is still set while it runs:
+        the hook declines to pause a paused machine, so the step cannot
+        re-trigger the breakpoint it is stepping off.
+
+        Returns a note for the reply, or "" when there was nothing to do.
+        """
+        here = self._here(m)
+        if here not in getattr(m, "ctl_breaks", {}):
+            return ""
+        if not self._runnable(m):
+            return "  still on the breakpoint: not at a boundary to step off"
+        try:
+            m.uc.emu_start(here, 0, count=1)
+        except Exception as e:
+            return f"  could not step off the breakpoint: {e}"
+        return "  stepped off the breakpoint first"
 
     def _step(self, m, n):
         if not self._runnable(m):
@@ -5058,9 +5078,10 @@ class Control:
             if transient is None:
                 transient = m.ctl_transient = set()
             transient.add(target)
-        m.ctl_resume_from = self._here(m)
+        note = self._step_off(m)
         m.ctl_paused = False
         return ("  running to " + self._where(m, target)
+                + (f"\n{note}" if note else "")
                 + "\n  released; poll `where`. `pause` stops it early")
 
     def _finish(self, m):

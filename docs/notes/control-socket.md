@@ -95,10 +95,29 @@ needs input the main loop has to pump first, answered only after the client had
 given up. They now return in milliseconds, and the breakpoint they placed is
 removed once it fires. `pause` stops the run early.
 
-**Resuming does not re-fire the breakpoint you are sitting on.** `cont` from a
-breakpoint used to stop again instantly on the same instruction, because that
-address is armed and the hook fires on the first instruction executed. The
-address being resumed from is remembered and declined exactly once.
+**Resuming steps off the breakpoint first.** `cont` from a breakpoint used to
+stop again instantly on the same instruction, because that address is armed and
+the hook fires on the first instruction executed. `cont` and `until` now execute
+that one instruction before clearing the paused flag, and say so:
+
+```
+ok: running
+  stepped off the breakpoint first
+```
+
+It is safe because `ctl_paused` is still set while the step runs - the hook
+declines to pause a machine that is already paused, which is the same reason
+`step` has always worked from a breakpoint.
+
+**The first attempt at this did not work, and was believed to.** It declined a
+single hit at the address being resumed from, via `ctl_resume_from`, and its
+commit claimed it verified. It did not hold: the walk of 2026-07-29 had to
+`step 1` off every breakpoint by hand. The giveaway was that `cont` answered
+"ok: running" while frames kept ticking and flips, `CS:IP` and the guest variable
+the armed instruction writes all stayed frozen - the paused signature, from a
+machine that had been told to run. What was missing was a test that resumed from
+a breakpoint and then checked the machine had *moved*; the original test only
+checked that `finish` reported the right address.
 
 ## The one rule
 
