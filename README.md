@@ -411,9 +411,13 @@ the natives leave that counter alone. All eight references to it sit inside
 `0x0d7ee`-`0x0e8ac` and all eight belong to those two loops, so nothing after
 either reads it.
 
-A fifth lives in `show_splash` (`0x10383`-`0x103b0`) and draws the splash and
-intro screens. It is not native, and it never runs during a level, which is why a
-profile taken there does not show it.
+Those four are the count for an *in-game frame*, not for the program. Two more
+draw the intro screens and are not native — `0x10383`-`0x103b0` in `show_splash`,
+and `0x0b588`-`0x0b5b6` in `0x0b52f` — and neither runs during a level, which is
+why a profile taken there does not show them. A census of calls reaching
+`set_plane` finds 26 sites in all; how many are four-plane loops is not
+established, and the heuristic that would have said missed three of the four
+above. See [`docs/notes/drawing-port-goal.md`](docs/notes/drawing-port-goal.md).
 
 `function_extent()` in `native.py` gives those boundaries, cross-checked against an
 independent rule (the next prologue that resolves to itself); `test_fn_start.py`

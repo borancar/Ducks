@@ -57,8 +57,11 @@ FUNCTIONS = {
     0x04D2A: "clear_vram",              # native
     0x04D4B: "page_flip",               # native
     0x0572A: "dac_set_black?",          # writes an index, then three zeros
+    0x05671: "resource_release?",       # ends show_splash and show_resource
     0x05761: "plot_pixel",              # native
     0x057EE: "set_plane",               # native; map mask + [0x177d]
+    0x05A67: "resource_load?",          # (&desc, type, index, ...) -> 0 on
+                                        # failure; forwards to 0x058b9
     0x05AC2: "blit_rows_masked",        # native
     0x05C09: "blit_rows",               # native
     0x05D3A: "compose_layer",           # native
@@ -76,10 +79,14 @@ FUNCTIONS = {
     0x0AB09: "particles",               # native
     0x0ABA5: "draw_entities",           # native
     0x0B10B: "palette_fade_step",       # the fade state machine
+    0x0B52F: "show_resource_loop",      # (desc, frames): fade in, hold, fade
+                                        # out. Holds a plane loop; not native
     0x0B9EA: "set_buffer",              # stores a far pointer into [0x1721]
     0x0BB3B: "draw_number",             # native
     0x0C0C2: "egg_load_one?",           # called per egg file with (0, type, i)
     0x0C156: "egg_load_pass_0x48",      # loops every open egg for type 0x48
+    0x0C1AD: "show_resource",           # (type 0x4d, index, frames, 0xff):
+                                        # load, display through 0x0b52f, release
     0x0D757: "draw_number2",            # native
     0x102D7: "show_splash",             # (image far *, frames): fade an image
                                         # in, hold for `frames` or until a key,
@@ -93,6 +100,9 @@ FUNCTIONS = {
     0x141FE: "init",                    # the whole startup: banner, objects,
                                         # hardware detection, key wait
     0x144D7: "main",                    # the frame the runtime calls
+    0x146CD: "game_main?",              # main's last call before teardown, no
+                                        # args - inferred from position, not yet
+                                        # confirmed by a breakpoint
     0x14750: "sound_play?",             # gated on sound_state; ids below 0x96;
                                         # calls 0x14628(id, 0x20, 0xff)
     0x148A2: "detect_soundblaster",     # the sound check; probes the DSP

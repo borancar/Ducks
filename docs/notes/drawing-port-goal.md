@@ -15,13 +15,33 @@ not be judged on their own immediate speedup.
 
 ## Where it stands
 
-**Corrected 2026-07-29: there is a fifth plane loop, and it is not native.**
-`0x10383`-`0x103b0`, inside `show_splash` (`0x102d7`), does `set_plane` then
-`blit_rows` four times and then `page_flip`, the same shape as the four below. It
-draws the splash and intro screens, so it never runs during a level and does not
-appear in a profile taken there — which is the likely reason four was ever the
-count. See [entry-points](entry-points.md). Everything below still holds for the
-four; only the claim that they are *all* of them was wrong.
+**Corrected 2026-07-29: four is the count for an in-game frame, not for the
+program.** Two more plane loops turned up in one session, both drawing the intro
+screens and neither native:
+
+| loop | in | shape |
+| --- | --- | --- |
+| `0x10383`-`0x103b0` | `show_splash` `0x102d7` | `set_plane` + `blit_rows` x4, `page_flip` |
+| `0x0b588`-`0x0b5b6` | `0x0b52f`, reached from `show_resource` `0x0c1ad` | the same, from a global viewport |
+
+Neither runs during a level, so no profile taken there would show them — which is
+the likely reason four was ever the count. See [entry-points](entry-points.md).
+
+**The real total is unknown.** A census of calls reaching `set_plane` finds **26
+call sites**; it rediscovers all four loops below and both of the above, which is
+what makes the count of *sites* trustworthy. But a `set_plane` call is not
+necessarily a four-plane loop, and the heuristic written to tell them apart —
+looking for the `cmp byte [bp-x], 4; jb` back-edge — **missed three of the four
+loops below**. It failed its own control, so its answer is not recorded here.
+Deciding this properly means reading the 26 sites, or building a classifier that
+gets all six known answers right first
+([verification-lessons](verification-lessons.md)).
+
+One site to look at early: `0x0e6c1`, a third `set_plane` inside `0x0d7ee`, the
+function this note describes as holding exactly two loops.
+
+Everything below still holds for the four; only the claim that they are *all* of
+them was wrong.
 
 The four are native and verified, and the compositors'
 plane-independent work is hoisted out of them:

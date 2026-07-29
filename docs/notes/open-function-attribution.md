@@ -20,6 +20,16 @@ It is not. `0x102d7` is a function in its own right:
 So the extent `0x100f4`-`0x103e2` covers two functions, and every byte of
 `show_splash` is attributed to its neighbour.
 
+## A second one, same session
+
+`0x0b52f` — the display loop behind `show_resource`, with the same textbook
+prologue and called the same way — is reported as interior to `0x0b284`. Found
+incidentally, by the `set_plane` census printing an enclosing function that did
+not match the function the call is plainly inside.
+
+Two in one session, both found by accident rather than by looking, is the
+argument for doing the census below rather than continuing to trip over them.
+
 ## Why it matters
 
 Not for the natives that exist today — none of them is in this range — but for

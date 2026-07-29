@@ -111,7 +111,110 @@ a string, free it. So the whole point of the scan is that one running maximum.
 does not identify it; `0x14e88` would have to be read to know what the value is.
 Recorded as `max_save_value?`, tentative.
 
-## 0x102d7 is show_splash, and it holds a fifth plane loop
+## main, in full
+
+**Mapped 2026-07-29.** Near targets resolved at `CS=0x05da`, the segment main was
+observed running in, so the segment base is image `0x4ca0`; `lcall S, O` resolves
+to image `S*16 + O`, because the encoded segment is relocated at load. The check
+that both rules are right is `install_int23` landing on its already-known
+`0x00eb5` — get either wrong and it does not.
+
+```
+0x144d7  main
+--- startup -----------------------------------------------------------
+0x144e0  lcall install_int23         (far 04ca:f82d)
+0x144e9  call  init                  ()
+0x144f1  call  set_mode_x            ([0x4fe])
+0x14502  call  dac_set_black         (0, 0)          <- the screen is black from here
+0x1450f  call  input_poll            (320, 200)
+0x14516  call  scan_save_slots       ()
+--- the intro: two screen players, interleaved with sounds ------------
+0x14520  call  show_splash           (ds:0x28ff, 100)
+0x14527  call  egg_load_pass_0x48    ()
+0x1452f  call  sound_play_guarded    (0x2b, 1)
+0x1453f  call  show_resource         (0x4d, 5,     50, 0xff)
+0x1455c  call  show_splash           (es:[bx+0x9c], 100)
+0x14567  call  sound_play_guarded    (0x28, 1)
+0x14577  call  show_resource         (0x4d, 8,    100, 0xff)
+0x1457d  cmp [0x548], 0 / jne 0x145a1  ------------+
+0x1459b  call  show_splash           (es:[bx+0xf8], 100)
+0x145a6  call  sound_play_guarded    (0x0b, 1)     |
+0x145b1  call  0x13676  ?            (ds:0x1916) <-+
+0x145b7  cmp [0x548], 0 / jne 0x145fa  ------------+
+0x145c9  call  show_resource         (0x4d, 0x64, 250, 0xff)
+0x145da  call  show_resource         (0x4d, 0x65, 250, 0xff)
+0x145eb  call  show_resource         (0x4d, 0x66, 250, 0xff)
+0x145f4  call  0x11efb  ?            (2)           |
+0x14605  call  show_resource         (0x4d, 0x67, 250, 0xff)  <-+
+--- the game -----------------------------------------------------------
+0x1460b  lcall 0x146cd               ()             no arguments
+--- teardown -----------------------------------------------------------
+0x14613  call  set_bios_mode         (3)            back to text
+0x1461a  call  0x140b1  ?            ()
+0x1461e  call  0x051b7  ?            ()
+0x14621  lcall 0x01e6b               ()             exit; no prologue
+0x14627  retf
+```
+
+Observed end to end on 2026-07-29 with somebody at the window: the splashes
+appear, the sounds play between them, and it arrives at the menu — so the order
+above is not only read, it was watched.
+
+**`lcall 0x146cd` is where the game must live.** It takes no arguments, and
+everything after it restores text mode and exits, so the menu and gameplay have
+nowhere else to be. That is inference from position, not observation — a
+breakpoint on `0x146cd` settles it in seconds and has not been done. Its first
+instructions are `push bp; mov bp, sp; push si; cmp byte [0x2908], 0`, gated on
+`sound_state`. This is the "the real game loop is a different call from main"
+that the section below has been pointing at.
+
+**`[0x548]` gates twice** — the third splash with its sound, and the block of
+four `show_resource` calls with consecutive indices. It read `0` on the observed
+run, so both branches were taken.
+
+## 0x0c1ad is show_resource, and 0x0b52f is a sixth plane loop
+
+`show_resource` is `show_splash`'s sibling: same job, but the image is loaded by
+`(type, index)` rather than handed in as a pointer.
+
+```c
+void far show_resource(char type /*0x4d*/, char index, int frames, int x /*0xff*/)
+{
+    char scratch[0x316];                            /* 790 bytes */
+    set_buffer(ss:&scratch);                        /* publish as current buffer */
+    clear_vram();
+    if (0x05a67(&desc, type, index, 0, 1, x, 1)) {  /* 0 on failure */
+        0x0b52f(&desc, frames);
+        0x05671(&desc);                             /* release */
+    }
+    set_buffer(ds:0x13f1);                          /* restore */
+}
+```
+
+`0x05a67` is a thin forwarder to `0x058b9`. The display is `0x0b52f`, and it is
+`show_splash`'s loop again:
+
+```c
+fade_direction = 1;  fade_start_colour = 0;
+0x0b0c5();                                  /* the palette builder */
+do {
+    input_poll(320, 200);
+    if (si == 0 || last_key || [0x18e5]) fade_direction = 0xff;
+    si -= (frames > 0);                     /* counts DOWN; show_splash counts up */
+    for (plane = 0; plane < 4; plane++) {   /* <- the sixth plane loop */
+        set_plane(plane);
+        blit_rows(desc, <viewport at ds:0x1769, 20 bytes by value>);
+    }
+    page_flip();
+    palette_fade_step(0);
+} while ([0x1798] != 0);                    /* the identical exit */
+```
+
+Its viewport is a global at `ds:0x1769` where `show_splash` builds one on its own
+stack, and the frame counter runs down rather than up. Otherwise the two are the
+same routine written twice.
+
+## 0x102d7 is show_splash, and it holds another plane loop
 
 **Read out 2026-07-29** by breakpointing its entry on a cold boot, then reading
 the body over the socket. `snapshots/snap001.snap` is captured at that entry, so
@@ -133,7 +236,7 @@ void far show_splash(void far *image /* ds:0x28ff */, int frames /* 100 */)
         if (si == di || last_key || [0x18e5])       /* timeout, key or button */
             fade_direction = 0xff;                  /* = -1, fade out */
         si++;
-        for (plane = 0; plane < 4; plane++) {       /* <- the fifth plane loop */
+        for (plane = 0; plane < 4; plane++) {       /* <- another plane loop */
             set_plane(plane);
             blit_rows(&b, <a, 20 bytes by value>, 0);
         }
@@ -158,14 +261,22 @@ independent check on the reading.
 ### The plane loop at 0x10383-0x103b0 is not one of the four
 
 [drawing-port-goal](drawing-port-goal.md) lists four plane loops and says all
-four are native. This is a fifth: `set_plane` then `blit_rows` four times, then
-`page_flip`. It draws the splash and intro screens and still runs on the emulated
-CPU. It would not appear in any profile taken during a level, which is the likely
-reason it was missed.
+four are native. This one is not among them: `set_plane` then `blit_rows` four
+times, then `page_flip`. It draws the splash screens and still runs on the
+emulated CPU. It would not appear in any profile taken during a level, which is
+the likely reason it was missed.
 
 Confirmed from the snapshot rather than from the listing: replaying
 `snap001.snap` for five frames records exactly **4 `set_plane`, 4 `blit_rows`,
 one `page_flip`** — one iteration of this loop and nothing else drawing.
+
+**It was written up as "the fifth" and that was wrong too.** `0x0b52f` above is
+another, found hours later, and a census of calls reaching `set_plane` finds
+**26 call sites** across the image — including all four documented loops and both
+of these, which is what makes the census trustworthy. So four was never the
+count; it was the count *for an in-game frame*. How many of the 26 are
+four-iteration loops is **not established** — see
+[drawing-port-goal](drawing-port-goal.md).
 
 ### Still open here
 
