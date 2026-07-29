@@ -139,18 +139,19 @@ that both rules are right is `install_int23` landing on its already-known
 0x1455c  call  show_splash           (es:[bx+0x9c], 100)
 0x14567  call  sound_play_guarded    (0x28, 1)
 0x14577  call  show_resource         (0x4d, 8,    100, 0xff)
-0x1457d  cmp [0x548], 0 / jne 0x145a1  ------------+
-0x1459b  call  show_splash           (es:[bx+0xf8], 100)
+0x1457d  cmp [registered], 0 / jne 0x145a1  -------+  registered skips (5)
+0x1459b  call  show_splash           (es:[bx+0xf8], 100)   (5) "UNREGISTERED"
 0x145a6  call  sound_play_guarded    (0x0b, 1)     |
-0x145b1  call  0x13676  ?            (ds:0x1916) <-+
-0x145b7  cmp [0x548], 0 / jne 0x145fa  ------------+
-0x145c9  call  show_resource         (0x4d, 0x64, 250, 0xff)
-0x145da  call  show_resource         (0x4d, 0x65, 250, 0xff)
-0x145eb  call  show_resource         (0x4d, 0x66, 250, 0xff)
+--- the menu, and everything reached from it ---------------------------
+0x145b1  call  main_menu             (ds:0x1916) <-+  does NOT return
+--- on the way out -----------------------------------------------------
+0x145b7  cmp [registered], 0 / jne 0x145fa  -------+  registered skips (6)-(8)
+0x145c9  call  show_resource         (0x4d, 0x64, 250, 0xff)   (6) unseen
+0x145da  call  show_resource         (0x4d, 0x65, 250, 0xff)   (7) unseen
+0x145eb  call  show_resource         (0x4d, 0x66, 250, 0xff)   (8) unseen
 0x145f4  call  0x11efb  ?            (2)           |
-0x14605  call  show_resource         (0x4d, 0x67, 250, 0xff)  <-+
---- the game -----------------------------------------------------------
-0x1460b  lcall 0x146cd               ()             no arguments
+0x14605  call  show_resource         (0x4d, 0x67, 250, 0xff)  <-+  (9) unseen
+0x1460b  lcall after_menu?           ()             0x146cd, no arguments
 --- teardown -----------------------------------------------------------
 0x14613  call  set_bios_mode         (3)            back to text
 0x1461a  call  0x140b1  ?            ()
@@ -163,13 +164,55 @@ Observed end to end on 2026-07-29 with somebody at the window: the splashes
 appear, the sounds play between them, and it arrives at the menu — so the order
 above is not only read, it was watched.
 
-**`lcall 0x146cd` is where the game must live.** It takes no arguments, and
-everything after it restores text mode and exits, so the menu and gameplay have
-nowhere else to be. That is inference from position, not observation — a
-breakpoint on `0x146cd` settles it in seconds and has not been done. Its first
-instructions are `push bp; mov bp, sp; push si; cmp byte [0x2908], 0`, gated on
-`sound_state`. This is the "the real game loop is a different call from main"
-that the section below has been pointing at.
+### Every intro screen, from the pixels
+
+**Walked 2026-07-29.** Breaking at `0x0b142` — inside `palette_fade_step`,
+reached once per fade immediately after `palette_upload` puts the palette at full
+— stops every screen at peak brightness however briefly it holds, and the stack
+at the break names the call. Each was captured with `snap` and re-rendered from
+the four planes offline.
+
+| | call | what is on it |
+| --- | --- | --- |
+| (1) | `show_splash(ds:0x28ff, 100)` | **nothing.** 0 non-zero pixels |
+| (*) | `egg_load_pass_0x48` | version and credits; **waits for a key** |
+| (2) | `show_resource(0x4d, 5, 50)` | the Hungry Software fractal logo |
+| (3) | `show_splash(es:[bx+0x9c], 100)` | `PRESENTS` |
+| (4) | `show_resource(0x4d, 8, 100)` | the title: Tim Furnish's DUCKS Version 1.2 |
+| (5) | `show_splash(es:[bx+0xf8], 100)` | `UNREGISTERED` — unregistered copies only |
+| — | `main_menu` | the menu, and it does not return |
+
+Two things this settled that reading could not.
+
+**The 320 x 24 source is a text banner, not a progress bar.** Screen (1) draws
+from an allocated but empty 320 x 24 bitmap, and the dimensions were the whole
+argument for pencilling it as a progress bar or a remnant of one. Screens (3) and
+(5) have **byte-identical geometry** — same `0x0140, 0x0018`, same
+`80, 104, 0, 320` clip — and they draw `PRESENTS` and `UNREGISTERED`. So the
+shape distinguishes nothing, and the same slot with a real source draws a word.
+In a sequence that runs *[blank]* → logo → `PRESENTS` → title, screen (1) sits
+exactly where a publisher or distributor name would go, and this build has none.
+
+**`egg_load_pass_0x48` is a screen, not only a loader.** The version and credits
+page is drawn from inside it, through `show_resource_loop`, and it holds until a
+key. That is the wait which read as a hang in an earlier session and has needed a
+keypress at this point in every run since.
+
+**`0x145b1` is the main menu, and `0x146cd` is not `game_main`. Corrected
+2026-07-29.** This paragraph used to argue that `lcall 0x146cd` had to be the
+game, because it takes no arguments and everything after it restores text mode
+and exits. Watching says otherwise: `0x13676` at `0x145b1` draws
+PLAY DUCKS / OPTIONS / READ ME! / QUIT DUCKS through the layer compositor and
+**does not return while the menu is up** - repeated stack walks keep showing
+main's frame returning to `0x145b4`, with the frames below it moving between
+`0x0c716` and `0x0d7ee` as the menu is used. So the game is reached from inside
+`main_menu`, and everything after `0x145b1` runs only once it has been quit.
+
+Which reverses the reading of the tail: screens (6) to (9) are shown **on the way
+out**, not as part of the intro, and nobody has seen them. `0x146cd` is now
+`after_menu?`. The lesson is the same one this note keeps relearning - the
+inference from position was reasonable and it was still wrong, and one
+breakpoint would have settled it at any point.
 
 **`[0x548]` is the registration flag**, and it gates twice — the third splash
 with its sound, and the block of four `show_resource` calls with consecutive
@@ -308,12 +351,11 @@ nothing was still moving. The screen was black, and it should have been:
 So `blit_rows` drew exactly what it was given. Whatever should have filled that
 320x24 buffer did not, and the call that would have is `0x0b5cf`.
 
-**Pencilled: 320 x 24 has the dimensions of a progress bar**, or of a remnant of
-one — a strip that wide and that short, drawn once at a fixed position before any
-egg has been loaded, is a poor fit for artwork. Boran's reading, recorded because
-the dimensions are the whole argument for it. An earlier guess here that it was a
-one-line text banner rests on nothing more, and both are unproven: the measured
-facts are the empty source, the empty string and the black planes.
+~~**Pencilled: 320 x 24 has the dimensions of a progress bar**~~ — **refuted the
+same day.** The dimensions were the entire argument, and screens (3) and (5) have
+byte-identical geometry while drawing `PRESENTS` and `UNREGISTERED`. So 320 x 24
+is what a text banner looks like here, and it distinguishes nothing. See
+[Every intro screen, from the pixels](#every-intro-screen-from-the-pixels).
 
 Either way the count changes. `main` makes nine calls that display something, but
 the first draws nothing, so there are at most eight things to see.

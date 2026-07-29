@@ -95,14 +95,19 @@ FUNCTIONS = {
     0x11657: "build_episode_index",     # builds both indexes; prints the banner
     0x13F2:  "farmalloc?",              # sizes both index arrays
     0x13519: "set_mode_x",              # BIOS 13h, then unchains to Mode X
+    0x13676: "main_menu",               # PLAY/OPTIONS/READ ME/QUIT; drawn via
+                                        # the layer compositor. Does not return
+                                        # while the menu is up, so the game is
+                                        # reached from inside it
     0x13FEA: "scan_save_slots",         # GAME1.SG..GAME5.SG; no args, no return;
                                         # its only output is [0x2055]
     0x141FE: "init",                    # the whole startup: banner, objects,
                                         # hardware detection, key wait
     0x144D7: "main",                    # the frame the runtime calls
-    0x146CD: "game_main?",              # main's last call before teardown, no
-                                        # args - inferred from position, not yet
-                                        # confirmed by a breakpoint
+    0x146CD: "after_menu?",             # runs once main_menu has returned, just
+                                        # before the mode is restored. Was
+                                        # guessed as game_main from position
+                                        # alone; the game is inside main_menu
     0x14750: "sound_play?",             # gated on sound_state; ids below 0x96;
                                         # calls 0x14628(id, 0x20, 0xff)
     0x148A2: "detect_soundblaster",     # the sound check; probes the DSP
