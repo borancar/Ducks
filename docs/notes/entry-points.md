@@ -283,12 +283,43 @@ count; it was the count *for an in-game frame*. How many of the 26 are
 four-iteration loops is **not established** — see
 [drawing-port-goal](drawing-port-goal.md).
 
+### The first call draws nothing, and that is correct
+
+**Watched 2026-07-29** on a machine paused inside the first `show_splash`, fully
+faded in — `fade_level` 15, `fade_direction` 0, so the palette was at full and
+nothing was still moving. The screen was black, and it should have been:
+
+- **All four VGA planes were entirely zero.** Captured and checked offline, 65536
+  bytes each, not one non-zero byte. So this is not a palette or fade problem,
+  and not a drawing bug: nothing was ever put in video memory.
+- The source `blit_rows` is handed, at `[bp-0x32]`, is **allocated but empty**:
+  three far pointers into row tables, then `0x0140, 0x0018` — 320 wide, 24 tall.
+  The row tables are real, one entry per row, segments `0x15` paragraphs apart.
+  Three sampled rows are all zeros.
+- The clip at `[bp-0x1c]` is `80, 104, 0, 320`, which is
+  `make_rect(&a, 80, 104, [0x53c], [0x53c] + 320)` with `[0x53c]` reading 0.
+- `ds:0x28ff`, the first argument, begins with a `00` byte. It sits immediately
+  after `"Press a key to begin..."` at `DGROUP+0x2865`-ish, so as a C string it is
+  empty.
+
+So `blit_rows` drew exactly what it was given. Whatever should have filled that
+320x24 buffer did not, and the call that would have is `0x0b5cf`.
+
+**Pencilled: 320 x 24 has the dimensions of a progress bar**, or of a remnant of
+one — a strip that wide and that short, drawn once at a fixed position before any
+egg has been loaded, is a poor fit for artwork. Boran's reading, recorded because
+the dimensions are the whole argument for it. An earlier guess here that it was a
+one-line text banner rests on nothing more, and both are unproven: the measured
+facts are the empty source, the empty string and the black planes.
+
+Either way the count changes. `main` makes nine calls that display something, but
+the first draws nothing, so there are at most eight things to see.
+
 ### Still open here
 
 - `0x0b5cf`, `0x0615a`, `0x056f7`, `0x05671`, `0x088b3` and the two rect builders
-  `0x0881d`/`0x08885` are call targets, not identifications.
-- What `ds:0x28ff` holds. It is not a string — the static image has zeros there,
-  and `sound_state` sits nine bytes into the same region.
+  `0x0881d`/`0x08885` are call targets, not identifications. `0x0b5cf` is now the
+  interesting one: it is what should have filled the buffer.
 - `[0x18e5]`, tested next to `last_key` as a second escape condition.
 
 ## The chain
