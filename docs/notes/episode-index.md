@@ -169,6 +169,52 @@ egg's contents and not whether the copy is registered.
 The remaining unknown from the original read is smaller: which routine copies the
 names out of the information block and subtracts the one on the way.
 
+## The registration state is `[0x548]`
+
+**Found 2026-07-29.** The paragraph above predicted "a level-number threshold
+against a registration state held outside the index". Both halves are now
+located, by scanning for every instruction touching the flag — eleven sites, and
+the three writers name it.
+
+`[0x548]` is non-zero when the copy is registered. `[0x542]`/`[0x544]` is a far
+pointer to the owner's name, read out of the egg stream by `egg_getc` at
+`0x13ef3` and freed through `0x00edb` when the flag is cleared. `init` prints the
+pair:
+
+```c
+puts("Registered to: ");                          /* DGROUP+0x2865 */
+set_text_colour([0x548] ? 0x0f : 0x8f);           /* 0x8f is bright/blinking */
+printf("%s\r\n\r\n", [0x548] ? (char far *)[0x542] : "UNREGISTERED");
+```
+
+The threshold test is at `0x13841`, and it consults the flag two instructions
+later:
+
+```
+mov al, [0x54a]          ; a level number
+cmp ax, [0x2032]         ; the threshold
+jge  skip
+cmp  [0x548], 0          ; ... and only when unregistered
+jne  skip
+cmp  [0x1ffc], 0
+jne  skip
+call 0x09329
+call egg_load_one(0xfc, 0x48, 0xff)
+```
+
+So a level number against a threshold, gated on registration, with the content
+pulled from the egg — the shape this note predicted, found where it said to look.
+
+**Not established: which side refuses.** The branch is `jge skip`, so the block
+runs when the level is *below* the threshold, which reads more like a reminder
+shown on playable levels than the refusal itself. `[0x2032]` has not been read on
+a live machine, and neither has `[0x54a]` while playing, so the boundary
+observed mid-`SHALLOW END` is not yet tied to a number here.
+
+`main` also consults the flag twice: registered copies **skip** the third splash
+and the block of four `show_resource` calls. The extra intro screens are the
+unregistered build's ([entry-points](entry-points.md)).
+
 ## Reproducing it
 
 The block was pulled with `read <addr> <len>` over the control socket in 1 KB

@@ -157,6 +157,11 @@ VARIABLES = {
     0x0DAD: "palette_washed",           # 48 bytes: the lifted terrain ramp
     0x0D61: "flip_phase",               # 0..9, advanced by page_flip
     0x0DDD: "blink_toggle",             # flips between the two blink palettes
+    0x0542: "registered_name",          # far pointer to the owner's name, read
+    0x0544: "registered_name_seg",      # out of the egg; valid only if 0x548
+    0x0548: "registered",               # non-zero = registered. init prints
+                                        # "Registered to: <name>" or UNREGISTERED
+    0x054A: "level_number?",            # tested against [0x2032] at 0x13841
     0x0DDF: "blink_countdown",          # randomised frames until the next flip
     0x10E1: "palette_stored",           # 768 bytes: the level's palette
     0x14B1: "palette_source",           # 48 bytes: the ramp washed_ramp reads

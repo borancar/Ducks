@@ -168,9 +168,14 @@ instructions are `push bp; mov bp, sp; push si; cmp byte [0x2908], 0`, gated on
 `sound_state`. This is the "the real game loop is a different call from main"
 that the section below has been pointing at.
 
-**`[0x548]` gates twice** — the third splash with its sound, and the block of
-four `show_resource` calls with consecutive indices. It read `0` on the observed
-run, so both branches were taken.
+**`[0x548]` is the registration flag**, and it gates twice — the third splash
+with its sound, and the block of four `show_resource` calls with consecutive
+indices. Both are `jne`, so a **registered** copy skips them: the extra intro
+screens belong to the unregistered build. It read `0` on the observed run, which
+is why every screen appeared. See
+[episode-index](episode-index.md#the-registration-state-is-0x548) for the flag,
+the owner's name at `[0x542]`/`[0x544]`, and the level threshold that consults
+it.
 
 ## 0x0c1ad is show_resource, and 0x0b52f is a sixth plane loop
 
