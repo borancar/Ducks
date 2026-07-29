@@ -4738,6 +4738,7 @@ class Control:
                 pass
 
     def _apply(self, m, line):
+        self._reap(m)
         cmd, _, rest = line.partition(" ")
         cmd, rest = cmd.lower(), rest.strip()
         if cmd == "key":
@@ -4798,9 +4799,23 @@ class Control:
             a = self._addr(m, rest)
             return ("ok: disarmed " + self._where(m, a)) if brk.pop(a, None) \
                 else f"  {a:#07x} was not armed"
+        if cmd == "pause":
+            if getattr(m, "ctl_paused", False):
+                return "  already paused at " + self._where(m, self._here(m))
+            # Safe from either service context: emu_stop() from inside a hook is
+            # what the breakpoint handler already does, and from between chunks
+            # it is a no-op. The loop takes the paused branch next time round.
+            m.ctl_paused = True
+            m.ctl_hit = None
+            try:
+                m.uc.emu_stop()
+            except Exception:
+                pass
+            return "ok: pausing at the end of this chunk; `where` to confirm"
         if cmd == "cont":
             if not getattr(m, "ctl_paused", False):
                 return "  not paused"
+            m.ctl_resume_from = self._here(m)
             m.ctl_paused = False
             return "ok: running"
         return f"error: unknown command {cmd!r}"
@@ -4953,9 +4968,16 @@ class Control:
             return "  already armed: " + self._where(m, lin)
 
         def on_hit(uc, address, size, user):
+            # Resuming from a breakpoint means the first instruction run is
+            # the one that is armed. Firing there would pause immediately and
+            # the machine could never leave, so that single hit is declined.
+            if getattr(m, "ctl_resume_from", None) == address:
+                m.ctl_resume_from = None
+                return
             if address in m.ctl_breaks and not getattr(m, "ctl_paused", False):
                 m.ctl_paused = True
                 m.ctl_hit = address
+                m.ctl_last_hit = address
                 uc.emu_stop()
 
         h = m.uc.hook_add(UC_HOOK_CODE, on_hit, None, lin, lin)
@@ -4992,29 +5014,88 @@ class Control:
         out.append("  now at " + self._where(m, self._here(m)))
         return "\n".join(out)
 
-    def _until(self, m, target, max_insns):
-        if not self._runnable(m):
-            return ("error: not at a frame boundary - the machine is inside "
-                    "emu_start. Try again in a moment.")
-        try:
-            m.uc.emu_start(self._here(m), target, count=max(1, max_insns))
-        except Exception as e:
-            return f"  stopped by {e}\n  at " + self._where(m, self._here(m))
-        here = self._here(m)
-        hit = "reached" if here == target else "did NOT reach (budget spent)"
-        return f"  {hit} {target:#07x}\n  at " + self._where(m, here)
+    def _reap(self, m):
+        """Drop a breakpoint armed by `until`/`finish` once it has fired.
+
+        Done here rather than in the hook: hook_del from inside a running hook
+        invites trouble, and _apply only ever runs at a boundary. A breakpoint
+        the user armed by hand is never reaped - only the ones these verbs
+        placed, which are tracked in ctl_transient.
+        """
+        transient = getattr(m, "ctl_transient", None)
+        if not transient:
+            return
+        fired = getattr(m, "ctl_last_hit", None)
+        if fired is None or fired not in transient:
+            return
+        handle = getattr(m, "ctl_breaks", {}).pop(fired, None)
+        if handle is not None:
+            try:
+                m.uc.hook_del(handle)
+            except Exception:
+                pass
+        transient.discard(fired)
+        m.ctl_last_hit = None
+
+    def _until(self, m, target, max_insns=None):
+        """Arm `target` and let the machine run to it, rather than running it here.
+
+        Deliberately does NOT emu_start. Driving the guest inside the socket
+        call blocks the service loop for as long as it takes, so a target that
+        is thousands of frames away - or that needs input the main loop has to
+        pump before it can be reached - answers only after the client has given
+        up. That is what made `finish` look like a hang twice. Arming a
+        breakpoint and returning at once leaves the main loop free to pump
+        input and present frames; `where` says when it lands, and the
+        breakpoint is removed on arrival.
+
+        `max_insns` is accepted and ignored, so commands recorded in old logs
+        still parse.
+        """
+        armed = self._break(m, target)
+        if armed.startswith("ok:"):
+            transient = getattr(m, "ctl_transient", None)
+            if transient is None:
+                transient = m.ctl_transient = set()
+            transient.add(target)
+        m.ctl_resume_from = self._here(m)
+        m.ctl_paused = False
+        return ("  running to " + self._where(m, target)
+                + "\n  released; poll `where`. `pause` stops it early")
 
     def _finish(self, m):
-        """Run to this frame's return address, read the same way `stack` reads it."""
+        """Run to where the current frame returns, allowing for the prologue.
+
+        The return address is NOT simply the far pair at SS:BP+2. A breakpoint
+        on a function's first instruction - which is where a native hook and
+        every `break` on an entry point lands - stops before `push bp` has run,
+        so BP still belongs to the caller and that frame is the caller's. Read
+        there, `finish` at show_splash's entry targeted crt_startup and ran
+        until the program exited.
+
+        Borland's prologue is `push bp; mov bp, sp`, so the two partial states
+        are recognisable from the bytes at CS:IP, and the return is that far
+        down the stack instead.
+        """
         if not self._runnable(m):
             return "error: not at a frame boundary. Try again in a moment."
-        ss, bp = m._reg(UC_X86_REG_SS), m._reg(UC_X86_REG_BP)
+        ss = m._reg(UC_X86_REG_SS)
         try:
-            _nxt, ip, cs = struct.unpack("<HHH", m.uc.mem_read(ss * 16 + bp, 6))
+            head = bytes(m.uc.mem_read(self._here(m), 3))
+        except Exception:
+            head = b""
+        if head[:3] == b"\x55\x8b\xec":       # at `push bp`: nothing pushed yet
+            base, how = ss * 16 + m._reg(UC_X86_REG_SP), "SS:SP, before push bp"
+        elif head[:2] == b"\x8b\xec":          # after `push bp`
+            base, how = ss * 16 + m._reg(UC_X86_REG_SP) + 2, "SS:SP+2, after push bp"
+        else:
+            base, how = ss * 16 + m._reg(UC_X86_REG_BP) + 2, "SS:BP+2, frame set up"
+        try:
+            ip, cs = struct.unpack("<HH", m.uc.mem_read(base, 4))
         except Exception as e:
-            return f"error: cannot read the frame at SS:BP - {e}"
-        return (f"  returning to {cs:04x}:{ip:04x}\n"
-                + self._until(m, cs * 16 + ip, 20_000_000))
+            return f"error: cannot read the return address - {e}"
+        return (f"  returning to {cs:04x}:{ip:04x}, read from {how}\n"
+                + self._until(m, cs * 16 + ip))
 
     def _stack(self, m, depth):
         """Walk the BP chain, naming each frame's return address.

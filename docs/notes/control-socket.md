@@ -58,6 +58,48 @@ already run up to 400,000 instructions in between. Arm a `break` first, then sen
 the key. Breakpoints stop inside the slice loop, not just at the top of a frame,
 which is what makes them land on the exact instruction.
 
+## Stopping, stepping and running to somewhere
+
+**Fixed 2026-07-29**, after all three cost real time in one session.
+
+**`pause` stops a running machine.** Without it, stepping depended on catching
+the machine between chunks: a command that arrives mid-run is serviced by the
+flip hook, which is *inside* an `emu_start`, and the stepping verbs correctly
+refuse there rather than start emulation reentrantly. So `step` worked only by
+luck, or after a `break` happened to fire. `pause` sets the paused flag and calls
+`emu_stop()` — the same thing the breakpoint handler does — and the machine
+stops at the end of the current chunk.
+
+Reading a paused machine: `cs:ip` stops changing and `flips` stops rising, but
+**`frames` keeps ticking**, because the paused branch of the main loop still
+counts them. That combination was misread as a hang once already. A `retf` that
+never retires is the giveaway that nothing is executing at all.
+
+**`finish` reads the return address through the prologue, not from `SS:BP`.** A
+breakpoint on a function's first instruction — where every `break` on an entry
+point lands — stops before `push bp`, so `BP` still belongs to the caller and the
+frame there is the caller's. Read that way, `finish` at `show_splash`'s entry
+targeted `crt_startup` and ran until the program exited; it looked like a hang
+twice before the cause was found. Borland's prologue is `push bp; mov bp, sp`, so
+the two partial states are recognisable from the bytes at `CS:IP`, and `finish`
+now says which it used:
+
+```
+  returning to 05da:f8bf, read from SS:SP, before push bp
+```
+
+**`until` and `finish` arm a breakpoint instead of driving the guest.** They used
+to call `emu_start` inside the socket call with a 20-million-instruction budget,
+which blocks the service loop — so a target thousands of frames away, or one that
+needs input the main loop has to pump first, answered only after the client had
+given up. They now return in milliseconds, and the breakpoint they placed is
+removed once it fires. `pause` stops the run early.
+
+**Resuming does not re-fire the breakpoint you are sitting on.** `cont` from a
+breakpoint used to stop again instantly on the same instruction, because that
+address is armed and the hook fires on the first instruction executed. The
+address being resumed from is remembered and declined exactly once.
+
 ## The one rule
 
 Nothing the listener receives touches the machine on the listener's thread.
