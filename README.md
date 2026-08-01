@@ -126,6 +126,11 @@ because until level 80 it had never run.
   nothing outside the game's own segment assigns to any of them - so `game.c`
   declares them plainly and `dos_io.c` declares them `extern`. They were `extern`
   in `game.c` for one commit, purely because that made a fragment look compilable.
+- **A type invented to make two of our own signatures agree is the same mistake.**
+  `blit_rows` was given a `rect_t` and the screen players a `viewport_t`, so a
+  `screen_rect()` converter appeared between them - a function the original does
+  not have, introduced to fix a problem that did not exist until the reconstruction
+  created it. There is one record; the blitters read its first four words.
 - **Never write a call that is not in the binary.** Some constructs compile to a
   runtime helper or to inline code, and naming a familiar library function instead
   is fiction: it puts a symbol in the reconstruction that the original does not

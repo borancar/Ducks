@@ -427,7 +427,7 @@ void far palette_fade_step(int16_t arg)
  * Note it checks [0x4fe] at the top, unlike plot_pixel: this one does handle both
  * resolutions itself.
  */
-void far blit_rows(desc_t far *desc, rect_t rect, int16_t srcrow)
+void far blit_rows(desc_t far *desc, viewport_t rect, int16_t srcrow)
 {
     int16_t stride = video_mode ? 90 : 80;
     int16_t row, x;
@@ -523,7 +523,7 @@ void far draw_sprite(int16_t far *index, int16_t x, int32_t y,
  *
  * This is what draws the three flashing panels in the in-game frame.
  */
-void far blit_rows_masked(desc_t far *desc, rect_t rect, int16_t srcrow)
+void far blit_rows_masked(desc_t far *desc, viewport_t rect, int16_t srcrow)
 {
     int16_t stride = video_mode ? 90 : 80;
     int16_t row, x;

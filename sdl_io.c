@@ -293,7 +293,7 @@ void far plot_pixel_wide(int16_t x, int16_t y, uint8_t colour)
     plot_pixel(x, y, colour);
 }
 
-void far blit_rows(desc_t far *desc, rect_t rect, int16_t srcrow)
+void far blit_rows(desc_t far *desc, viewport_t rect, int16_t srcrow)
 {
     int16_t row, x;
 
@@ -306,7 +306,7 @@ void far blit_rows(desc_t far *desc, rect_t rect, int16_t srcrow)
     }
 }
 
-void far blit_rows_masked(desc_t far *desc, rect_t rect, int16_t srcrow)
+void far blit_rows_masked(desc_t far *desc, viewport_t rect, int16_t srcrow)
 {
     int16_t row, x;
 

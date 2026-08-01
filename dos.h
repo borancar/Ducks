@@ -17,6 +17,9 @@
 /* ------------------------------------------------------------------- types */
 
 /* The 20-byte viewport every drawing routine clips against; make_rect fills it. */
+/* The 20-byte record everything clips against. The row blitters take the same
+ * record and read only its first four words, which is why the original passes a
+ * verbatim copy rather than converting anything. */
 typedef struct {
     int16_t top;                /* +0x00 */
     int16_t bottom;             /* +0x02 */
@@ -27,11 +30,6 @@ typedef struct {
     int32_t scroll_x;           /* +0x0c */
     int32_t scroll_y;           /* +0x10 */
 } viewport_t;
-
-/* The four-word destination rectangle the row blitters take. */
-typedef struct {
-    int16_t top, bottom, left, right;
-} rect_t;
 
 /* An image: a table of row pointers, plus the size resource_load filled in. */
 typedef struct {
@@ -142,8 +140,8 @@ void far palette_fade_step(int16_t arg);
 
 void far plot_pixel(int16_t x, int16_t y, uint8_t colour);
 void far plot_pixel_wide(int16_t x, int16_t y, uint8_t colour);
-void far blit_rows(desc_t far *desc, rect_t rect, int16_t srcrow);
-void far blit_rows_masked(desc_t far *desc, rect_t rect, int16_t srcrow);
+void far blit_rows(desc_t far *desc, viewport_t rect, int16_t srcrow);
+void far blit_rows_masked(desc_t far *desc, viewport_t rect, int16_t srcrow);
 void far compose_layer(void);
 void far compose_scroll(int16_t scroll_x, int16_t scroll_y);
 void far draw_sprite(int16_t far *index, int16_t x, int32_t y,

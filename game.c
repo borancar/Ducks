@@ -26,16 +26,6 @@
 
 #include "dos.h"
 
-/* The blitters take the four-word rectangle, the clipping routines the 20-byte
- * viewport. The original pushes a verbatim copy of whichever it means; here they
- * are different types, so this says which conversion is happening. */
-static rect_t screen_rect(const viewport_t *v)
-{
-    rect_t r;
-
-    r.top = v->top;  r.bottom = v->bottom;  r.left = v->left;  r.right = v->right;
-    return r;
-}
 
 menu_t         main_menu;               /* ds:0x1916, what main passes in */
 menu_t         menu_1989;               /* after starting, saving or loading */
@@ -389,7 +379,7 @@ void far show_resource_loop(desc_t far *desc, int16_t frames)
         si -= (frames > 0);
         for (plane = 0; plane < 4; plane++) {
             set_plane(plane);
-            blit_rows(desc, screen_rect(&viewport_screen), 0);
+            blit_rows(desc, viewport_screen, 0);
         }
         page_flip();
         palette_fade_step(0);
@@ -485,7 +475,7 @@ void far cutscene_welcome_home(void)
     for (page = 0; page < 2; page++) {
         for (plane = 0; plane < 4; plane++) {
             set_plane(plane);
-            blit_rows(&desc, screen_rect(&viewport_screen), 0);
+            blit_rows(&desc, viewport_screen, 0);
         }
         page_flip();
         if (page == 0)
@@ -514,7 +504,7 @@ void far cutscene_photos(void)
         for (page = 0; page < 2; page++) {
             for (plane = 0; plane < 4; plane++) {
                 set_plane(plane);
-                blit_rows(&desc, screen_rect(&viewport_screen), 0);
+                blit_rows(&desc, viewport_screen, 0);
             }
             page_flip();
         }
@@ -551,7 +541,7 @@ void far show_splash(void far *image, int16_t frames)
         si++;
         for (plane = 0; plane < 4; plane++) {
             set_plane(plane);
-            blit_rows(&b, screen_rect(&a), 0);
+            blit_rows(&b, a, 0);
         }
         page_flip();
         palette_fade_step(0);
