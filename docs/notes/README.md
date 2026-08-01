@@ -17,6 +17,8 @@ Current, and kept current. Where these disagree with
   and the two ways they got confused into wrong addresses
 - [entry-points](entry-points.md) — the chain from the C runtime: main at
   0x144d7, game_main tentatively 0x0c156, and the linear/image address trap
+- [menu-loop](menu-loop.md) — `0x1271b`: the menu and the game are one loop, and
+  the menu tree as driven from the keyboard
 - [homecoming-sequence](homecoming-sequence.md) — the five screens after the game
   call: the ending, gated on finishing the last episode
 - [episode-index](episode-index.md) — the egg's directory: episode names and

@@ -115,6 +115,7 @@ class Native(VgaDos):
         self.dac_bytes = 0           # palette bytes written by dac_loop_fade
         self.snow_nops = 0           # snow waits removed by install_snow_nops
         self.want_snow_nops = False  # so after_restore() knows to re-apply
+        self.want_no_demo = False    # ditto, for the menu idle timeout
         self.fp_sites = {}           # linear site -> interrupt it replaced
         self.fp_unknown = Counter()
         self.persist = persist
@@ -801,6 +802,27 @@ class Native(VgaDos):
             for b in bad:
                 print(f"  [snow]   {b}")
 
+    MENU_IDLE_SUPPRESS = 0x2177   # DGROUP; non-zero stops the menu timing out
+
+    def install_no_demo(self):
+        """Stop the main menu timing out into a demo level or the Hall of Fame.
+
+        0x0c9d6 compares the idle frame count against 500 and 0x0c9db then tests
+        [0x2177], skipping the timeout when it is non-zero - which is what
+        hovering a menu item was already known to do. Setting it holds the menu
+        indefinitely.
+
+        Deliberately data and not a code patch. Patching the handler instead was
+        tried first and cost three rounds: forcing the chooser to zero produced a
+        "DEMO MISSING" screen, the write needed a cache flush to take effect at
+        all, and even correct it left the menu's own fade-out in place, because
+        the fade is the menu returning rather than the caller acting.
+        """
+        self.want_no_demo = True
+        self.write(self.dgroup_base + self.MENU_IDLE_SUPPRESS, b"\x01\x00")
+        print("  [menu] idle timeout suppressed: no demo level, no attract "
+              "screen. --demo restores it")
+
     def after_restore(self):
         """Put back what is configuration rather than captured machine state.
 
@@ -813,6 +835,8 @@ class Native(VgaDos):
         """
         if getattr(self, "want_snow_nops", False):
             self.install_snow_nops()
+        if getattr(self, "want_no_demo", False):
+            self.install_no_demo()
 
     def install_native_fp(self):
         """Hand the game's floating point to the real FPU.
@@ -4509,6 +4533,11 @@ def make_parser():
                     action=argparse.BooleanOptionalAction,
                     help="NOP the CGA snow-avoidance waits in the blit at "
                          "0x01d8e - two port reads per word copied, on a VGA")
+    ap.add_argument("--demo", default=True,
+                    action=argparse.BooleanOptionalAction,
+                    help="let the main menu time out into a demo level or the "
+                         "Hall of Fame after 500 idle frames. --no-demo holds "
+                         "the menu still, which is what makes it navigable")
     ap.add_argument("--native-flip", default=True,
                     action=argparse.BooleanOptionalAction,
                     help="serve the game's page flip natively and present from "
@@ -4590,6 +4619,8 @@ def build_machine(args):
         m.install_native_xms()
     if args.snow_nops:
         m.install_snow_nops()
+    if not args.demo:
+        m.install_no_demo()
     if args.native_fp:
         m.install_native_fp()
     if args.native_plane_loop:
@@ -4915,6 +4946,15 @@ class Control:
             return f"error: {len(data)} bytes is more than this is for"
         before = bytes(m.uc.mem_read(lin, len(data)))
         m.write(lin, data)
+        # Unicorn caches translated blocks, so patching an instruction that has
+        # already run changes the bytes and not the behaviour - the bytes read
+        # back correctly and the guest carries on executing the old ones. Every
+        # other code patch here does this; the first version of this verb did
+        # not, and a patch to the attract branch appeared to be ignored.
+        try:
+            m.uc.ctl_remove_cache(lin, lin + len(data))
+        except Exception as e:
+            return f"  wrote {lin:#07x} but could not flush the cache: {e}"
         after = bytes(m.uc.mem_read(lin, len(data)))
         if after != data:
             return (f"  {lin:#07x} did NOT take: wrote {data.hex(' ')}, "
@@ -5213,6 +5253,12 @@ def step_frame(m, addr, args, img):
     refills its DMA buffer too slowly to produce continuous audio.
     """
     _service_control(m, can_run=True)
+    if getattr(m, "want_no_demo", False):
+        # Re-asserted rather than written once: the guest's startup zeroes this
+        # word, so a cold boot would clear it and the menu would demo anyway -
+        # which is exactly how the first version of --no-demo failed. One
+        # two-byte write per display frame.
+        m.write(m.dgroup_base + m.MENU_IDLE_SUPPRESS, b"\x01\x00")
     # Re-read: a `step` or `until` over the socket has just moved CS:IP, and
     # resuming from the address the loop was holding would jump back.
     addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)

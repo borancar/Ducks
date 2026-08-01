@@ -115,6 +115,9 @@ FUNCTIONS = {
                                         # towards the house. Called at 0x1396e,
                                         # confirmed from the return address on
                                         # its own stack frame, not the listing
+    0x1240F: "load_demo?",              # (index): egg_find_block and friends;
+                                        # 0 means the caller shows DEMO MISSING
+    0x126DB: "pick_random_demo?",       # rand() % [0x2038], then load_demo
     0x11547: "print_newline?",          # no args, bracketing the banners
     0x11D54: "high_score_screen",       # both halves of it: NEW HIGH SCORE!
                                         # ENTER YOUR NAME, then DUCKS HALL OF
@@ -129,6 +132,9 @@ FUNCTIONS = {
                                         # return that record's terminator flag -
                                         # so it says "the FINAL episode ended",
                                         # which is what gates the homecoming
+    0x0C716: "run_screen?",             # draws a screen, takes input, returns a
+                                        # record: +8 action code, +0xb a
+                                        # parameter. Holds plane_loop_layer
     0x1271B: "menu_screen_driver",      # game_main's first call, and the whole
                                         # attract cycle: the menu, a demo level
                                         # it plays by itself, and DUCKS HALL OF
@@ -240,6 +246,14 @@ VARIABLES = {
                                         # reached
     0x2022: "background_warp",          # non-zero runs compose_scroll's warp.
                                         # First ever seen set on level 80
+    0x2177: "menu_idle_suppress",       # non-zero stops the menu's 500-frame
+                                        # idle timeout at 0x0c9d6, and so the
+                                        # fade-out it starts and the demo or
+                                        # Hall of Fame that follows. What
+                                        # hovering a menu item does; --no-demo
+    0x21AE: "attract_choice",           # toggled every pass at 0x127ee: 0 plays
+                                        # a demo level, non-zero shows the
+                                        # attract screen instead
     0x179F: "warp_table",               # 32 x displacement entries, indexed by a
                                         # phase re-masked to 0x1f every row
     0x17BF: "warp_phase",               # where row 0 starts in the table
