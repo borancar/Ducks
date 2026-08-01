@@ -83,11 +83,22 @@ void far set_mode_x(int16_t wide)
     }
     video_mode = wide;                     /* [0x4fe] */
 
-    /* Both paths then build the viewports the drawing code clips against, from
-     * the geometry just set: `make_rect(&viewport_1741, height - 40, height,
-     * x0, x0 + 320)` and one more like it.
-     * TODO 0x13613-0x13676: the exact argument order of the two make_rect calls
-     * has not been checked against make_rect's own body. */
+    /* Both paths then build the three viewports the drawing code clips against,
+     * out of the geometry just set. make_rect is 0x0881d and takes
+     * (rect, top, bottom, left, right).
+     *
+     * This is what the wide mode is actually for: at 360x240 the play area is a
+     * 320x200 window centred in a taller, wider screen, with a 40-row panel along
+     * the bottom and 20 columns of margin either side. At 320x200 the same
+     * arithmetic degenerates - the middle band becomes the whole screen and the
+     * panel overlaps it. */
+    make_rect(&viewport_1741, screen_height - 40, screen_height,
+              screen_x0, screen_x0 + 320);          /* the bottom panel */
+    make_rect(&viewport_1769, screen_height / 2 - 100, screen_height / 2 + 100,
+              screen_x0, screen_x0 + 320);          /* the centred 320x200 play
+                                                     * area: rows 20..220 wide,
+                                                     * 0..200 narrow */
+    make_rect(&viewport_1755, 0, screen_height, 0, screen_width);   /* all of it */
 }
 
 /* ------------------------------------------------------------ video: planes */
@@ -293,8 +304,25 @@ void far palette_fade_step(int16_t arg)
         return;
     }
     blink_toggle = !blink_toggle;
-    /* TODO 0x0b1b8-0x0b284: the two 16-colour upload loops and the random
-     * reload of blink_countdown. */
+
+    /* Sixteen colours at DAC index 0x40, from one of two ramps depending on the
+     * toggle: palette_washed, built once at 0x0876a as v*0.75 + 64, or the
+     * level's own colours out of palette_stored. 0x30 bytes is 16 entries of
+     * three. Then a fresh countdown, rand() & 1 plus 2 - which with the outer
+     * loop is the 2-to-260-frame interval the notes describe. */
+    outp(0x3c8, 0x40);
+    if (blink_toggle)
+        for (i = 0; i < 0x30; i++)
+            outp(0x3c9, palette_washed[i] >> 2);        /* 0x0b1c9 */
+    else
+        for (i = 0; i < 0x30; i++)
+            outp(0x3c9, palette_stored[0xc0 + i] >> 2); /* 0x0b202 */
+    blink_countdown = (rand() & 1) + 2;
+
+    /* Not a blink at all, on a closer look: 0x0b202 writes the level's normal
+     * terrain ramp and 0x0b1c9 a washed copy of it, so the whole scene lifts to a
+     * grey floor and back rather than one thing flashing. Nothing in this build
+     * reaches it either way. */
 }
 
 /* ------------------------------------------------------------ video: drawing
@@ -396,8 +424,9 @@ void far draw_sprite(int16_t far *index, int16_t x, int32_t y,
      * advance the source by the full width, and in the wide mode the plane index
      * is added to the destination base, which is not something the 320 path does.
      *
-     * TODO: the shadow path, reached only when an entity of type 0x0f or 0x10
-     * precedes another, has never been observed to run and is not written here. */
+     * The shadow path the notes describe is not in this routine - it is inside
+     * draw_entities, which decides to call this a second time. Nothing in here
+     * has a branch that has never run. */
 }
 
 /* 0x05ac2. blit_rows with transparency: a source byte of zero leaves the
@@ -526,14 +555,8 @@ void far plot_pixel_wide(int16_t x, int16_t y, uint8_t colour)
     ((uint8_t far *) vram)[y * 90 + (x >> 2) + page_back] = colour;
 }
 
-/* -------------------------------------------------- still to read out
- *
- * TODO. Both are replaced natively and byte-compared, so native.py is a verified
- * description while the disassembly is turned into C here. Both are arguably game
- * rather than I/O and may belong in game.c once they are read:
- *
- *   0x0ab09  particles      plots through the [0x53e] callback, so it is
- *                           plane-filtered the same way outline_sprite is
- *   0x0aba5  draw_entities  five layers per call, ~34,000 calls a session, and
- *                           the shadow path inside it has never been seen to run
+/* `particles` (0x0ab09) and `draw_entities` (0x0aba5) are not here: both are
+ * loops over game objects that happen to draw, so by the test this file is split
+ * on - would a port rewrite it, or recompile it - they belong in game.c, which is
+ * where they are.
  */
