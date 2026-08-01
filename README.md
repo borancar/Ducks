@@ -113,6 +113,11 @@ because until level 80 it had never run.
   `mov byte [x], 0xff` is identical for a signed -1 and an unsigned 255; `cbw`
   after a load is what makes it signed, `mov ah, 0` what makes it unsigned, and the
   store width what gives the size. Put the evidence in the comment.
+- **`extern` is a claim about where something is defined, so make it only when it
+  is true.** The globals are defined in `game.c`, which the write-scan settled -
+  nothing outside the game's own segment assigns to any of them - so `game.c`
+  declares them plainly and `dos_io.c` declares them `extern`. They were `extern`
+  in `game.c` for one commit, purely because that made a fragment look compilable.
 - **Never write a call that is not in the binary.** Some constructs compile to a
   runtime helper or to inline code, and naming a familiar library function instead
   is fiction: it puts a symbol in the reconstruction that the original does not
