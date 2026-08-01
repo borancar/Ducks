@@ -438,11 +438,17 @@ void far egg_load_one(int16_t index, int16_t type, int16_t egg)
         resource_release(&desc);
     }
 
-    /* TODO 0x0c108-0x0c1ac: the second load - type 0x48, the text block - and
-     * whatever draws it. The text is there and decodes with a -1 shift; what is
-     * missing is the font and the layout, so the page currently shows its
-     * background and none of its words. */
-    (void) index; (void) type; (void) egg;
+    /* Then the text page over it: 0x0b7c3 finds the type 0x48 block and renders
+     * it into a descriptor - egg_find_block, then three passes through 0x06d52,
+     * which is where the glyphs get drawn - and show_resource_loop displays that
+     * with no frame count, so it holds rather than timing out.
+     *
+     * The words are in the egg and decode with a -1 shift, which is the same
+     * cipher as the episode index. What is missing is 0x0b7c3 itself. */
+    if (load_text_page(&desc, (uint8_t) type, (uint8_t) index, 0, 0x10e, egg)) {
+        show_resource_loop(&desc, 0);
+        resource_release(&desc);
+    }
 
     draw_flag = saved;
     set_buffer(default_buffer);

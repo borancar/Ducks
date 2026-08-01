@@ -225,7 +225,10 @@ void far high_score_screen(void);
 void far show_attract_screen(int16_t frames);
 void far egg_load_one(int16_t index, int16_t type, int16_t egg);
 void far f_054c_set(void);
+int16_t far load_text_page(void far *desc, uint8_t type, uint8_t index,
+                           int16_t a, int16_t b, int16_t egg);
 extern int16_t draw_flag;
+extern int16_t egg_file_count;
 void far resource_release(void far *d);
 void far set_buffer(void far *p);
 void far sound_play_guarded(int16_t id, int16_t mode);
