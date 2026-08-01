@@ -94,11 +94,17 @@ void far  *default_buffer;       /* ds:0x13f1 - what set_buffer restores */
 int16_t    g_53c;                /* 0x053c - show_splash's x origin */
 
 /* input */
-uint32_t   mouse_x, mouse_y;     /* 0x18d3, 0x18d7 - 32-bit (add/adc pairs),
-                                  * and compared with `ja`, so unsigned: a
-                                  * negative delta wraps high and the same
-                                  * clamp catches it */
-int16_t    mouse_dx, mouse_dy;   /* 0x18db, 0x18dd - one poll's motion */
+int32_t    mouse_x, mouse_y;     /* 0x18d3, 0x18d7 - 32-bit from the add/adc
+                                  * pairs, and SIGNED: the clamp compares the
+                                  * high word with jg/jl and only then the low
+                                  * word with ja/jae, which is how a 32-bit
+                                  * signed compare is done on a 16-bit machine.
+                                  * An automated pass that sees the `ja` alone
+                                  * calls this unsigned, and did */
+int16_t    mouse_dx, mouse_dy;   /* 0x18db, 0x18dd - one poll's motion, signed:
+                                  * each is `mov ax / cwd` before the add */
+int16_t    pressed_count[3];     /* 0x20ea, 0x20ec, 0x20ee - since the last poll */
+int16_t    released_count[3];    /* 0x20f0, 0x20f2, 0x20f4 */
 int16_t    button_map_a;         /* 0x20e4 - which INT 33h button is which */
 int16_t    button_map_b;         /* 0x20e6 */
 int16_t    button_map_c;         /* 0x20e8 */
@@ -147,7 +153,7 @@ int16_t    settings[];           /* 0x04f4 - the word array save_settings
                                          * writes; settings[0] gates sound */
 
 /* used but not identified */
-int16_t  g_509, g_50b, g_1ffa, g_1ffc, g_1ffe;
+int16_t  g_509, g_50b, g_1ffa, g_1ffc, g_1ffe, g_18e1, g_18e3;
 uint8_t  g_18f5, g_1fd3;        /* both byte-sized on every access */
 int16_t  g_201c;                /* compared with jle, so signed */
 uint16_t g_2036;                /* compared with jb, so unsigned */
@@ -188,20 +194,38 @@ void far close_egg_files(void)
  */
 void far input_poll(int16_t w, int16_t h)
 {
+    int16_t i, p[3], r[3];
+
     mouse_motion(&mouse_dx, &mouse_dy);    /* 0x0675b - the only two arguments */
 
-    mouse_x += (int32_t) mouse_dx;
-    mouse_y += (int32_t) mouse_dy;
-    if (mouse_x > w - 1) mouse_x = w - 1;  /* and clamped at 0 below */
-    if (mouse_y > h - 1) mouse_y = h - 1;
+    /* The button state, in two triples of counts since the last poll. The
+     * indexes are data: which physical button means what comes out of
+     * button_map_a/b/c, which is what the MOUSE BUTTONS screen sets. */
+    for (i = 0; i < 3; i++) {
+        pressed_count[i]  = mouse_presses(i);
+        released_count[i] = mouse_releases(i);
+    }
+    memcpy(&p[0], &pressed_count[0], 6);   /* onto the stack, to index by map */
+    memcpy(&r[0], &released_count[0], 6);
 
-    /* TODO 0x06886-0x069xx: the button half, read but not written out. It calls
-     * mouse_presses(0..2) into [0x20ea]/[0x20ec]/[0x20ee] and mouse_releases(0..2)
-     * into [0x20f0]/[0x20f2]/[0x20f4], copies each triple onto the stack, and then
-     * indexes those by button_map_a/b/c - so the mapping is data, not code. Out of
-     * it come button_a_down (0x18df), button_b_down (0x18e7), g_18e5 (any button
-     * at all) and two more at 0x18e1 and 0x18e3 that have no name yet. The tail
-     * past 0x0696f has not been read. */
+    if (p[button_map_a])  button_a_down = 1;     /* 0x18df */
+    if (r[button_map_a])  button_a_down = 0;
+    g_18e3 = p[button_map_b];              /* 0x18e3 - unnamed */
+    g_18e1 = p[button_map_c];              /* 0x18e1 - unnamed */
+    g_18e5 = (p[0] || p[1] || p[2]);       /* 0x18e5 - any button at all, which
+                                            * is what the fades test to cut a
+                                            * splash short */
+    if (g_18e5)                    button_b_down = 1;   /* 0x18e7 */
+    if (r[0] || r[1] || r[2])      button_b_down = 0;
+
+    /* The position, accumulated from the deltas and clamped. 32-bit, and the
+     * comparisons are signed: high word with jg/jl, low word with ja/jae. */
+    mouse_x += (int32_t) mouse_dx;         /* mov ax / cwd / add / adc */
+    mouse_y += (int32_t) mouse_dy;
+    if (mouse_x > (int32_t) w - 1)  mouse_x = w - 1;
+    if (mouse_x < 0)                mouse_x = 0;
+    if (mouse_y > (int32_t) h - 1)  mouse_y = h - 1;
+    if (mouse_y < 0)                mouse_y = 0;
 }
 
 /* ---------------------------------------------- 0x0b52f: show_resource_loop
@@ -434,18 +458,41 @@ record_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
 
 /* --------------------------------------------------------- 0x13519: set_mode_x
  *
- * BIOS 13h through int86, then unchain it in place. The mode number comes from
- * [0x4fe], which is what makes VIDEO SETTINGS > RESOLUTION work.
+ * The argument does NOT choose the BIOS mode - 0x13 is always what is asked for.
+ * It chooses whether to reprogram the CRTC afterwards for the wider mode, which
+ * is what VIDEO SETTINGS > RESOLUTION selects through video_mode.
+ *
+ * The wide path is a 360-pixel Mode X: 0x3c2 takes 0xe7, selecting the 28 MHz dot
+ * clock instead of 25 MHz, and CRTC 0x13 - the offset register - takes 0x2d = 45
+ * words, so a row is 90 bytes. That is where plot_pixel's sibling at 0x057a1 gets
+ * its stride of 90, and why the game swaps the far pointer at [0x53e] rather than
+ * testing a resolution inside the routine.
  */
-void far set_mode_x(int16_t mode)
+void far set_mode_x(int16_t wide)
 {
-    set_bios_mode(mode);                   /* 0x04d04 -> int86(0x10) */
-    outp(0x3c4, 4);  outp(0x3c5, 6);       /* sequencer memory mode: chain-4 off */
-    outp(0x3d4, 0x14);  outp(0x3d5, 0);    /* CRTC underline = 0 */
-    outp(0x3d4, 0x17);                     /* CRTC mode control */
-    /* TODO: the rest of the unchaining sequence past 0x13519's third port pair
-     * has not been read; the inventory in docs/notes/port-io.md lists which
-     * ports it touches but not the order or the values. */
+    set_bios_mode(0x13);                   /* always 0x13, whatever `wide` is */
+
+    outp(0x3c4, 4);   outp(0x3c5, 6);      /* sequencer memory mode: chain-4 off */
+    outp(0x3d4, 0x14); outp(0x3d5, 0);     /* underline location = 0 */
+    outp(0x3d4, 0x17); outp(0x3d5, 0xe3);  /* mode control: byte addressing */
+
+    if (!wide)
+        return;                            /* 320 wide: the standard Mode X */
+
+    outpw(0x3d4, 0x2c11);                  /* unprotect CRTC 0..7 */
+    outp(0x3c2, 0xe7);                     /* misc output: the 28 MHz clock */
+    outpw(0x3d4, 0x6b00);                  /* horizontal total */
+    outpw(0x3d4, 0x5901);                  /* end horizontal display */
+    outpw(0x3d4, 0x5a02);                  /* start blanking */
+    outpw(0x3d4, 0x8e03);                  /* end blanking */
+    outpw(0x3d4, 0x5e04);                  /* start retrace */
+    outpw(0x3d4, 0x8a05);                  /* end retrace */
+    outpw(0x3d4, 0x2d13);                  /* offset = 45 words = 90 bytes a row */
+    outpw(0x3d4, 0x8e11);  outpw(0x3d4, 0x2c11);
+    outpw(0x3d4, 0x0d06);  outpw(0x3d4, 0x3e07);
+    outpw(0x3d4, 0xea10);  outpw(0x3d4, 0xac11);
+    outpw(0x3d4, 0xdf12);
+    /* TODO 0x135c3-: a few more CRTC writes follow this one, not read. */
 }
 
 /* ------------------------------------------------- 0x13676: the game itself
@@ -598,16 +645,30 @@ void far scan_save_slots(void)
     }
 }
 
-/* ---------------------------------------------------- 0x140b1: save_settings */
+/* ---------------------------------------------------- 0x140b1: save_settings
+ *
+ * Every value goes out through Borland's putw, one word at a time, in four runs.
+ */
 void far save_settings(void)
 {
-    FILE *fp;
+    FILE   *fp;
+    int16_t i;
 
-    fp = fopen(settings_name, "wb");               /* ds:[0x21d2] -> settings.dat */
-    /* TODO: the write itself - how many words, and whether it is fwrite or a
-     * loop - has not been read. What is established is the source: the word array
-     * at [0x4f4], whose first word gates sound_play_guarded. */
-    fwrite(&settings[0], /* TODO */);
+    fp = fopen(settings_name, "wb");               /* the far pointer at 0x21d2 */
+    if (!fp)
+        return;
+
+    fputs("!", fp);                                /* DGROUP+0x2806, a marker */
+    putw(0, fp);
+
+    for (i = 0; i < 6; i++)  putw(settings[i], fp);        /* 0x04f4, six words */
+    for (i = 0; i < 3; i++)  putw((&button_map_a)[i], fp); /* 0x20e4, the mapping */
+    for (i = 0; i < 3; i++)  putw(((uint8_t *) &g_1fd3)[i], fp);
+                                                   /* 0x1fd3, 0x1fd4, 0x1fd5:
+                                                    * three bytes - the middle one
+                                                    * is game_speed and the last is
+                                                    * gamma - widened to words */
+    /* TODO 0x1415e-: more writes follow, not read. */
     fclose(fp);
 }
 
