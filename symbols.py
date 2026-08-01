@@ -48,7 +48,9 @@ FUNCTIONS = {
     0x02E07: "dos_setblock",            # native
     0x02F2D: "dos_getattr",             # native
     0x02F72: "dos_close",               # native
-    0x03791: "egg_getc",                # getc on the egg stream: count/ptr/seg
+    0x03791: "egg_read_byte",           # one byte off the egg stream, which it
+                                        # takes as count/ptr/seg. Paired with
+                                        # egg_read_word? at 0x04e88
     0x03AFE: "dos_open",                # native
     0x04B10: "dos_write",               # native
     0x04D04: "set_bios_mode",           # AH=0, AL=mode, then int86(0x10)
@@ -336,7 +338,7 @@ VARIABLES = {
     0x20BE: "readme_index",             # far pointer to 14-byte records
     0x20C2: "episode_count",            # sizes episode_index
     0x20C4: "readme_count",             # sizes readme_index
-    0x20C6: "egg_stream",               # far pointer egg_getc reads through
+    0x20C6: "egg_stream",               # far pointer egg_read_byte reads through
     0x2908: "sound_state?",             # cleared at the top of detect_hardware
     0x3C78: "voice_table",              # 12-byte slots
     0x3CD8: "voice_busy",

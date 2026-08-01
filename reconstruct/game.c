@@ -232,7 +232,7 @@ int16_t far resource_load_full(desc_t far *desc, int16_t set_size,
 
     w       = egg_read_word(egg_stream);           /* 0x04e88 */
     h       = egg_read_word(egg_stream);
-    colours = egg_getc(egg_stream);                /* 0x03791 */
+    colours = egg_read_byte(egg_stream);           /* 0x03791 */
 
     if (set_size) {
         desc->w = w;                               /* +0x0c */
@@ -247,7 +247,8 @@ int16_t far resource_load_full(desc_t far *desc, int16_t set_size,
     x0 = (desc->w - w) >> 1;
 
     for (i = 0; i < colours * 3; i++)              /* three bytes an entry */
-        ((uint8_t far *) current_buffer)[pal_at * 3 + i] = egg_getc(egg_stream);
+        ((uint8_t far *) current_buffer)[pal_at * 3 + i] =
+            egg_read_byte(egg_stream);
 
     f_0580b();                                     /* 0x0580b - unnamed */
 

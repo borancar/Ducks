@@ -180,7 +180,7 @@ located, by scanning for every instruction touching the flag — eleven sites, a
 the three writers name it.
 
 `[0x548]` is non-zero when the copy is registered. `[0x542]`/`[0x544]` is a far
-pointer to the owner's name, read out of the egg stream by `egg_getc` at
+pointer to the owner's name, read out of the egg stream by `egg_read_byte` at
 `0x13ef3` and freed through `0x00edb` when the flag is cleared. `init` prints the
 pair:
 
