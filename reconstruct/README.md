@@ -90,3 +90,7 @@ screens, `run_screen` (`0x0c716`) itself, and `high_score_screen`.
   gap can be closed by someone who did not write it.
 - **Anything unverified says so** in a comment rather than being smoothed over -
   a name we guessed, a structure field we inferred, a branch never seen to run.
+- **Fixed-width types from `<stdint.h>`**, because the width is the point: this is
+  16-bit code, and `int` would read as 32 on anything modern. `char` survives only
+  where the data really is text - a string, a `sprintf` target - so a `char *` in
+  here means characters and a `uint8_t *` means bytes.

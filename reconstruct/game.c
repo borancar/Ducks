@@ -17,26 +17,28 @@
  * episode-index.md for the index it reads. The root README for page_flip.
  */
 
+#include <stdint.h>
+
 /* ------------------------------------------------------------------ types */
 
 /* What run_screen (0x0c716) returns. Offsets are the ones the code indexes; the
  * record is longer than this and the rest has not been read. */
 typedef struct {
-    char          pad0[4];
+    uint8_t       pad0[4];
     menu_t far   *submenu;      /* +4/+6: where action 18 points the menu */
-    int           action;       /* +8:    the action code, 1..20 */
-    char          pad1;         /* +0xa */
-    unsigned char param;        /* +0xb:  episode ordinal, readme section, demo */
+    int16_t       action;       /* +8:    the action code, 1..20 */
+    uint8_t       pad1;         /* +0xa */
+    uint8_t       param;        /* +0xb:  episode ordinal, readme section, demo */
 } record_t;
 
 /* The episode index built at startup from MAIN.EGG; four 14-byte records. */
 typedef struct {
     char far *name;             /* +0:    decoded, "TRAINING LEVELS" plainly */
-    int       first;            /* +4:    first level */
-    int       egg;              /* +6:    which egg file the levels are in */
-    int       last;             /* +8:    last level */
-    int       ordinal;          /* +0xa */
-    int       terminator;       /* +0xc:  set only on the last record */
+    int16_t   first;            /* +4:    first level */
+    int16_t   egg;              /* +6:    which egg file the levels are in */
+    int16_t   last;             /* +8:    last level */
+    int16_t   ordinal;          /* +0xa */
+    int16_t   terminator;       /* +0xc:  set only on the last record */
 } episode_t;
 
 menu_t         main_menu;               /* ds:0x1916, what main passes in */
@@ -64,66 +66,66 @@ menu_t         menu_1c3b;               /* after a resolution change */
  */
 
 /* video and the flip */
-int        video_mode;           /* 0x04fe - what set_mode_x is given */
-int        game_speed;           /* 0x1fd4 - 0..0x1f, higher is faster */
-unsigned   page_front, page_back;/* 0x1725, 0x1727 - swapped per flip */
-int        flip_phase;           /* 0x0d61 - 0..9 */
-int        current_plane;        /* 0x177d - written by set_plane */
-int        fade_level;           /* 0x1798 - 0..15, scales the palette */
-char       fade_direction;       /* 0x179a - 0xff fades out */
-char       fade_start_colour;    /* 0x179b */
+int16_t    video_mode;           /* 0x04fe - what set_mode_x is given */
+int16_t    game_speed;           /* 0x1fd4 - 0..0x1f, higher is faster */
+uint16_t   page_front, page_back;/* 0x1725, 0x1727 - swapped per flip */
+int16_t    flip_phase;           /* 0x0d61 - 0..9 */
+int16_t    current_plane;        /* 0x177d - written by set_plane */
+int16_t    fade_level;           /* 0x1798 - 0..15, scales the palette */
+uint8_t    fade_direction;       /* 0x179a - 0xff fades out */
+uint8_t    fade_start_colour;    /* 0x179b */
 viewport_t viewport_1769;        /* ds:0x1769 - the global clip rect */
 void far  *default_buffer;       /* ds:0x13f1 - what set_buffer restores */
-int        g_53c;                /* 0x053c - show_splash's x origin */
+int16_t    g_53c;                /* 0x053c - show_splash's x origin */
 
 /* input */
-long       mouse_x, mouse_y;     /* 0x18d3, 0x18d7 - 32-bit, accumulated */
-int        mouse_dx, mouse_dy;   /* 0x18db, 0x18dd - one poll's motion */
-int        button_map_a;         /* 0x20e4 - which INT 33h button is which */
-int        button_map_b;         /* 0x20e6 */
-int        button_map_c;         /* 0x20e8 */
-int        button_a_down;        /* 0x18df */
-int        button_b_down;        /* 0x18e7 */
-int        g_18e5;               /* 0x18e5 - any button; escapes the fades */
-int        last_key;             /* 0x18f6 - the ASCII of the last key */
+int32_t    mouse_x, mouse_y;     /* 0x18d3, 0x18d7 - 32-bit, accumulated */
+int16_t    mouse_dx, mouse_dy;   /* 0x18db, 0x18dd - one poll's motion */
+int16_t    button_map_a;         /* 0x20e4 - which INT 33h button is which */
+int16_t    button_map_b;         /* 0x20e6 */
+int16_t    button_map_c;         /* 0x20e8 */
+int16_t    button_a_down;        /* 0x18df */
+int16_t    button_b_down;        /* 0x18e7 */
+int16_t    g_18e5;               /* 0x18e5 - any button; escapes the fades */
+int16_t    last_key;             /* 0x18f6 - the ASCII of the last key */
 
 /* the egg files and the indexes built from them */
 egg_file_t far *egg_files;       /* 0x20a9 - stride 0x17 */
-int             egg_file_count;  /* 0x20ad */
+int16_t         egg_file_count;  /* 0x20ad */
 episode_t  far *episode_index;   /* 0x20ba - four 14-byte records */
-int             episode_count;   /* 0x20c2 */
-int             draw_flag;       /* 0x054d - set to 4 around a loader pass */
+int16_t         episode_count;   /* 0x20c2 */
+int16_t         draw_flag;       /* 0x054d - set to 4 around a loader pass */
 
 /* progress and the shareware gate */
-int        level_attempted;      /* 0x2032 - the level about to be played */
-int        episode_egg_index;    /* 0x0094 - which egg the episode is in */
-int        shareware_limit;      /* 0x054a - per egg, not a constant */
-int        registered;           /* 0x0548 */
-int        lives;                /* 0x2034 - decremented on a lost run */
-int        max_save_value;       /* 0x2055 - scan_save_slots' only output */
+int16_t    level_attempted;      /* 0x2032 - the level about to be played */
+int16_t    episode_egg_index;    /* 0x0094 - which egg the episode is in */
+int16_t    shareware_limit;      /* 0x054a - per egg, not a constant */
+int16_t    registered;           /* 0x0548 */
+int16_t    lives;                /* 0x2034 - decremented on a lost run */
+int16_t    max_save_value;       /* 0x2055 - scan_save_slots' only output */
 
 /* the menu and the attract cycle */
-int        attract_choice;       /* 0x21ae - 0 demos, non-zero shows a screen */
-int        menu_idle_suppress;   /* 0x2177 - non-zero holds the menu still */
-int        g_2038;               /* 0x2038 - how many demos to choose from */
+int16_t    attract_choice;       /* 0x21ae - 0 demos, non-zero shows a screen */
+int16_t    menu_idle_suppress;   /* 0x2177 - non-zero holds the menu still */
+int16_t    g_2038;               /* 0x2038 - how many demos to choose from */
 
 /* strings and buffers */
 char       save_name[];          /* 0x21a5 - the template "GAME-.SG" */
 char far  *settings_name;        /* 0x21d2 - "settings.dat" */
-char       g_28ff[];             /* 0x28ff - main's first splash source */
+uint8_t    g_28ff[];             /* 0x28ff - main's first splash source */
 void far  *buf_200f, *buf_203b, *buf_203f, *buf_2043;  /* freed per demo */
 void far  *res;                  /* 0x1894:0 - the table the intro indexes
                                          * for its splashes and labels */
 
 /* startup and settings */
-int        sound_available;      /* 0x2104 - detect_hardware's result */
+int16_t    sound_available;      /* 0x2104 - detect_hardware's result */
 void far  *init_objects[3];      /* 0x210c - three 22-byte objects, stride 4 */
-int        settings[];           /* 0x04f4 - the word array save_settings
+int16_t    settings[];           /* 0x04f4 - the word array save_settings
                                          * writes; settings[0] gates sound */
 
 /* used but not identified */
-int  g_509, g_50b, g_18f5, g_1fd3, g_1ffa, g_1ffc, g_1ffe;
-int  g_201c, g_2036, g_21a3;
+int16_t  g_509, g_50b, g_18f5, g_1fd3, g_1ffa, g_1ffc, g_1ffe;
+int16_t  g_201c, g_2036, g_21a3;
 
 /* ------------------------------------------------------- 0x04d4b: page_flip
  *
@@ -158,12 +160,12 @@ void far close_egg_files(void)
  * is only ever asked for relative motion, so the position is a running total and
  * has to be bounded. Kept as 32-bit so a fast drag cannot wrap it.
  */
-void far input_poll(int w, int h)
+void far input_poll(int16_t w, int16_t h)
 {
     mouse_motion(&mouse_dx, &mouse_dy);    /* 0x0675b - the only two arguments */
 
-    mouse_x += (long) mouse_dx;
-    mouse_y += (long) mouse_dy;
+    mouse_x += (int32_t) mouse_dx;
+    mouse_y += (int32_t) mouse_dy;
     if (mouse_x > w - 1) mouse_x = w - 1;  /* and clamped at 0 below */
     if (mouse_y > h - 1) mouse_y = h - 1;
 
@@ -181,9 +183,9 @@ void far input_poll(int w, int h)
  * show_splash's sibling: the same fade in, hold, fade out, but from a global
  * viewport and counting down rather than up. Holds a four-plane loop; not native.
  */
-void far show_resource_loop(desc_t far *desc, int frames)
+void far show_resource_loop(desc_t far *desc, int16_t frames)
 {
-    int si = frames, plane;
+    int16_t si = frames, plane;
 
     fade_direction = 1;  fade_start_colour = 0;
     palette_build();                                   /* 0x0b0c5 */
@@ -204,8 +206,8 @@ void far show_resource_loop(desc_t far *desc, int frames)
 /* ------------------------------------------------ 0x0c156: egg_load_pass_0x48 */
 void far egg_load_pass_0x48(void)
 {
-    char scratch[0x302];
-    int  i, saved;
+    uint8_t scratch[0x302];
+    int16_t i, saved;
 
     set_buffer(&scratch[0]);               /* publish our own stack buffer */
     saved = draw_flag;  draw_flag = 4;
@@ -219,10 +221,11 @@ void far egg_load_pass_0x48(void)
 }
 
 /* --------------------------------------------------- 0x0c1ad: show_resource */
-void far show_resource(char type /* 0x4d */, char index, int frames, int x /* 0xff */)
+void far show_resource(uint8_t type /* 0x4d */, uint8_t index,
+                       int16_t frames, int16_t x /* 0xff */)
 {
-    char   scratch[0x316];
-    desc_t desc;
+    uint8_t scratch[0x316];
+    desc_t  desc;
 
     set_buffer(&scratch[0]);
     clear_vram();
@@ -241,8 +244,8 @@ void far show_resource(char type /* 0x4d */, char index, int frames, int x /* 0x
  */
 void far cutscene_welcome_home(void)
 {
-    desc_t desc;
-    int    page, plane;
+    desc_t  desc;
+    int16_t page, plane;
 
     if (!resource_load(&desc, 0x4d, 0x36, 0, 0, 0xff, 1))   /* the banner */
         return;
@@ -264,8 +267,8 @@ void far cutscene_welcome_home(void)
 /* ----------------------------------------------- 0x0f913: cutscene_photos */
 void far cutscene_photos(void)
 {
-    desc_t desc;
-    int    id, page, plane, i;
+    desc_t  desc;
+    int16_t id, page, plane, i;
 
     for (id = 0x3a; id <= 0x3c; id++) {    /* three polaroids, one per screen */
         if (!resource_load(&desc, 0x4d, id, 0, 0, 0xff, 1))
@@ -298,10 +301,10 @@ void far cutscene_photos(void)
  * Holds a four-plane loop of its own. main's first call draws nothing, and that
  * is correct - the source is an allocated but empty 320x24 bitmap.
  */
-void far show_splash(void far *image, int frames)
+void far show_splash(void far *image, int16_t frames)
 {
     viewport_t a, b;
-    int        si = 0, di = frames, plane;
+    int16_t    si = 0, di = frames, plane;
 
     make_rect(&a, 80, 104, g_53c, g_53c + 320);
     make_rect(&b, 320, 24);
@@ -331,9 +334,9 @@ void far show_splash(void far *image, int frames)
  * returns that record's terminator flag. So it answers "was that the FINAL
  * episode", which is what gates the homecoming.
  */
-int far episode_end_gate(int level, int egg)
+int16_t far episode_end_gate(int16_t level, int16_t egg)
 {
-    int i, flag = 0;
+    int16_t i, flag = 0;
 
     for (i = 0; i < episode_count; i++) {
         if (episode_index[i].last != level)  continue;
@@ -353,11 +356,11 @@ int far episode_end_gate(int level, int egg)
  * the idle timeout, and a request to play a demo. Everything else it hands back
  * to game_main. The two branches below are the same code twice in the original.
  */
-record_t far *menu_screen_driver(menu_t far *menu, void far *a, int b)
+record_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
 {
     record_t far *r;
-    int           leave;                           /* di */
-    int           saved;                           /* si, across the demo call */
+    int16_t       leave;                           /* di */
+    int16_t       saved;                           /* si, across the demo call */
 
     do {                                           /* 0x12723 */
         r = run_screen(menu, a, b);                /* 0x12733 -> 0x0c716 */
@@ -408,7 +411,7 @@ record_t far *menu_screen_driver(menu_t far *menu, void far *a, int b)
  * BIOS 13h through int86, then unchain it in place. The mode number comes from
  * [0x4fe], which is what makes VIDEO SETTINGS > RESOLUTION work.
  */
-void far set_mode_x(int mode)
+void far set_mode_x(int16_t mode)
 {
     set_bios_mode(mode);                   /* 0x04d04 -> int86(0x10) */
     outp(0x3c4, 4);  outp(0x3c5, 6);       /* sequencer memory mode: chain-4 off */
@@ -427,10 +430,10 @@ void far set_mode_x(int mode)
  */
 void far game_main(menu_t far *menu)               /* main passes &main_menu */
 {
-    char          buf[0x326];
-    int           running = 1;                     /* si, set at 0x1367e */
-    int           i;
+    char          buf[0x326];      /* sprintf's target, so char and not uint8_t */
     record_t far *r;
+    int16_t       running = 1;                     /* si, set at 0x1367e */
+    int16_t       i;
 
     do {
         r = menu_screen_driver(menu, &buf[0], 1);  /* 0x1368f, five words */
@@ -552,8 +555,8 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
  */
 void far scan_save_slots(void)
 {
-    FILE *fp;
-    int   i, v;
+    FILE   *fp;
+    int16_t i, v;
 
     for (i = 1; i < 6; i++) {
         save_name[4] = '0' + i;                    /* [0x21a9] */
@@ -589,7 +592,7 @@ void far save_settings(void)
  */
 void far init(void)
 {
-    int i;
+    int16_t i;
 
     puts("DUCKS v1.21");                           /* DGROUP+0x2808 */
     for (i = 0; i < 3; i++) {                      /* three 22-byte objects */
