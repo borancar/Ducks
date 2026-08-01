@@ -249,6 +249,22 @@ void far show_resource_loop(desc_t far *desc, int16_t frames)
     } while (fade_level != 0);                         /* [0x1798] */
 }
 
+/* 0x0bb3b. A number as sprites: glyph 0x71 + digit from the same table the
+ * entities use, 12 pixels apart, least significant digit first. Fixed width with
+ * no leading-zero suppression, so a score of nothing is six noughts.
+ */
+void far draw_number(int16_t value, int16_t x, int16_t y, viewport_t far *clip,
+                     int16_t flags, int16_t digits)
+{
+    int16_t i, glyph;
+
+    for (i = digits - 1; i >= 0; i--) {    /* `dec ax` then count down */
+        glyph = 0x71 + (value % 10);       /* idiv by 10, remainder + 0x71 */
+        draw_sprite(sprite_table, glyph, *clip, x + i * 12, y, flags);
+        value /= 10;
+    }
+}
+
 /* ------------------------------------------------ 0x0c156: egg_load_pass_0x48 */
 void far egg_load_pass_0x48(void)
 {
@@ -280,6 +296,27 @@ void far show_resource(uint8_t type /* 0x4d */, uint8_t index,
         resource_release(&desc);
     }
     set_buffer(default_buffer);
+}
+
+/* 0x0d757. The HUD's number drawer. Same digit layout as draw_number - glyph
+ * 0x71 plus the digit, 12 pixels apart, least significant first, no leading-zero
+ * suppression - but with the clip, sprite table and colour fixed, and glyph 0x70
+ * drawn behind each digit first. That backdrop is the visible difference between
+ * the HUD's numbers and the in-game frame's.
+ *
+ * Never observed to run: it is the one hooked address whose correctness rests
+ * only on the disassembly.
+ */
+void far draw_number2(int16_t value, int16_t digits, int16_t x, int16_t y)
+{
+    int16_t i;
+
+    for (i = digits - 1; i >= 0; i--) {
+        draw_sprite(sprite_table, 0x70, hud_clip, x + i * 12, y, 0);  /* the tile */
+        draw_sprite(sprite_table, 0x71 + (value % 10),
+                    hud_clip, x + i * 12, y, 0);                      /* over it */
+        value /= 10;
+    }
 }
 
 /* ------------------------------------------- 0x0f825: cutscene_welcome_home
