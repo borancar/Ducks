@@ -1,8 +1,9 @@
 # The homecoming sequence: the game's ending, behind level 80
 
-**Read out 2026-07-31.** [entry-points](entry-points.md) records five unnamed
-calls clustered at `0x1392f` in `main_menu` and notes only that all five contain a
-four-plane loop. They are a cutscene, and this is what they draw.
+**Read out 2026-07-31, extended 2026-08-01.** [entry-points](entry-points.md)
+records five unnamed calls clustered at `0x1392f` in `game_main` and notes only
+that all five contain a four-plane loop. They are a cutscene - six of them, as it
+turned out - and this is what they draw.
 
 | call site | function | resource ids | what is on it |
 | --- | --- | --- | --- |
@@ -11,13 +12,14 @@ four-plane loop. They are a cutscene, and this is what they draw.
 | `0x1394a` | `cutscene_doorstep` `0x0f9fd` | `0x37`, `0x38` | a lit doorway: a duck in silhouette, then the same door with the duck revealed |
 | `0x1394e` | `cutscene_welcome_home` `0x0f825` | `0x36` | the flock under a **"Welcome Home!"** banner |
 | `0x13957` | `cutscene_photos` `0x0f913` | `0x3a`, `0x3b`, `0x3c` | three polaroids, one more on each screen, each arriving on a DAC-white flash and a sound |
+| `0x1396e` | `cutscene_night_monster` `0x100f4` | — | **an animation**: at night, a monster runs towards the house. Added 2026-08-01; see below |
 
-`release_sounds` (`0x146cd`) runs between the fourth and the fifth, and
-`0x147c5` twice earlier in the block. In call order the screens read as a
-homecoming: fly back, land, arrive at the door, the welcome, then photographs of
-it.
+`release_sounds` (`0x146cd`) runs between the fourth and the fifth and again
+after the sixth, and `0x147c5` twice earlier in the block. In call order the
+screens read as a homecoming: fly back, land, arrive at the door, the welcome,
+photographs of it - and then, at night, something coming for the house.
 
-All five are the same shape — `clear_vram`, load one resource by id,
+The first five are the same shape — `clear_vram`, load one resource by id,
 `set_plane` + `blit_rows` four times into each of the two video pages,
 `page_flip`, hold, release. That is why every one of them turned up in the
 `set_plane` census, and it is five more plane loops for
@@ -47,7 +49,8 @@ The block is guarded by two tests:
 
 `0x11c75` walks the episode index at `[0x20ba]` in its 14-byte records, looking
 for one whose **last level** (`+0x08`) is `[0x2032]`, the level just attempted,
-and whose `+0x06` — the always-zero high word of `first` — equals `[0x94]`. On a
+and whose `+0x06` — the **egg file index**, which `game_main` copies into
+`[0x94]` and uses to index `egg_files` — equals `[0x94]`. On a
 match it plays a sound and shows that episode's own splash. Then:
 
 ```
@@ -88,7 +91,7 @@ content a shareware copy cannot reach, like the quit-path adverts in
 [entry-points](entry-points.md).
 
 **Getting to level 80 without playing 79 levels.** `[0x2032]` is the level about
-to be attempted, and `main_menu` writes it from the chosen episode record's
+to be attempted, and `game_main` writes it from the chosen episode record's
 *first* level at `0x137a7`, so a poke only sticks once you are inside the inner
 loop - on the screen offering the next level, not on the episode select. From
 there `write d+0x2032 50 00` over the control socket is enough, and
@@ -116,17 +119,34 @@ The run in full, captured as it went:
 | `ending-landing` | `cutscene_rocket_landing`, running |
 | `ending-highscore` | **NEW HIGH SCORE! ENTER YOUR NAME**, after the photographs |
 
-That last one puts a screen against `0x1396e call 0x100f4`, the call immediately
-after `cutscene_photos` and the only thing between it and the fade to black. That
-is position, not proof - the trap this project keeps falling into - so `0x100f4`
-stays unnamed until a breakpoint on it fires with that screen up.
+**`0x100f4` is a sixth screen, and it is not the high score.** Position said it
+was: it is the call immediately after `cutscene_photos`, and the high-score
+screen is what came next. Two breakpoints say otherwise.
+
+- The stack under `ending-highscore` runs
+  `game_main (ret 0x139a5) <- 0x11d54 <- 0x12dfb <- menu_screen_driver`, and
+  `0x139a5` is the return from `0x139a2 call 0x11d54`, not from `0x1396e`.
+- Breaking on `0x100f4` itself, the far return on its own stack frame reads
+  `05da:ecd1` = image **`0x13971`**, so it really is the call at `0x1396e` - and
+  what it draws is **an animation: at night, a monster running towards the
+  house**, watched on the way past. It is the only animated screen in the
+  sequence; the other five hold a still.
+
+So the ending is six screens, and `0x11d54` at `0x139a2` is the high-score name
+entry that follows them. That one stays tentative: `game_main` calls it at four
+sites, one of them before a level even starts, so it most likely tests whether
+the score qualifies and returns early - what it does at the other three has not
+been watched.
+
+This is the third time in this note position has been wrong and a breakpoint has
+been right.
 
 `EPISODE COMPLETED!` is `episode_end_gate`'s own splash - the same slot that
 showed "That's enough training" for `TRAINING LEVELS`, this time from the record
 whose flag is set. So the whole chain is now observed rather than read: last
 level -> bonus -> the episode's splash -> flag 1 -> the block.
 
-**The driven screens are not the whole picture.** `snap023` has **two ducks
+**The driven screens are not the whole picture.** `ending-landing` has **two ducks
 standing on the grass**, waving, beside the rockets; `show_cutscene.py` draws the
 same screen with rockets alone. The 12 `draw_sprite` calls place characters from
 state the real sequence sets up before calling, and a synthetic `push cs; call
@@ -141,7 +161,7 @@ explanation than a missing input, and a real capture of it running would settle
 it.
 
 **The `0x0fc8b` loose end.** A breakpoint on its loop back-edge, against
-`snap023` rather than a driven call, is the thing to try.
+`ending-landing` rather than a driven call, is the thing to try.
 
 ## Seeing them: [`show_cutscene.py`](../../show_cutscene.py)
 
@@ -169,7 +189,7 @@ address inside the in-game frame function fired on the next frame, and only then
 did "none of the five fired" mean anything.
 
 **Four of the five appeared to draw the same picture.** They did not: past the
-return address the guest carried on through the rest of `main_menu`'s sequence
+return address the guest carried on through the rest of `game_main`'s sequence
 and drew `0x0fc8b`'s screen underneath the one being watched. Trapping the return
 separated them. The give-away was in the instrument already — every run logged
 loads of `0x33`/`0x34` at the end, whichever screen it had been asked for.
@@ -188,7 +208,7 @@ its `0x37`/`0x38` come from the disassembly rather than from a run.
 
 ## Also settled on the way
 
-`0x1271b`, `main_menu`'s first call, is on the stack above **both** the menu
+`0x1271b`, `game_main`'s first call, is on the stack above **both** the menu
 compositor (returning to `0x12736`) and the in-game frame (returning to
 `0x12766`), so one routine drives the menu and the demo level. Recorded as
 `menu_screen_driver?`, tentative — the two observations are real, the name is a

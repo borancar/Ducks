@@ -90,11 +90,11 @@ FUNCTIONS = {
     0x0C1AD: "show_resource",           # (type 0x4d, index, frames, 0xff):
                                         # load, display through 0x0b52f, release
     0x0D757: "draw_number2",            # native
-    # The homecoming sequence, in the order main_menu calls them at 0x1392f
+    # The homecoming sequence, in the order game_main calls them at 0x1392f
     # onwards. Each takes no arguments, loads its own resource by id and shows it
     # through its own four-plane loop. Named for what they draw, which was
-    # watched; what triggers the sequence is not established - see
-    # docs/notes/homecoming-sequence.md
+    # watched. They run only after the LAST episode - finishing level 80 - which
+    # episode_end_gate below decides. See docs/notes/homecoming-sequence.md
     0x0F5B1: "cutscene_rocket_space",    # id 0x32: the rocket crossing a
                                          # starfield, then leaving the frame
     0x0F825: "cutscene_welcome_home",    # id 0x36: the flock under a
@@ -106,16 +106,29 @@ FUNCTIONS = {
     0x0FC8B: "cutscene_rocket_landing",  # ids 0x33/0x34: down on the grass at
                                          # dusk; 12 draw_sprite calls. The only
                                          # one that never reached its own return
+                                         # under a driven call
     0x102D7: "show_splash",             # (image far *, frames): fade an image
                                         # in, hold for `frames` or until a key,
                                         # fade out. Holds a fifth plane loop.
+    0x100F4: "cutscene_night_monster",  # the sixth ending screen, and the only
+                                        # animated one: at night, a monster runs
+                                        # towards the house. Called at 0x1396e,
+                                        # confirmed from the return address on
+                                        # its own stack frame, not the listing
     0x11547: "print_newline?",          # no args, bracketing the banners
+    0x11D54: "high_score_entry?",       # draws NEW HIGH SCORE! ENTER YOUR NAME -
+                                        # seen on the stack under that screen and
+                                        # again from a breakpoint. Tentative
+                                        # because game_main calls it at four
+                                        # sites, one of them before a level, so
+                                        # it probably tests whether the score
+                                        # qualifies and returns early
     0x11C75: "episode_end_gate",        # (level, 0): find the episode whose last
                                         # level is this, show its splash, and
                                         # return that record's terminator flag -
                                         # so it says "the FINAL episode ended",
                                         # which is what gates the homecoming
-    0x1271B: "menu_screen_driver?",     # main_menu's first call; observed on the
+    0x1271B: "menu_screen_driver?",     # game_main's first call; observed on the
                                         # stack above both the menu compositor
                                         # (ret 0x12736) and the in-game frame
                                         # (ret 0x12766), so it drives both
@@ -125,10 +138,17 @@ FUNCTIONS = {
     0x11657: "build_episode_index",     # builds both indexes; prints the banner
     0x13F2:  "farmalloc?",              # sizes both index arrays
     0x13519: "set_mode_x",              # BIOS 13h, then unchains to Mode X
-    0x13676: "main_menu",               # PLAY/OPTIONS/READ ME/QUIT; drawn via
-                                        # the layer compositor. Does not return
-                                        # while the menu is up, so the game is
-                                        # reached from inside it
+    0x13676: "game_main",               # the whole game, not just its menu: an
+                                        # outer loop around the menu screens and
+                                        # an inner one that unpacks an episode
+                                        # record, checks the shareware limit,
+                                        # calls the in-game frame, shows the
+                                        # bonus screen, and runs the ending. The
+                                        # only call main makes that does not
+                                        # return while play is going on. First
+                                        # named game_main, which described the
+                                        # screen it opens with rather than the
+                                        # function
     0x13FEA: "scan_save_slots",         # GAME1.SG..GAME5.SG; no args, no return;
                                         # its only output is [0x2055]
     0x140B1: "save_settings",           # fopen("settings.dat","wb") and
@@ -139,9 +159,9 @@ FUNCTIONS = {
     0x146CD: "release_sounds?",         # stop_sound_by_id(0..4) if sound_state,
                                         # then pops a stack at [0x290b]/[0x298b]
                                         # through 0x15138. Called four times
-                                        # inside main_menu, not only at exit.
+                                        # inside game_main, not only at exit.
                                         # Was guessed as game_main from position
-                                        # alone; the game is inside main_menu
+                                        # alone; the game is inside game_main
     0x14750: "sound_play?",             # gated on sound_state; ids below 0x96;
                                         # calls 0x14628(id, 0x20, 0xff)
     0x148A2: "detect_soundblaster",     # the sound check; probes the DSP
@@ -202,8 +222,23 @@ VARIABLES = {
                                         # "Registered to: <name>" or UNREGISTERED
     0x054A: "shareware_limit",          # reads 20; the intro screen says "20
                                         # levels classed as shareware"
-    0x2032: "level_attempted?",         # compared against shareware_limit at
-                                        # 0x13841; 0 before a level is loaded
+    0x0094: "episode_egg_index",        # the episode record's +6, and game_main
+                                        # indexes egg_files by it (stride 0x17).
+                                        # 0 in this build - one egg - which is
+                                        # why it reads like a zero high word
+    0x2032: "level_attempted",          # the level about to be played. Set from
+                                        # the episode's first level at 0x137a7,
+                                        # inc'd at 0x139ab after each one, and
+                                        # read by episode_end_gate as the level
+                                        # just finished. Poking 80 into it plays
+                                        # level 80, which is how the ending was
+                                        # reached
+    0x2022: "background_warp",          # non-zero runs compose_scroll's warp.
+                                        # First ever seen set on level 80
+    0x179F: "warp_table",               # 32 x displacement entries, indexed by a
+                                        # phase re-masked to 0x1f every row
+    0x17BF: "warp_phase",               # where row 0 starts in the table
+    0x17C0: "warp_step",                # added per row, before the re-mask
     0x0DDF: "blink_countdown",          # randomised frames until the next flip
     0x10E1: "palette_stored",           # 768 bytes: the level's palette
     0x14B1: "palette_source",           # 48 bytes: the ramp washed_ramp reads

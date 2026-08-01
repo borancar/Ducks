@@ -108,7 +108,10 @@ at `33a4:0004`. Read live and cross-checked against the names they point to:
 
 ```
 +0x00  dword  far pointer to the name, decoded - "TRAINING LEVELS" plainly
-+0x04  word   first level  (0x06 is always zero, so this may be a long)
++0x04  word   first level
++0x06  word   egg file index - game_main copies it to [0x94] and indexes
+               egg_files by it (stride 0x17), so it is not the high word of a
+               long. Zero throughout this build, which has one egg
 +0x08  word   last level
 +0x0a  word   episode ordinal
 +0x0c  word   flag, set only on the last episode

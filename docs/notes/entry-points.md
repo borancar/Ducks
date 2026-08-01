@@ -143,7 +143,7 @@ that both rules are right is `install_int23` landing on its already-known
 0x1459b  call  show_splash           (es:[bx+0xf8], 100)   (5) "UNREGISTERED"
 0x145a6  call  sound_play_guarded    (0x0b, 1)     |
 --- the menu, and everything reached from it ---------------------------
-0x145b1  call  main_menu             (ds:0x1916) <-+  does NOT return
+0x145b1  call  game_main             (ds:0x1916) <-+  does NOT return
 --- on the way out -----------------------------------------------------
 0x145b7  cmp [registered], 0 / jne 0x145fa  -------+  registered skips (6)-(8)
 0x145c9  call  show_resource         (0x4d, 0x64, 250, 0xff)   (6) gameplay collage
@@ -180,7 +180,7 @@ the four planes offline.
 | (3) | `show_splash(es:[bx+0x9c], 100)` | `PRESENTS` |
 | (4) | `show_resource(0x4d, 8, 100)` | the title: Tim Furnish's DUCKS Version 1.2 |
 | (5) | `show_splash(es:[bx+0xf8], 100)` | `UNREGISTERED` — unregistered copies only |
-| — | `main_menu` | the menu, and it does not return |
+| — | `game_main` | the menu, and it does not return |
 
 Two things this settled that reading could not.
 
@@ -225,7 +225,7 @@ whatever called it.
 
 ### The quit path, walked the same way
 
-Everything below `main_menu` runs only after the menu is quit, so none of it had
+Everything below `game_main` runs only after the menu is quit, so none of it had
 been seen before. Same method: `0x0b142`, `snap`, render.
 
 | | call | what is on it |
@@ -273,7 +273,7 @@ PLAY DUCKS / OPTIONS / READ ME! / QUIT DUCKS through the layer compositor and
 **does not return while the menu is up** - repeated stack walks keep showing
 main's frame returning to `0x145b4`, with the frames below it moving between
 `0x0c716` and `0x0d7ee` as the menu is used. So the game is reached from inside
-`main_menu`, and everything after `0x145b1` runs only once it has been quit.
+`game_main`, and everything after `0x145b1` runs only once it has been quit.
 
 Which reverses the reading of the tail: screens (6) to (9) are shown **on the way
 out**, not as part of the intro, and nobody has seen them. `0x146cd` is now
@@ -490,7 +490,7 @@ route from a played or replayed session to an image.
   interesting one: it is what should have filled the buffer.
 - `[0x18e5]`, tested next to `last_key` as a second escape condition.
 
-## main_menu, mapped
+## game_main, mapped
 
 **Read out 2026-07-29**, resolved at `CS=0x05da` like main, since it is reached
 by `push cs; call near`. `0x13676`-`0x13a97`, about 1058 bytes. It takes **one**
