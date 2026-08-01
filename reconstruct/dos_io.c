@@ -20,6 +20,71 @@
 
 #include <stdint.h>
 
+/* --------------------------------------------------------- what game.c owns
+ *
+ * Every one of these is defined in game.c - the write-scan that decided that
+ * question is described there - so here they are declarations, which is what
+ * `extern` is actually for. The offsets are DGROUP, and the names match
+ * symbols.py, so `read d+0x1798` over the control socket prints `fade_level`
+ * and so does this.
+ */
+
+/* the geometry set_mode_x selects, which everything else reads */
+extern int16_t    video_mode;        /* 0x04fe - non-zero is the 360-wide mode */
+extern int16_t    screen_width;      /* 0x0538 - 360 or 320 */
+extern int16_t    screen_height;     /* 0x053a - 240 or 200 */
+extern int16_t    screen_x0;         /* 0x053c - centring offset, 20 or 0 */
+extern void far (*plot)();           /* 0x053e - plot_pixel or its stride-90 twin */
+
+/* the frame */
+extern uint8_t    game_speed;        /* 0x1fd4 - delay(0x1f - this) per flip */
+extern uint16_t   page_front;        /* 0x1725 - swapped by page_flip */
+extern uint16_t   page_back;         /* 0x1727 - what everything draws into */
+extern int16_t    flip_phase;        /* 0x0d61 - 0..9 */
+extern uint8_t    current_plane;     /* 0x177d - set_plane's argument, and the
+                                      * filter every drawing routine applies */
+extern void far  *vram;              /* 0x16f1 - the Mode X aperture */
+
+/* the palette and the fade */
+extern int16_t    fade_level;        /* 0x1798 - 0..15 */
+extern int8_t     fade_direction;    /* 0x179a - +1 in, -1 out, 0 idle */
+extern int16_t    fade_start_colour; /* 0x179b */
+extern uint8_t    palette_stored[];  /* 0x10e1 - 768 bytes, the level's colours */
+extern uint8_t    palette_washed[];  /* 0x0dad - 48 bytes, v*0.75+64 */
+extern int16_t    blink_enable;      /* 0x2157 - nothing in this build sets it */
+extern int16_t    blink_countdown;   /* 0x0ddf */
+extern int16_t    blink_toggle;      /* 0x0ddd */
+
+/* the compositors' inputs, all globals - compose_layer takes no arguments */
+extern uint8_t far **fg_rows;        /* 0x16f5 - one far pointer per row */
+extern uint8_t far **bg_rows;        /* 0x170b */
+extern int16_t    layer_width;       /* 0x0538 via the same geometry */
+extern int16_t    layer_height;      /* 0x053a */
+extern int16_t    dest_row;          /* 0x1727 - the destination row offset */
+extern int16_t    wrap_x, wrap_y;    /* 0x1729, 0x172b - background wrap masks */
+extern int16_t    background_warp;   /* 0x2022 - first seen set on level 80 */
+extern uint8_t    warp_table[32];    /* 0x179f */
+extern uint8_t    warp_phase;        /* 0x17bf */
+extern uint8_t    warp_step;         /* 0x17c0 */
+
+/* the viewports set_mode_x builds */
+extern viewport_t viewport_panel;    /* 0x1741 - the bottom 40 rows */
+extern viewport_t viewport_screen;   /* 0x1769 - the centred 320x200 window */
+extern viewport_t viewport_full;     /* 0x1755 - everything */
+
+/* elsewhere in the image, and not ours */
+extern void far   delay(int16_t ms);         /* 0x0223e, Borland's */
+extern int16_t far int86(int16_t n, union REGS far *in, union REGS far *out);
+                                             /* 0x0293a - builds the INT on its
+                                              * own stack, which is why no INT 33h
+                                              * instruction exists in the image */
+extern void far   set_bios_mode(int16_t m);  /* 0x04d04 */
+extern void far   make_rect(viewport_t far *r, int16_t top, int16_t bottom,
+                            int16_t left, int16_t right);   /* 0x0881d */
+extern void far   palette_build(void);       /* 0x0b0c5 */
+extern void far   f_057db(void);             /* 0x057db - unnamed; the tail every
+                                              * dac_set_black caller reaches */
+
 /* ------------------------------------------------------------- video: mode */
 
 /* 0x13519. The argument does NOT choose the BIOS mode - 0x13 is always what is
