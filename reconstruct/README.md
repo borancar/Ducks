@@ -1,12 +1,17 @@
 # Reconstructed source
 
 C reconstructed from the disassembly, one file per unit of the original we can
-argue for. **Nothing here is compiled or run** - it is the map in a form that
-reads, and every line of it should be checkable against an image offset. Where a
+argue for. Every line should be checkable against an image offset, and where a
 name or a type is a guess, it says so.
 
 The originals are not available. This is what the code must have looked like for
 the compiler to have emitted what it did.
+
+**Written as C99, not as period C.** The aim is a port that can eventually be
+built and run, so a construct is written the clearest modern way that matches the
+instructions - compound literals, declarations at point of use, `<stdint.h>`. It
+is not an attempt to feed Turbo C++ 3.0 something byte-identical, and a line that
+reads oddly for 1998 is fine as long as it says what the code does.
 
 ## How much of the file split can be recovered
 
@@ -98,6 +103,14 @@ screens, `run_screen` (`0x0c716`) itself, and `high_score_screen`.
   `mov byte [x], 0xff` is identical for a signed -1 and an unsigned 255; `cbw`
   after a load is what makes it signed, `mov ah, 0` what makes it unsigned, and the
   store width what gives the size. Put the evidence in the comment.
+- **Never write a call that is not in the binary.** Some constructs compile to a
+  runtime helper or to inline code, and naming a familiar library function instead
+  is fiction: it puts a symbol in the reconstruction that the original does not
+  call. Write the *source construct* that produced the instructions, and describe
+  the helper in a comment. `input_poll` had `memcpy(&p, &pressed_count, 6)` in it
+  for exactly one commit; what the code does is call the block-copy helper at
+  `0x00ff4` with the length in `CX`, which is what a **struct assignment**
+  compiles to - `memcpy` would pass the length as an argument.
 
 ## The type pass, done 2026-08-01
 
