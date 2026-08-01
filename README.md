@@ -444,9 +444,12 @@ for x in [bp-2]..[bp-4]: (*[0x53e])(x, y, 0)      # 0x5761, five pixels
 far pointer to the entity array at `+8` — and the loop draws them back to front in
 the order 1, 0, 2, 3, 5, then 4. Record 4 (`0xd93`) is drawn only when the
 function's argument is zero, and it is the only one the menu loop draws. A seventh
-scene sits at `0x178c` behind a flag, with a different viewport. Viewports are
-20-byte records at `0x172d`, `0x1741` and `0x1755`, passed to the blitter as its
-clip rectangle.
+scene sits at `0x178c` behind a flag, with a different viewport. Viewports are 20-byte records passed to the blitter as its clip
+rectangle, and `set_mode_x` builds three of them from the resolution it selects:
+`viewport_panel` (`0x1741`) is the bottom 40 rows, `viewport_screen` (`0x1769`)
+the centred 320x200 window - rows 20 to 220 at 360x240, the whole screen at
+320x200 - and `viewport_full` (`0x1755`) everything. `viewport_game` (`0x172d`),
+the one the in-game scenes clip to, is built somewhere else and is still unread.
 
 **Numbers are sprites.** `draw_number` (`0x0bb3b`) draws glyph `0x71 + digit` from
 the same sprite table the entities use, 12 pixels apart, least significant digit

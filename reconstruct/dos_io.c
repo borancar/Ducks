@@ -92,13 +92,13 @@ void far set_mode_x(int16_t wide)
      * the bottom and 20 columns of margin either side. At 320x200 the same
      * arithmetic degenerates - the middle band becomes the whole screen and the
      * panel overlaps it. */
-    make_rect(&viewport_1741, screen_height - 40, screen_height,
+    make_rect(&viewport_panel, screen_height - 40, screen_height,
               screen_x0, screen_x0 + 320);          /* the bottom panel */
-    make_rect(&viewport_1769, screen_height / 2 - 100, screen_height / 2 + 100,
+    make_rect(&viewport_screen, screen_height / 2 - 100, screen_height / 2 + 100,
               screen_x0, screen_x0 + 320);          /* the centred 320x200 play
                                                      * area: rows 20..220 wide,
                                                      * 0..200 narrow */
-    make_rect(&viewport_1755, 0, screen_height, 0, screen_width);   /* all of it */
+    make_rect(&viewport_full, 0, screen_height, 0, screen_width);   /* all of it */
 }
 
 /* ------------------------------------------------------------ video: planes */

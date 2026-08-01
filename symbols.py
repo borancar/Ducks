@@ -271,6 +271,19 @@ VARIABLES = {
     0x1725: "page_front",               # the visible page; page_flip swaps these
     0x1727: "page_back",
     0x177D: "current_plane",            # written by set_plane
+    # The four 20-byte viewport records, three of them built by set_mode_x from
+    # the geometry it selects: (top, bottom, left, right). Named for the region
+    # each covers at 360x240, where they differ - at 320x200 the middle band and
+    # the full screen coincide.
+    0x172D: "viewport_game?",           # the in-game scenes' clip; not built by
+                                        # set_mode_x, so where it comes from is
+                                        # still unread
+    0x1741: "viewport_panel",           # the bottom 40 rows: the status strip,
+                                        # and the seventh scene draws into it
+    0x1755: "viewport_full",            # 0,0 to width,height - everything
+    0x1769: "viewport_screen",          # the centred 320x200 window: rows 20-220
+                                        # at 360x240, the whole screen at 320x200.
+                                        # What the splashes and cutscenes clip to
     0x1798: "fade_level",               # 0..15, scales the palette
     0x179A: "fade_direction",           # signed byte, +1 or -1: fade_level is
                                         # stepped by it through `mov al / cbw /
