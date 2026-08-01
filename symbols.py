@@ -272,7 +272,9 @@ VARIABLES = {
     0x1727: "page_back",
     0x177D: "current_plane",            # written by set_plane
     0x1798: "fade_level",               # 0..15, scales the palette
-    0x179A: "fade_direction",           # 0xff seen when a fade is armed
+    0x179A: "fade_direction",           # signed byte, +1 or -1: fade_level is
+                                        # stepped by it through `mov al / cbw /
+                                        # add`, so 0xff is -1 and not 255
     0x179B: "fade_start_colour",        # where the fade upload begins
     0x18D3: "mouse_x",                  # 32-bit, accumulated from deltas
     0x18D7: "mouse_y",                  # 32-bit

@@ -72,8 +72,12 @@ uint16_t   page_front, page_back;/* 0x1725, 0x1727 - swapped per flip */
 int16_t    flip_phase;           /* 0x0d61 - 0..9 */
 int16_t    current_plane;        /* 0x177d - written by set_plane */
 int16_t    fade_level;           /* 0x1798 - 0..15, scales the palette */
-uint8_t    fade_direction;       /* 0x179a - 0xff fades out */
-uint8_t    fade_start_colour;    /* 0x179b */
+int8_t     fade_direction;       /* 0x179a - +1 or -1; palette_fade_step reads it
+                                  * with `mov al / cbw / add [fade_level], ax`, and
+                                  * that cbw is what makes it signed rather than
+                                  * 0xff being a large positive byte */
+int16_t    fade_start_colour;    /* 0x179b - a word: every store to it is
+                                  * `mov word [0x179b], imm`, not a byte store */
 viewport_t viewport_1769;        /* ds:0x1769 - the global clip rect */
 void far  *default_buffer;       /* ds:0x13f1 - what set_buffer restores */
 int16_t    g_53c;                /* 0x053c - show_splash's x origin */
@@ -192,7 +196,7 @@ void far show_resource_loop(desc_t far *desc, int16_t frames)
     do {
         input_poll(320, 200);
         if (si == 0 || last_key || g_18e5)
-            fade_direction = 0xff;                     /* = -1, fade out */
+            fade_direction = -1;                       /* fade out */
         si -= (frames > 0);
         for (plane = 0; plane < 4; plane++) {
             set_plane(plane);
@@ -315,7 +319,7 @@ void far show_splash(void far *image, int16_t frames)
     do {
         input_poll(320, 200);
         if (si == di || last_key || g_18e5)      /* timeout, key or button */
-            fade_direction = 0xff;
+            fade_direction = -1;
         si++;
         for (plane = 0; plane < 4; plane++) {
             set_plane(plane);
