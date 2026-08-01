@@ -94,3 +94,20 @@ screens, `run_screen` (`0x0c716`) itself, and `high_score_screen`.
   16-bit code, and `int` would read as 32 on anything modern. `char` survives only
   where the data really is text - a string, a `sprintf` target - so a `char *` in
   here means characters and a `uint8_t *` means bytes.
+- **A type comes from how the code reads a variable, never from what it stores.**
+  `mov byte [x], 0xff` is identical for a signed -1 and an unsigned 255; `cbw`
+  after a load is what makes it signed, `mov ah, 0` what makes it unsigned, and the
+  store width what gives the size. Put the evidence in the comment.
+
+## Open: every type in the globals block needs this check
+
+Only two have had it - `fade_direction`, which turned out to be `int8_t` stepping
+the fade by -1 and not `uint8_t` holding 0xff, and `fade_start_colour`, which is a
+word and had been typed as a byte. **The rest were typed by eye** and are exactly
+as likely to be wrong.
+
+The check per variable is mechanical: find the reads, look for `cbw`/`cwd` (signed)
+or a zeroed high half (unsigned), and take the size from the store width. Worth
+doing as one pass over the block rather than one variable at a time, and worth
+recording signedness in `symbols.py` as it goes, so the control socket's
+`read d+0x…` agrees with the reconstruction.
