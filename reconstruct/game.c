@@ -104,13 +104,8 @@ menu_t         menu_1c3b;               /* after a resolution change */
  */
 
 /* video and the flip */
-int16_t    video_mode;           /* 0x04fe - what set_mode_x is given */
 uint8_t    game_speed;           /* 0x1fd4 - 0..0x1f, higher is faster; read
                                   * as `mov al / mov ah, 0`, so unsigned */
-uint16_t   page_front, page_back;/* 0x1725, 0x1727 - swapped per flip */
-int16_t    flip_phase;           /* 0x0d61 - 0..9 */
-uint8_t    current_plane;        /* 0x177d - written by set_plane; high half
-                                  * zeroed on every read */
 int16_t    fade_level;           /* 0x1798 - 0..15, scales the palette. A word,
                                   * but also read a byte at a time in places */
 int8_t     fade_direction;       /* 0x179a - +1 or -1; palette_fade_step reads it
@@ -124,14 +119,18 @@ viewport_t viewport_panel;       /* ds:0x1741 - the bottom 40 rows */
 viewport_t viewport_full;        /* ds:0x1755 - everything */
 viewport_t viewport_screen;      /* ds:0x1769 - the centred 320x200 window */
 void far  *default_buffer;       /* ds:0x13f1 - what set_buffer restores */
-int16_t    screen_width;         /* 0x0538 - 360 wide, 320 narrow */
-int16_t    screen_height;        /* 0x053a - 240 wide, 200 narrow */
-int16_t    screen_x0;            /* 0x053c - the centring offset: 20 wide, 0
-                                  * narrow. The play area stays 320 across, so
-                                  * the wide mode translates it right rather
-                                  * than widening it */
-void far (*plot)();              /* 0x053e/0x0540 - the pixel plotter for the
-                                  * current resolution */
+/* Written by set_mode_x, set_plane and page_flip, all of which are in dos_io.c,
+ * so that is where these are defined. Declared here because game.c reads them:
+ * show_splash centres its rect with screen_x0, particles plots through `plot`. */
+extern int16_t    video_mode;    /* 0x04fe */
+extern int16_t    screen_width;  /* 0x0538 */
+extern int16_t    screen_height; /* 0x053a */
+extern int16_t    screen_x0;     /* 0x053c - the centring offset */
+extern void far (*plot)();       /* 0x053e/0x0540 - the plotter for this mode */
+extern uint8_t    current_plane; /* 0x177d - written by set_plane */
+extern uint16_t   page_front;    /* 0x1725 - swapped by page_flip */
+extern uint16_t   page_back;     /* 0x1727 */
+extern int16_t    flip_phase;    /* 0x0d61 */
 
 /* input */
 int32_t    mouse_x, mouse_y;     /* 0x18d3, 0x18d7 - 32-bit from the add/adc
