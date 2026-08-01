@@ -7,6 +7,12 @@ name or a type is a guess, it says so.
 The originals are not available. This is what the code must have looked like for
 the compiler to have emitted what it did.
 
+**Two backends, one interface.** `dos.h` declares what the game needs from below
+it; `dos_io.c` is the original reconstructed and `sdl_io.c` is SDL3. The game
+should not be able to tell which one it is linked against - that is the test of
+whether the split was drawn in the right place, and it is why `input_poll` and the
+number drawers stayed above the line.
+
 **Written as C99, not as period C.** The aim is a port that can eventually be
 built and run, so a construct is written the clearest modern way that matches the
 instructions - compound literals, declarations at point of use, `<stdint.h>`. It
@@ -74,8 +80,10 @@ worth having as source.
 
 | file | contents so far |
 | --- | --- |
+| [`dos.h`](dos.h) | the types and the interface both backends implement, so `game.c` does not know which it is linked against |
 | [`game.c`](game.c) | twenty-two functions: `close_egg_files`, `resource_load_full`, `resource_load`, `input_poll`, `make_rect`, `particles`, `draw_entities`, `show_resource_loop`, `draw_number`, `egg_load_pass_0x48`, `show_resource`, `draw_number2`, `cutscene_welcome_home`, `cutscene_photos`, `show_splash`, `episode_end_gate`, `menu_screen_driver`, `game_main`, `scan_save_slots`, `save_settings`, `init`, `main` |
 | [`dos_io.c`](dos_io.c) | nineteen functions: `set_bios_mode`, mode, planes, DAC, page flip, the three INT 33h wrappers, and every drawing primitive the native port replaced - `clear_vram`, `plot_pixel` and its stride-90 twin, `palette_fade_step`, `blit_rows`, `blit_rows_masked`, `compose_layer`, `compose_scroll`, `draw_sprite`, `outline_sprite`. No TODOs left in this file |
+| [`sdl_io.c`](sdl_io.c) | the same interface on SDL3: a linear framebuffer, an SDL palette, a 70 Hz deadline in place of the retrace spin, and SDL events counted into the INT 33h wrappers' shape. **Compiles** - `cc -c sdl_io.c $(pkg-config --cflags sdl3)` |
 
 `game.c` keeps its functions in **address order**, which within a module is the
 order the compiler emits them and therefore the order they were defined in - a
