@@ -75,7 +75,7 @@ worth having as source.
 | file | contents so far |
 | --- | --- |
 | [`game.c`](game.c) | `close_egg_files`, `input_poll`, `show_resource_loop`, `egg_load_pass_0x48`, `show_resource`, `cutscene_welcome_home`, `cutscene_photos`, `show_splash`, `episode_end_gate`, `menu_screen_driver`, `game_main`, `scan_save_slots`, `save_settings`, `init`, `main` |
-| [`dos_io.c`](dos_io.c) | mode, planes, DAC, page flip, mouse, and the drawing primitives: `set_mode_x`, `set_plane`, `dac_set_black`, `palette_upload`, `page_flip`, the three INT 33h wrappers, `clear_vram`, `plot_pixel`, `palette_fade_step`, `blit_rows`, `draw_sprite`, `draw_number`. Six more are listed at the end of the file as `TODO` |
+| [`dos_io.c`](dos_io.c) | twenty functions: mode, planes, DAC, page flip, the three INT 33h wrappers, and every drawing primitive the native port replaced - `clear_vram`, `plot_pixel` and its stride-90 twin, `palette_fade_step`, `blit_rows`, `blit_rows_masked`, `compose_layer`, `compose_scroll`, `draw_sprite`, `outline_sprite`, `draw_number`, `draw_number2`. `particles` and `draw_entities` are the last two, and may belong in `game.c` |
 
 `game.c` keeps its functions in **address order**, which within a module is the
 order the compiler emits them and therefore the order they were defined in - a
@@ -84,10 +84,17 @@ free piece of information, so it is worth not throwing away. `dos_io.c` is group
 the address space, which is a reminder that this split is ours and the original
 had one module here, or several we cannot see.
 
-Still missing from this segment and worth adding as they are read: the in-game
-frame at `0x0d7ee` and the four plane loops inside it, the drawing routines
-`compose_scroll`, `draw_entities` and `draw_sprite`, the other four cutscene
-screens, `run_screen` (`0x0c716`) itself, and `high_score_screen`.
+Still missing and worth adding as they are read: the in-game frame at `0x0d7ee`
+with the four plane loops inside it, `run_screen` (`0x0c716`), the other four
+cutscene screens, `high_score_screen`, and the two remaining natives, `particles`
+and `draw_entities`.
+
+**Where a body came from native.py rather than from the disassembly, the comment
+says so.** Those natives are byte-compared against the original on every call, so
+they are a verified description of behaviour - but they are vectorised Python, and
+the shape of the C written from them is a reading, not a transcription. The one
+exception is loud: `compose_scroll`'s warp branch has never been byte-compared,
+because until level 80 it had never run.
 
 ## Conventions
 

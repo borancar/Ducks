@@ -300,22 +300,159 @@ void far draw_number(int16_t value, int16_t x, int16_t y, viewport_t far *clip,
     }
 }
 
+/* 0x05ac2. blit_rows with transparency: a source byte of zero leaves the
+ * destination alone. Same argument layout as blit_rows, and the destination
+ * rectangle arrives as a verbatim copy of a four-word record - first row, last
+ * row, first x, last x.
+ *
+ * This is what draws the three flashing panels in the in-game frame.
+ */
+void far blit_rows_masked(desc_t far *desc, rect_t rect, int16_t srcrow)
+{
+    int16_t row, x;
+
+    for (row = rect.top; row <= rect.bottom; row++) {
+        uint8_t far *src = desc->rows[srcrow + row][current_plane];
+        uint8_t far *dst = &((uint8_t far *) vram)[row * 80 + page_back];
+        for (x = rect.left; x <= rect.right; x += 4)
+            if (src[x >> 2])                   /* zero is transparent */
+                dst[x >> 2] = src[x >> 2];
+    }
+    /* TODO 0x05ac2-0x05c08: the clipping and the second resolution, not read;
+     * the shape above is native.py's, which is byte-compared against this. */
+}
+
+/* 0x05d3a. The menu and between-level compositor. Takes no arguments at all -
+ * every input is a global:
+ *
+ *   [0x16f5]  far ptr -> array of far row pointers, foreground
+ *   [0x170b]  far ptr -> array of far row pointers, background
+ *   [0x16f1]  destination, plus [0x1727] for the row offset
+ *   [0x538]   width limit          [0x53a]  height
+ *   [0x177d]  x scroll             [0x177f] y scroll
+ *   [0x1729]  wrap mask, x         [0x172b] wrap mask, y
+ *
+ * Per pixel: take the foreground byte, and where it is zero fall through to the
+ * background tile. Column steps by 4, so one call fills a single plane.
+ */
+void far compose_layer(void)
+{
+    int16_t row, x;
+
+    for (row = 0; row < layer_height; row++) {          /* [0x53a] */
+        uint8_t far *fg  = fg_rows[row];
+        uint8_t far *bg  = bg_rows[(row + scroll_y) & wrap_y];
+        uint8_t far *dst = &((uint8_t far *) vram)[row * 80 + dest_row];
+        for (x = current_plane; x < layer_width; x += 4) {
+            uint8_t px = fg[x];
+            dst[x >> 2] = px ? px : bg[(x + scroll_x) & wrap_x];
+        }
+    }
+}
+
+/* 0x05dc4. compose_layer scrolled, and the one routine in the game with code that
+ * had never executed until level 80: the background warp the v1.2 changelog
+ * mentions.
+ *
+ * When background_warp is set, each row's x displacement comes from the 32-entry
+ * table at warp_table, starting at warp_phase and stepped by warp_step per row -
+ * and the phase is re-masked to 0x1f **every row**, so it is not an arithmetic
+ * progression and cannot be flattened to `table[(phase + row * step) & 0x1f]`.
+ */
+void far compose_scroll(int16_t scroll_x, int16_t scroll_y)
+{
+    int16_t row, x, phase = warp_phase;
+
+    for (row = 0; row < layer_height; row++) {
+        int16_t dx = scroll_x;
+
+        if (background_warp) {                 /* [0x2022] */
+            dx += warp_table[phase & 0x1f];
+            phase = (phase + warp_step) & 0x1f;   /* re-masked every row */
+        }
+        {
+            uint8_t far *fg  = fg_rows[(row + scroll_y) & wrap_y];
+            uint8_t far *bg  = bg_rows[(row + scroll_y) & wrap_y];
+            uint8_t far *dst = &((uint8_t far *) vram)[row * 80 + dest_row];
+            for (x = current_plane; x < layer_width; x += 4) {
+                uint8_t px = fg[(x + dx) & wrap_x];
+                dst[x >> 2] = px ? px : bg[(x + dx) & wrap_x];
+            }
+        }
+    }
+    /* TODO: the exact source indexing is native.py's, which is byte-compared
+     * against this routine on every call - except the warp branch, which had
+     * never run until 2026-08-01 and is still unverified. See the root README. */
+}
+
+/* 0x065f1. Halo a sprite: a colour-0 pixel above, below, left and right of each
+ * of its non-zero pixels. Draws the outline around collected items on the HUD.
+ *
+ * It plots through the callback at [0x53e] rather than writing spans, so - like
+ * the particle loop - only pixels whose x & 3 matches the selected plane land.
+ *
+ * Two quirks are faithful rather than tidy: the vertical clip insets by a row at
+ * each end, and clip[+4] is added to x *after* the source offsets are worked out,
+ * which shifts the sprite horizontally and therefore also changes which plane each
+ * pixel belongs to.
+ */
+void far outline_sprite(int16_t far *index, int16_t x, int16_t y,
+                        sprite_t far *table, viewport_t far *clip)
+{
+    int16_t row, col;
+
+    for (row = clip->top + 1; row < clip->bottom - 1; row++)      /* the inset */
+        for (col = 0; col < table[*index].width; col++)
+            if (sprite_pixel(table, *index, col, row)) {
+                plot(x + col + clip->shift_x, y + row - 1, 0);    /* clip[+4] */
+                plot(x + col + clip->shift_x, y + row + 1, 0);
+                plot(x + col - 1 + clip->shift_x, y + row, 0);
+                plot(x + col + 1 + clip->shift_x, y + row, 0);
+            }
+}
+
+/* 0x0d757. The HUD's number drawer. Same digit layout as draw_number - glyph
+ * 0x71 plus the digit, 12 pixels apart, least significant first, no leading-zero
+ * suppression - but with the clip, sprite table and colour fixed, and glyph 0x70
+ * drawn behind each digit first. That backdrop is the visible difference between
+ * the HUD's numbers and the in-game frame's.
+ *
+ * Never observed to run: it is the one hooked address whose correctness rests
+ * only on the disassembly.
+ */
+void far draw_number2(int16_t value, int16_t digits, int16_t x, int16_t y)
+{
+    int16_t i;
+
+    for (i = digits - 1; i >= 0; i--) {
+        draw_sprite(sprite_table, 0x70, hud_clip, x + i * 12, y, 0);  /* the tile */
+        draw_sprite(sprite_table, 0x71 + (value % 10),
+                    hud_clip, x + i * 12, y, 0);                      /* over it */
+        value /= 10;
+    }
+}
+
+/* 0x057a1. plot_pixel with a stride of 90 - the 360-pixel mode. The game swaps
+ * the far pointer at [0x53e] between this and 0x05761 when the resolution
+ * changes, rather than testing inside either. Resolving that pointer by its
+ * offset word alone recognises neither, because the segment it is stored with is
+ * not the one image offsets are measured from.
+ */
+void far plot_pixel_wide(int16_t x, int16_t y, uint8_t colour)
+{
+    if (current_plane != (x & 3))
+        return;
+    ((uint8_t far *) vram)[y * 90 + (x >> 2) + page_back] = colour;
+}
+
 /* -------------------------------------------------- still to read out
  *
- * TODO. All of these are replaced natively and byte-compared against the
- * original, so native.py is a verified description of what each does while the
- * disassembly is being turned into C here.
+ * TODO. Both are replaced natively and byte-compared, so native.py is a verified
+ * description while the disassembly is turned into C here. Both are arguably game
+ * rather than I/O and may belong in game.c once they are read:
  *
- *   0x05ac2  blit_rows_masked   the flashing panels in the in-game frame
- *   0x05d3a  compose_layer      the menu compositor
- *   0x05dc4  compose_scroll     the scrolling background, and the only code in
- *                               the game that has never executed until level 80:
- *                               when [0x2022] is set each row's x displacement
- *                               comes from the 32-entry table at [0x179f],
- *                               starting at phase [0x17bf] and stepped by
- *                               [0x17c0], re-masked to 0x1f every row - so it is
- *                               not an arithmetic progression
- *   0x065f1  outline_sprite     the outline around collected items on the HUD
- *   0x0d757  draw_number2       a second number drawer, never seen to run
- *   0x057a1  plot_pixel_wide    plot_pixel with a stride of 90
+ *   0x0ab09  particles      plots through the [0x53e] callback, so it is
+ *                           plane-filtered the same way outline_sprite is
+ *   0x0aba5  draw_entities  five layers per call, ~34,000 calls a session, and
+ *                           the shadow path inside it has never been seen to run
  */
