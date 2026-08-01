@@ -60,8 +60,17 @@ FUNCTIONS = {
     0x05671: "resource_release?",       # ends show_splash and show_resource
     0x05761: "plot_pixel",              # native
     0x057EE: "set_plane",               # native; map mask + [0x177d]
-    0x05A67: "resource_load?",          # (&desc, type, index, ...) -> 0 on
-                                        # failure; forwards to 0x058b9
+    0x058B9: "resource_load_full",      # egg_find_block, then a header of two
+                                        # words and a byte - width, height,
+                                        # palette entries - then the palette three
+                                        # bytes at a time into current_buffer, an
+                                        # allocation, and a row decoder
+    0x05A67: "resource_load",           # the form everything calls: the above
+                                        # with set_size forced to 1
+    0x04E88: "egg_read_word?",          # one word off the egg stream; the header
+                                        # reads two
+    0x05388: "alloc_image?",            # called with the descriptor before the
+                                        # rows are decoded into it
     0x05AC2: "blit_rows_masked",        # native
     0x05C09: "blit_rows",               # native
     0x05D3A: "compose_layer",           # native

@@ -205,6 +205,72 @@ void far close_egg_files(void)
     }
 }
 
+/* --------------------------------------------- 0x058b9: resource_load_full
+ *
+ * Pull one resource out of an egg and build a descriptor for it. Everything that
+ * draws a screen comes through here.
+ *
+ *   desc      the descriptor to fill
+ *   set_size  when non-zero, write the source's width and height into it
+ *   type      the resource type - 0x4d for the screens main and game_main show
+ *   index     which one
+ *   pal_at    where in the palette buffer this resource's colours go
+ *
+ * The stream is the open egg at egg_stream ([0x20c6]): egg_find_block seeks it to
+ * the resource, then the header is two words and a byte - width, height, and how
+ * many palette entries follow - and the palette is read three bytes at a time
+ * straight into the current buffer at pal_at * 3.
+ */
+int16_t far resource_load_full(desc_t far *desc, int16_t set_size,
+                               uint8_t type, uint8_t index, int16_t pal_at,
+                               int16_t arg18, int16_t arg1a)
+{
+    int16_t w, h, colours, i, x0;
+
+    if (!egg_find_block(type, index, arg18))       /* 0x05232 */
+        return 0;
+
+    w       = egg_read_word(egg_stream);           /* 0x04e88 */
+    h       = egg_read_word(egg_stream);
+    colours = egg_getc(egg_stream);                /* 0x03791 */
+
+    if (set_size) {
+        desc->w = w;                               /* +0x0c */
+        desc->h = h;                               /* +0x0e */
+    }
+
+    if (!alloc_image(desc, 0, 0, 0, arg1a))        /* 0x05388 */
+        return 0;
+
+    /* Where this image sits inside the descriptor's own width, so a source
+     * narrower than the destination lands centred rather than at the left. */
+    x0 = (desc->w - w) >> 1;
+
+    for (i = 0; i < colours * 3; i++)              /* three bytes an entry */
+        ((uint8_t far *) current_buffer)[pal_at * 3 + i] = egg_getc(egg_stream);
+
+    f_0580b();                                     /* 0x0580b - unnamed */
+
+    /* TODO 0x0599f-0x05a66: the row decoder. It reads a byte at a time through
+     * 0x05821 and treats zero as a control code, which is the shape of a run
+     * length scheme, but it has not been read out. x0 above is what it offsets
+     * each row by. */
+
+    return 1;
+}
+
+/* --------------------------------------------- 0x05a67: resource_load
+ *
+ * The form everything actually calls: the same thing with `set_size` forced to 1
+ * and two of the arguments fixed. A thin forwarder, twenty bytes of pushes.
+ */
+int16_t far resource_load(desc_t far *desc, uint8_t type, uint8_t index,
+                          int16_t pal_at, int16_t set_size,
+                          int16_t arg18, int16_t arg1a)
+{
+    return resource_load_full(desc, 1, type, index, pal_at, arg18, arg1a);
+}
+
 /* ------------------------------------------------------ 0x06869: input_poll
  *
  * Takes the resolution because the game keeps the cursor position itself: INT 33h
