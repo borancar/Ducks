@@ -39,11 +39,79 @@ typedef struct {
     int       terminator;       /* +0xc:  set only on the last record */
 } episode_t;
 
-extern episode_t far *episode_index;    /* [0x20ba] */
-extern int            episode_count;    /* [0x20c2] */
 extern menu_t         main_menu;        /* ds:0x1916, what main passes in */
 extern menu_t         menu_1989;        /* after starting, saving or loading */
 extern menu_t         menu_1c3b;        /* after a resolution change */
+
+/* ---------------------------------------------------------------- globals
+ *
+ * All of these live in DGROUP; the offset in each comment is what the code
+ * indexes and what `read d+0x...` over the control socket prints. Names come
+ * from symbols.py, which carries the evidence for each; a name of the form
+ * `g_xxxx` means the offset is used here but the variable is not identified.
+ */
+
+/* video and the flip */
+extern int        video_mode;           /* 0x04fe - what set_mode_x is given */
+extern int        game_speed;           /* 0x1fd4 - 0..0x1f, higher is faster */
+extern unsigned   page_front, page_back;/* 0x1725, 0x1727 - swapped per flip */
+extern int        flip_phase;           /* 0x0d61 - 0..9 */
+extern int        current_plane;        /* 0x177d - written by set_plane */
+extern int        fade_level;           /* 0x1798 - 0..15, scales the palette */
+extern char       fade_direction;       /* 0x179a - 0xff fades out */
+extern char       fade_start_colour;    /* 0x179b */
+extern viewport_t viewport_1769;        /* ds:0x1769 - the global clip rect */
+extern void far  *default_buffer;       /* ds:0x13f1 - what set_buffer restores */
+extern int        g_53c;                /* 0x053c - show_splash's x origin */
+
+/* input */
+extern long       mouse_x, mouse_y;     /* 0x18d3, 0x18d7 - 32-bit, accumulated */
+extern int        mouse_dx, mouse_dy;   /* 0x18db, 0x18dd - one poll's motion */
+extern int        button_map_a;         /* 0x20e4 - which INT 33h button is which */
+extern int        button_map_b;         /* 0x20e6 */
+extern int        button_map_c;         /* 0x20e8 */
+extern int        button_a_down;        /* 0x18df */
+extern int        button_b_down;        /* 0x18e7 */
+extern int        g_18e5;               /* 0x18e5 - any button; escapes the fades */
+extern int        last_key;             /* 0x18f6 - the ASCII of the last key */
+
+/* the egg files and the indexes built from them */
+extern egg_file_t far *egg_files;       /* 0x20a9 - stride 0x17 */
+extern int             egg_file_count;  /* 0x20ad */
+extern episode_t  far *episode_index;   /* 0x20ba - four 14-byte records */
+extern int             episode_count;   /* 0x20c2 */
+extern int             draw_flag;       /* 0x054d - set to 4 around a loader pass */
+
+/* progress and the shareware gate */
+extern int        level_attempted;      /* 0x2032 - the level about to be played */
+extern int        episode_egg_index;    /* 0x0094 - which egg the episode is in */
+extern int        shareware_limit;      /* 0x054a - per egg, not a constant */
+extern int        registered;           /* 0x0548 */
+extern int        lives;                /* 0x2034 - decremented on a lost run */
+extern int        max_save_value;       /* 0x2055 - scan_save_slots' only output */
+
+/* the menu and the attract cycle */
+extern int        attract_choice;       /* 0x21ae - 0 demos, non-zero shows a screen */
+extern int        menu_idle_suppress;   /* 0x2177 - non-zero holds the menu still */
+extern int        g_2038;               /* 0x2038 - how many demos to choose from */
+
+/* strings and buffers */
+extern char       save_name[];          /* 0x21a5 - the template "GAME-.SG" */
+extern char far  *settings_name;        /* 0x21d2 - "settings.dat" */
+extern char       g_28ff[];             /* 0x28ff - main's first splash source */
+extern void far  *buf_200f, *buf_203b, *buf_203f, *buf_2043;  /* freed per demo */
+extern void far  *res;                  /* 0x1894:0 - the table the intro indexes
+                                         * for its splashes and labels */
+
+/* startup and settings */
+extern int        sound_available;      /* 0x2104 - detect_hardware's result */
+extern void far  *init_objects[3];      /* 0x210c - three 22-byte objects, stride 4 */
+extern int        settings[];           /* 0x04f4 - the word array save_settings
+                                         * writes; settings[0] gates sound */
+
+/* used but not identified */
+extern int  g_509, g_50b, g_18f5, g_1fd3, g_1ffa, g_1ffc, g_1ffe;
+extern int  g_201c, g_2036, g_21a3;
 
 /* ------------------------------------------------------- 0x04d4b: page_flip
  *
@@ -91,8 +159,9 @@ void far input_poll(int w, int h)
      * mouse_presses(0..2) into [0x20ea]/[0x20ec]/[0x20ee] and mouse_releases(0..2)
      * into [0x20f0]/[0x20f2]/[0x20f4], copies each triple onto the stack, and then
      * indexes those by button_map_a/b/c - so the mapping is data, not code. Out of
-     * it come [0x18df] (held), [0x18e1], [0x18e3], [0x18e5] (any button) and
-     * [0x18e7]. The tail past 0x0696f has not been read at all. */
+     * it come button_a_down (0x18df), button_b_down (0x18e7), g_18e5 (any button
+     * at all) and two more at 0x18e1 and 0x18e3 that have no name yet. The tail
+     * past 0x0696f has not been read. */
 }
 
 /* ---------------------------------------------- 0x0b52f: show_resource_loop
@@ -108,7 +177,7 @@ void far show_resource_loop(desc_t far *desc, int frames)
     palette_build();                                   /* 0x0b0c5 */
     do {
         input_poll(320, 200);
-        if (si == 0 || last_key || [0x18e5])
+        if (si == 0 || last_key || g_18e5)
             fade_direction = 0xff;                     /* = -1, fade out */
         si -= (frames > 0);
         for (plane = 0; plane < 4; plane++) {
@@ -127,11 +196,11 @@ void far egg_load_pass_0x48(void)
     int  i, saved;
 
     set_buffer(&scratch[0]);               /* publish our own stack buffer */
-    saved = [0x54d];  [0x54d] = 4;
+    saved = draw_flag;  draw_flag = 4;
     for (i = 0; i < egg_file_count; i++)   /* [0x20ad] */
         egg_load_one(0, 0x48, i);          /* 0x0c0c2 */
-    [0x54d] = saved;
-    set_buffer(ds_13f1);
+    draw_flag = saved;
+    set_buffer(default_buffer);
 
     /* It also *draws* the version and credits page, through show_resource_loop,
      * and holds it until a key - the wait that read as a hang in one session. */
@@ -149,7 +218,7 @@ void far show_resource(char type /* 0x4d */, char index, int frames, int x /* 0x
         show_resource_loop(&desc, frames);
         resource_release(&desc);
     }
-    set_buffer(ds_13f1);
+    set_buffer(default_buffer);
 }
 
 /* ------------------------------------------- 0x0f825: cutscene_welcome_home
@@ -222,7 +291,7 @@ void far show_splash(void far *image, int frames)
     viewport_t a, b;
     int        si = 0, di = frames, plane;
 
-    make_rect(&a, 80, 104, [0x53c], [0x53c] + 320);
+    make_rect(&a, 80, 104, g_53c, g_53c + 320);
     make_rect(&b, 320, 24);
     f_0615a(1, 0x53, &loc, 0xff);  f_056f7(0);
     f_0b5cf(image, &loc, 0x12, &b, 0, 0x1c);       /* decodes it into b */
@@ -230,7 +299,7 @@ void far show_splash(void far *image, int frames)
     fade_direction = 1;  fade_start_colour = 0;
     do {
         input_poll(320, 200);
-        if (si == di || last_key || [0x18e5])      /* timeout, key or button */
+        if (si == di || last_key || g_18e5)      /* timeout, key or button */
             fade_direction = 0xff;
         si++;
         for (plane = 0; plane < 4; plane++) {
@@ -274,8 +343,9 @@ int far episode_end_gate(int level, int egg)
  */
 record_t far *menu_screen_driver(menu_t far *menu, void far *a, int b)
 {
-    int         leave;                             /* di */
     record_t far *r;
+    int           leave;                           /* di */
+    int           saved;                           /* si, across the demo call */
 
     do {                                           /* 0x12723 */
         r = run_screen(menu, a, b);                /* 0x12733 -> 0x0c716 */
@@ -288,10 +358,10 @@ record_t far *menu_screen_driver(menu_t far *menu, void far *a, int b)
             } else if (pick_random_demo()) {       /* 0x126db: rand() % [0x2038] */
                 f_088fa();
                 free(buf_200f);
-                [0x18f5] = 5;  [0x1ffc] = 0;
-                saved = [0x509];  [0x509] = 0;     /* switched off for the demo */
+                g_18f5 = 5;  g_1ffc = 0;
+                saved = g_509;  g_509 = 0;     /* switched off for the demo */
                 in_game_frame(1);                  /* 0x1279d - it IS the game */
-                [0x509] = saved;
+                g_509 = saved;
                 free(buf_2043);  free(buf_203f);  free(buf_203b);
                 release_sounds();
             } else {
@@ -303,8 +373,8 @@ record_t far *menu_screen_driver(menu_t far *menu, void far *a, int b)
         case 0x15:                                 /* play the demo named */
             if (load_demo(r->param)) {             /* 0x1240f */
                 /* TODO 0x12811-0x1283a: elided because it is byte for byte the
-                 * same as the branch above - the three frees, [0x18f5], the
-                 * [0x509] save and restore. Worth writing out if that ever turns
+                 * same as the branch above - the three frees, g_18f5, the
+                 * g_509 save and restore. Worth writing out if that ever turns
                  * out not to be exactly true. */
                 in_game_frame(1);                  /* 0x1283a */
             } else {
@@ -380,7 +450,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
             break;
 
         case 1:                                    /* START: unpack the episode */
-            [0x1ffc] = 0;  [0x1ffa] = 0;           /* 0x1377b */
+            g_1ffc = 0;  g_1ffa = 0;           /* 0x1377b */
             menu = &menu_1989;
             i = r->param;                          /* the episode ordinal */
             level_attempted   = episode_index[i].first;
@@ -390,16 +460,16 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
 
         case 2:                                    /* 0x137f6: play, tally, repeat */
             for (;;) {
-                if ([0x1ffc]) {
+                if (g_1ffc) {
                     sound_play_guarded(0x29, 1);
                     show_splash(res->splash_a0, 200);
                 }
-                if (f_1102a([0x21a3]))             /* a screen; non-zero leaves */
+                if (f_1102a(g_21a3))             /* a screen; non-zero leaves */
                     break;
-                [0x18f5] = 2;
+                g_18f5 = 2;
 
                 if (shareware_limit < level_attempted      /* 0x13841 */
-                    && !registered && ![0x1ffc]) {
+                    && !registered && !g_1ffc) {
                     f_09329();                     /* the refusal - unnamed */
                     egg_load_one(0xfc, 0x48, 0xff);
                     menu = &main_menu;
@@ -408,8 +478,8 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                 }
 
                 if (!in_game_frame(0)) {           /* 0x1387e: the run ended badly */
-                    [0x21a3] = 0;
-                    if (![0x50b]) {
+                    g_21a3 = 0;
+                    if (!g_50b) {
                         --lives;                   /* [0x2034] */
                         sprintf(buf, "%s: %i", res->label_d4, lives);
                         show_splash(buf, 100);
@@ -423,10 +493,10 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                     break;
                 }
 
-                if ([0x1ffc] || [0x1ffe])          /* 0x1388b, 0x13895 */
+                if (g_1ffc || g_1ffe)          /* 0x1388b, 0x13895 */
                     break;
 
-                [0x21a3] = 1;                      /* the level was completed */
+                g_21a3 = 1;                      /* the level was completed */
                 sound_play_guarded(2, 1);
                 show_resource(0x4d, 2, 50, 0xff);  /* the BONUS SCREEN */
                 f_0becb();
@@ -438,13 +508,13 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                     && episode_egg_index == 0) {                /* 0x1390d */
                     set_buffer(&buf[0]);
                     cutscene_rocket_space();                    /* id 0x32 */
-                    f_147c5(0x4a, [0x1fd3], 0xff);
+                    f_147c5(0x4a, g_1fd3, 0xff);
                     cutscene_rocket_landing();                  /* ids 0x33/0x34 */
                     cutscene_doorstep();                        /* ids 0x37/0x38 */
                     cutscene_welcome_home();                    /* id 0x36 */
                     release_sounds();
                     cutscene_photos();                          /* ids 0x3a-0x3c */
-                    f_147c5(0x4a, [0x1fd3], 0xff);
+                    f_147c5(0x4a, g_1fd3, 0xff);
                     cutscene_night_monster();                   /* the animation */
                     release_sounds();
                     dac_set_black(0, 0);
@@ -470,7 +540,8 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
  */
 void far scan_save_slots(void)
 {
-    int i, v;
+    FILE *fp;
+    int   i, v;
 
     for (i = 1; i < 6; i++) {
         save_name[4] = '0' + i;                    /* [0x21a9] */
@@ -489,6 +560,8 @@ void far scan_save_slots(void)
 /* ---------------------------------------------------- 0x140b1: save_settings */
 void far save_settings(void)
 {
+    FILE *fp;
+
     fp = fopen(settings_name, "wb");               /* ds:[0x21d2] -> settings.dat */
     /* TODO: the write itself - how many words, and whether it is fwrite or a
      * loop - has not been read. What is established is the source: the word array
@@ -549,7 +622,7 @@ void far main(void)
 
     /* The intro: two screen players, interleaved with sounds. Screen (1) draws
      * nothing - the 320x24 source is allocated but empty, checked in the planes. */
-    show_splash(ds_28ff, 100);               /* 0x14520 - (1) blank */
+    show_splash(g_28ff, 100);               /* 0x14520 - (1) blank */
     egg_load_pass_0x48();                    /* 0x14527 - and it draws the version
                                               * and credits page, which waits for
                                               * a key */
