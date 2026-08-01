@@ -38,6 +38,15 @@ typedef struct {
     int16_t       h;            /* +0x0e */
 } desc_t;
 
+/* A glyph, the 8 bytes at d+0x54d + character*8. The pixels are one byte each,
+ * stored column-major, and the byte is not a colour: 0 is transparent, 1 and 2
+ * select text_colour[0] and text_colour[1]. */
+typedef struct {
+    int16_t      w;             /* +0 - the advance is this minus one */
+    int16_t      h;             /* +2 */
+    uint8_t far *pixels;        /* +4 */
+} glyph_t;
+
 /* A sprite, 14 bytes in the original. */
 typedef struct {
     int16_t       w, h;         /* +0x00, +0x02 */
@@ -224,11 +233,28 @@ void far register_screen(void);
 void far high_score_screen(void);
 void far show_attract_screen(int16_t frames);
 void far egg_load_one(int16_t index, int16_t type, int16_t egg);
-void far f_054c_set(void);
-int16_t far load_text_page(void far *desc, uint8_t type, uint8_t index,
-                           int16_t a, int16_t b, int16_t egg);
-extern int16_t draw_flag;
 extern int16_t egg_file_count;
+extern egg_file_t far *egg_files;
+
+/* The font, and the two colours a glyph's pixel values select. In the original
+ * both drawers reach them as text_colour[value - 1], which is why the byte the
+ * screens set for the outline is d+0x54d - the same byte as font[0]'s width.
+ * That costs nothing there, because a string ends at character 0 and font[0] is
+ * never measured or drawn; here they are simply separate. */
+extern glyph_t font[256];
+extern uint8_t text_colour[2];
+
+void far font_clear(void);
+void far font_load(void);
+int16_t far glyph_to_screen(uint8_t ch, int16_t x, int16_t y);
+int16_t far glyph_to_image(desc_t far *desc, uint8_t ch, int16_t x, int16_t y);
+int16_t far text_width(const char far *s);
+void far draw_string(desc_t far *desc, const char far *s, int16_t x, int16_t y);
+void far load_text_page(desc_t far *desc, uint8_t type, uint8_t index,
+                        uint8_t colour_base, int16_t max_width, int16_t egg);
+void far str_copy(const char far *s, char far **dest);
+void far fatal(const char far *msg, const char far *arg);
+extern char far *out_of_memory;
 void far resource_release(void far *d);
 void far set_buffer(void far *p);
 void far sound_play_guarded(int16_t id, int16_t mode);
@@ -242,6 +268,9 @@ void far set_text_colour(int16_t c);
 void far retire_entity(void far *e);
 void far f_0580b(void);
 uint8_t egg_next_pixel(void);
+char far *far egg_read_string(void far *s);
+void far egg_fread(void far *buf, int16_t size, int16_t n);
+void far egg_block_end(void);
 int egg_open(const char *path);
 void egg_bringup_open(void);
 void far f_04dcd(int16_t n);

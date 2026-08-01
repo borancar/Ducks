@@ -111,7 +111,6 @@ egg_file_t far *egg_files;       /* 0x20a9 - stride 0x17 */
 int16_t         egg_file_count;  /* 0x20ad */
 episode_t  far *episode_index;   /* 0x20ba - four 14-byte records */
 int16_t         episode_count;   /* 0x20c2 */
-int16_t         draw_flag;       /* 0x054d - set to 4 around a loader pass */
 
 /* progress and the shareware gate */
 int16_t    level_attempted;      /* 0x2032 - the level about to be played. A
@@ -219,6 +218,8 @@ int16_t far resource_load_full(desc_t far *desc, int16_t set_size,
                 desc->rows[i][x0 + x] = px;
         }
     }
+    egg_block_end();                               /* 0x05a55 - releases the
+                                                    * lock the find took */
     return 1;
 }
 
@@ -410,47 +411,257 @@ void far draw_number(int16_t value, int16_t x, int16_t y, viewport_t far *clip,
     }
 }
 
+/* ---------------------------------------------------------------- the font
+ *
+ * One face for the whole game. font_load reads the egg's single 'F' block at
+ * startup - 94 glyphs, 5,952 bytes - into a table indexed by the character
+ * itself, so an unmapped character has width 0 and draws nothing.
+ *
+ * A glyph's bytes are stored column-major and are not colours: 0 is
+ * transparent, 1 and 2 pick text_colour[0] and text_colour[1]. That is why the
+ * screens set two bytes around a page rather than passing a colour - and why a
+ * page can print one line in one colour and the next in another without the
+ * drawing code knowing anything about it.
+ *
+ * A glyph advances by width - 1, so neighbouring letters share a column and
+ * their outlines join into one continuous border.
+ */
+
+glyph_t font[256];               /* 0x054d */
+uint8_t text_colour[2];          /* 0x054c - see dos.h on the shared byte */
+uint8_t far *font_codes;         /* 0x20f6 - the first code of each glyph */
+uint8_t      font_glyph_count;   /* 0x20fa */
+char far    *out_of_memory;      /* 0x0500 - "Out of memory" */
+
+/* 0x06a87 */
+void far font_clear(void)
+{
+    int16_t i;
+
+    for (i = 0; i < 0x100; i++)
+        font[i].w = 0;
+}
+
+/* 0x06aa4. The block is a count, then per glyph: width, height, a
+ * null-terminated list of the character codes that share it, then width*height
+ * raw bytes. Only one glyph is shared in this egg - 'O' and '0'. */
+void far font_load(void)
+{
+    int16_t i;
+    uint8_t count, w, h, code;
+
+    font_clear();
+    if (!egg_find_block(0x46, 0, 0xff))
+        fatal("Can't find font", NULL);            /* ds:0x22ea */
+
+    count = egg_read_byte(egg_stream);
+    font_codes = malloc(count);
+    if (!font_codes)
+        fatal(out_of_memory, NULL);
+    font_glyph_count = count;
+
+    for (i = 0; i < count; i++) {
+        uint8_t far *pixels;
+
+        w = egg_read_byte(egg_stream);
+        h = egg_read_byte(egg_stream);
+        pixels = malloc((size_t) w * h);
+        if (!pixels)
+            fatal(out_of_memory, NULL);
+
+        code = egg_read_byte(egg_stream);
+        font_codes[i] = code;                      /* only the first is kept */
+        while (code) {
+            font[code].w      = w;
+            font[code].h      = h;
+            font[code].pixels = pixels;
+            code = egg_read_byte(egg_stream);
+        }
+        egg_fread(pixels, w, h);                   /* fread, not the decoder */
+    }
+    egg_block_end();
+}
+
+/* 0x06c29. One glyph through the plot pointer, straight at the screen. Nothing
+ * calls it: every caller in the program uses the image form below and blits the
+ * result. Kept because it is there. */
+int16_t far glyph_to_screen(uint8_t ch, int16_t x, int16_t y)
+{
+    glyph_t far *g = &font[ch];
+    int16_t      col, row, i = 0;
+
+    for (col = 0; col < g->w; col++)
+        for (row = 0; row < g->h; row++) {
+            uint8_t v = g->pixels[i++];
+
+            if (v)
+                plot(x + col, y + row, text_colour[v - 1]);
+        }
+    return g->w ? g->w - 1 : 1;
+}
+
+/* 0x06cb6. The same loop into a descriptor's row table. */
+int16_t far glyph_to_image(desc_t far *desc, uint8_t ch, int16_t x, int16_t y)
+{
+    glyph_t far *g = &font[ch];
+    int16_t      col, row, i = 0;
+
+    for (col = 0; col < g->w; col++)
+        for (row = 0; row < g->h; row++) {
+            uint8_t v = g->pixels[i++];
+
+            if (v)
+                desc->rows[y + row][x + col] = text_colour[v - 1];
+        }
+    return g->w ? g->w - 1 : 1;
+}
+
+/* 0x06d52. What a string will measure, starting at 1 for the column the last
+ * glyph does not share. */
+int16_t far text_width(const char far *s)
+{
+    int16_t i = 0, w = 1;
+
+    while (s[i])
+        w += font[(uint8_t) s[i++]].w - 1;
+    return w;
+}
+
+/* 0x06d84 */
+void far draw_string(desc_t far *desc, const char far *s, int16_t x, int16_t y)
+{
+    int16_t i = 0;
+
+    while (s[i]) {
+        x += glyph_to_image(desc, (uint8_t) s[i], x, y);
+        i++;
+    }
+}
+
+/* ---------------------------------------------------- 0x0b7c3: load_text_page
+ *
+ * A whole page of text drawn into a descriptor: the readme sections, the
+ * credits, and the version page. The block is a count and then that many
+ * strings, each of which may begin with a digit - that digit, plus the caller's
+ * base, is the line's colour, and a line without one keeps the previous line's.
+ * So 'H' 0 opens "5DUCKS v1.2" then "3Programmed by Tim Furnish".
+ *
+ * Lines wider than max_width are wrapped at the last space that still fits, and
+ * a page stops at 31 lines however many the block holds. The result is centred
+ * both ways: 9 pixels a line about the middle of a 200-line screen, and each
+ * line about x = 160.
+ */
+void far load_text_page(desc_t far *desc, uint8_t type, uint8_t index,
+                        uint8_t colour_base, int16_t max_width, int16_t egg)
+{
+    char      buf[0x100];        /* [bp-0x10c] - only for the error */
+    char far *line[31];          /* [bp-0x8a] */
+    uint8_t   colour[31];        /* [bp-0xa8] */
+    uint8_t   digit = 0;         /* [bp-5] - carried between lines */
+    int16_t   n = 0;             /* di */
+    int16_t   count, i, y;
+
+    text_colour[1] = 0;                                    /* 0x0b7d2 */
+    if (!egg_find_block(type, index, egg)) {
+        sprintf(buf, "%c %i", type, index);                /* ds:0x244d */
+        fatal("Can't find text section", buf);             /* ds:0x2453 */
+    }
+
+    count = egg_read_byte(egg_stream);
+    for (i = 0; i < count; i++) {
+        char far *s = egg_read_string(egg_stream);
+        int16_t   start = 0;
+
+        if (s[0] >= '0' && s[0] <= '9') {
+            digit = (uint8_t) (s[0] - '0');
+            start = 1;
+        }
+
+        /* Wrap, while what is left is too wide. The scan below has no test for
+         * the end of the string - it walks until a prefix does not fit - which
+         * is safe only because this loop has already established that one will
+         * not. */
+        while (text_width(s + start) > max_width) {
+            int16_t j = start, last = start, fits = 1;
+
+            while (fits) {
+                if (s[j] == ' ') {
+                    s[j] = 0;
+                    if (text_width(s + start) > max_width)
+                        fits = 0;
+                    else
+                        last = j;
+                    s[j] = ' ';
+                }
+                j++;
+            }
+            s[last] = 0;
+            str_copy(s + start, &line[n]);
+            colour[n] = digit + colour_base;
+            if (n < 30)
+                n++;
+            start = last + 1;
+        }
+        str_copy(s + start, &line[n]);
+        colour[n] = digit + colour_base;
+        if (n < 30)
+            n++;
+        free(s);
+    }
+    egg_block_end();
+
+    y = (200 - n * 9) / 2;
+    for (i = 0; i < n; i++) {
+        text_colour[0] = colour[i];
+        draw_string(desc, line[i], 160 - text_width(line[i]) / 2, y);
+        y += 9;
+        free(line[i]);
+    }
+}
+
+/* 0x04eed. strlen, malloc, strcpy - all three are the runtime's, and the result
+ * goes back through the pointer rather than the return. */
+void far str_copy(const char far *s, char far **dest)
+{
+    *dest = malloc(strlen(s) + 1);
+    if (!*dest)
+        fatal(out_of_memory, NULL);
+    strcpy(*dest, s);
+}
+
 /* ------------------------------------------------------ 0x0c0c2: egg_load_one
  *
  * Called once per open egg by egg_load_pass_0x48. It is not only a loader - it
  * draws, which is what makes the version and credits page appear before the logo,
  * and it holds until a key.
  *
- * Two resources: the blueprint frame at 0x4d:7 as a background, then a type 0x48
- * block on top. The 0x48 blocks are *text* - the readme pages, every byte shifted
- * up by one, which is the same cipher the episode index uses - so drawing them
- * needs the font, and that is not read out yet.
+ * One resource, not two: the blueprint frame at 0x4d:7 is loaded, the text is
+ * drawn *into that same descriptor* on top of it, and the result is shown once
+ * and released. Everything after the load hangs off it succeeding.
+ *
+ * The two colours are set around it - outline 4 for the whole page, fill 1 as
+ * the default a line's own digit then overrides.
  */
 void far egg_load_one(int16_t index, int16_t type, int16_t egg)
 {
     uint8_t scratch[0x302];
     desc_t  desc;
-    int16_t saved;
+    uint8_t saved;
 
     clear_vram();                                  /* 0x0c0ca */
     set_buffer(&scratch[0]);
-    saved = draw_flag;                             /* [0x54d] */
-    draw_flag = 4;
+    saved = text_colour[1];                        /* [0x54d] */
+    text_colour[1] = 4;
 
     if (resource_load(&desc, 0x4d, 7, 0, 1, 0xff, 1)) {   /* the blueprint frame */
-        f_054c_set();                              /* [0x54c] = 1 */
-        show_resource_loop(&desc, 100);            /* fade in, hold, fade out */
+        text_colour[0] = 1;                        /* [0x54c] */
+        load_text_page(&desc, (uint8_t) type, (uint8_t) index, 0, 0x10e, egg);
+        show_resource_loop(&desc, 0);              /* no frame count, so it holds
+                                                    * until a key */
         resource_release(&desc);
     }
 
-    /* Then the text page over it: 0x0b7c3 finds the type 0x48 block and renders
-     * it into a descriptor - egg_find_block, then three passes through 0x06d52,
-     * which is where the glyphs get drawn - and show_resource_loop displays that
-     * with no frame count, so it holds rather than timing out.
-     *
-     * The words are in the egg and decode with a -1 shift, which is the same
-     * cipher as the episode index. What is missing is 0x0b7c3 itself. */
-    if (load_text_page(&desc, (uint8_t) type, (uint8_t) index, 0, 0x10e, egg)) {
-        show_resource_loop(&desc, 0);
-        resource_release(&desc);
-    }
-
-    draw_flag = saved;
+    text_colour[1] = saved;
     set_buffer(default_buffer);
 }
 
@@ -458,13 +669,14 @@ void far egg_load_one(int16_t index, int16_t type, int16_t egg)
 void far egg_load_pass_0x48(void)
 {
     uint8_t scratch[0x302];
-    int16_t i, saved;
+    int16_t i;
+    uint8_t saved;
 
     set_buffer(&scratch[0]);               /* publish our own stack buffer */
-    saved = draw_flag;  draw_flag = 4;
+    saved = text_colour[1];  text_colour[1] = 4;
     for (i = 0; i < egg_file_count; i++)   /* [0x20ad] */
         egg_load_one(0, 0x48, i);          /* 0x0c0c2 */
-    draw_flag = saved;
+    text_colour[1] = saved;
     set_buffer(default_buffer);
 
     /* It also *draws* the version and credits page, through show_resource_loop,
@@ -876,6 +1088,9 @@ void far init(void)
         ((desc_t far *) init_objects[i])->h = 15;
         f_15388(init_objects[i]);
     }
+    font_load();                                   /* 0x143e9 - the one 'F'
+                                                    * block, before anything
+                                                    * has any words to draw */
     /* the remaining banners */
 
     sound_available = detect_hardware();           /* 0x14974: the sound check,
