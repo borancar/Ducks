@@ -1,0 +1,163 @@
+/* stubs.c - everything the reconstruction calls but has not read out yet.
+ *
+ * This exists so the thing links and runs. Each stub does the least that lets
+ * the caller carry on, and says what the real routine is: an image offset if we
+ * know it, and what it would have to do.
+ *
+ * The gameplay is deliberately absent. in_game_frame is a no-op that reports
+ * "the run ended", so game_main's inner loop falls straight through to the
+ * screens either side of it - which is what makes the menus testable on their
+ * own.
+ *
+ * When a routine here is read out, it moves to game.c or dos_io.c and comes off
+ * this list. The list is therefore also the to-do list, in dependency order:
+ * nothing above it can be trusted until the things it calls are real.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "dos.h"
+
+/* --------------------------------------------------------------- gameplay */
+
+/* 0x0d7ee. The in-game frame, four plane loops and the whole of the drawing
+ * pipeline. Stubbed: returning 0 tells game_main the run is over, which sends it
+ * down the lives-decrement path and back to a menu.
+ *
+ * This is the largest single unread function in the segment - 4,287 bytes - and
+ * two of the four native plane loops live inside it. */
+int16_t far in_game_frame(int16_t arg)
+{
+    (void) arg;
+    return 0;
+}
+
+/* 0x078d4. Retires an entity - a state change, not drawing, which is why the
+ * native declines rather than reimplementing it. */
+void far retire_entity(void far *e)     { (void) e; }
+
+/* Reads a sprite index out of an entity record. Types 1, 2 and 4 compute it
+ * arithmetically instead; 0x26 and 0x36 adjust y first. */
+int16_t far sprite_index_for(void far *e)  { (void) e; return 0; }
+
+int16_t previous_type;
+int16_t particle_count;
+particle_t far *particle_array;
+table_t far *sprite_table;
+viewport_t hud_clip;
+
+/* The four ending screens that have not been read out. cutscene_welcome_home and
+ * cutscene_photos are real, in game.c. */
+void far cutscene_rocket_space(void)      { }
+void far cutscene_rocket_landing(void)    { }
+void far cutscene_doorstep(void)          { }
+void far cutscene_night_monster(void)     { }
+
+/* ------------------------------------------------------------ the screens */
+
+/* 0x0c716. The one that matters next: it draws a menu from its descriptor, takes
+ * input, and returns a record whose action code game_main switches on. Every
+ * menu, submenu, confirmation and episode list is this function on different
+ * data - which is why the four submenu captures all had the same two stack
+ * frames.
+ *
+ * Stubbed to "the user chose QUIT" (action 4), so a run reaches the menu, exits
+ * cleanly and proves the loop around it works. */
+static record_t stub_record;
+record_t far *far run_screen(menu_t far *menu, void far *a, int16_t b)
+{
+    (void) menu; (void) a; (void) b;
+    stub_record.action = 4;
+    return &stub_record;
+}
+
+void far show_readme_section(uint8_t n)   { (void) n; }
+void far save_game_screen(void)           { }
+void far load_game_screen(void)           { }
+void far register_screen(void)            { }
+void far high_score_screen(void)          { }
+void far show_attract_screen(int16_t f)   { (void) f; }
+
+/* ------------------------------------------------------------- the eggs */
+
+void far *egg_stream;
+void far *current_buffer;
+
+int16_t far egg_find_block(uint8_t type, uint8_t index, int16_t arg)
+{
+    (void) type; (void) index; (void) arg;
+    return 0;                            /* nothing found: callers give up */
+}
+int16_t far egg_read_word(void far *s)    { (void) s; return 0; }
+uint8_t far egg_read_byte(void far *s)    { (void) s; return 0; }
+int16_t far alloc_image(void far *d, int16_t a, int16_t b, int16_t c, int16_t e)
+{
+    (void) d; (void) a; (void) b; (void) c; (void) e;
+    return 0;
+}
+void far egg_load_one(int16_t a, int16_t b, int16_t c)
+{
+    (void) a; (void) b; (void) c;
+}
+int16_t far load_demo(uint8_t index)      { (void) index; return 0; }
+int16_t far pick_random_demo(void)        { return 0; }
+void far resource_release(void far *d)    { (void) d; }
+void far set_buffer(void far *p)          { (void) p; }
+
+/* ------------------------------------------------------------- the sound */
+
+void far sound_play_guarded(int16_t id, int16_t mode) { (void) id; (void) mode; }
+void far release_sounds(void)             { }
+void far sound_init(int16_t rate)         { (void) rate; }
+
+/* --------------------------------------------------------------- startup */
+
+void far install_int23(void far *h)       { (void) h; }
+void far ctrl_break_handler(void)         { }
+int16_t far detect_hardware(void)         { return 0; }
+void far crt_exit(void)                   { }
+void far print_newline(void)              { }
+void far set_text_colour(int16_t c)       { (void) c; }
+
+/* ------------------------------------------------ unnamed, by image offset */
+
+void far f_0580b(void)                    { }
+void far f_04dcd(int16_t n)               { (void) n; }
+void far f_056f7(int16_t n)               { (void) n; }
+void far f_0615a(int16_t a, int16_t b, void far *c, int16_t d)
+{
+    (void) a; (void) b; (void) c; (void) d;
+}
+void far f_088b3(void far *p)             { (void) p; }
+void far f_088fa(void)                    { }
+void far f_09329(void)                    { }
+void far f_0b5cf(void far *img, void far *loc, int16_t a, void far *b,
+                 int16_t c, int16_t d)
+{
+    (void) img; (void) loc; (void) a; (void) b; (void) c; (void) d;
+}
+void far f_0becb(void)                    { }
+void far f_0f55c(void)                    { }
+void far f_0f8bd(void)                    { }
+int16_t far f_1102a(int16_t a)            { (void) a; return 0; }
+void far f_11bee(void far *name, int16_t egg) { (void) name; (void) egg; }
+void far f_147c5(int16_t a, int16_t b, int16_t c)
+{
+    (void) a; (void) b; (void) c;
+}
+int16_t far f_14e88(void far *fp)         { (void) fp; return 0; }
+void far f_15388(void far *o)             { (void) o; }
+void far loc(void)                        { }
+
+/* The palette the game keeps and the DAC loops upload, and the washed copy the
+ * blink alternates with. Both are DGROUP arrays in the original - 0x10e1 and
+ * 0x0dad - and both are filled by resource_load, which is why they are here and
+ * not in game.c: nothing writes them yet. */
+uint8_t palette_stored[768];
+uint8_t palette_washed[48];
+
+/* The palette builder at 0x0b0c5, which the fade calls every step. Without it
+ * palette_stored never changes, so the fade fades to and from whatever is there. */
+void far palette_build(void)              { }

@@ -20,56 +20,22 @@
  * episode-index.md for the index it reads. The root README for page_flip.
  */
 
-#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-/* ------------------------------------------------------------------ types */
+#include "dos.h"
 
-/* What run_screen (0x0c716) returns. Offsets are the ones the code indexes; the
- * record is longer than this and the rest has not been read. */
-typedef struct {
-    uint8_t       pad0[4];
-    menu_t far   *submenu;      /* +4/+6: where action 18 points the menu */
-    int16_t       action;       /* +8:    the action code, 1..20 */
-    uint8_t       pad1;         /* +0xa */
-    uint8_t       param;        /* +0xb:  episode ordinal, readme section, demo */
-} record_t;
+/* The blitters take the four-word rectangle, the clipping routines the 20-byte
+ * viewport. The original pushes a verbatim copy of whichever it means; here they
+ * are different types, so this says which conversion is happening. */
+static rect_t screen_rect(const viewport_t *v)
+{
+    rect_t r;
 
-/* The 20-byte viewport every drawing routine clips against. make_rect (0x0881d)
- * fills one from four numbers and derives the rest; the scroll pair is zeroed
- * there and set by whoever is scrolling.
- *
- * native.py calls +4 "plane base" and +8 "right", which is the same record read
- * from the drawing side: +4 is the left edge, which is added to a sprite's x and
- * therefore also shifts which plane its pixels land in, and +8 is compared against
- * an x that is already play-area-relative, so a width and a right edge agree.
- */
-typedef struct {
-    int16_t top;                /* +0x00 */
-    int16_t bottom;             /* +0x02 */
-    int16_t left;               /* +0x04 - the centring offset, added to sprite x */
-    int16_t right;              /* +0x06 */
-    int16_t width;              /* +0x08 - derived: right - left */
-    int16_t height;             /* +0x0a - derived: bottom - top */
-    int32_t scroll_x;           /* +0x0c - zeroed by make_rect */
-    int32_t scroll_y;           /* +0x10 */
-} viewport_t;
-
-/* Three per-button counters, copied about as a unit. The shape is inferred from
- * the copies being six bytes wide; whether the original spelled it as a struct or
- * as an array inside one is not recoverable. */
-typedef struct {
-    int16_t n[3];
-} counts_t;
-
-/* The episode index built at startup from MAIN.EGG; four 14-byte records. */
-typedef struct {
-    char far *name;             /* +0:    decoded, "TRAINING LEVELS" plainly */
-    int16_t   first;            /* +4:    first level */
-    int16_t   egg;              /* +6:    which egg file the levels are in */
-    int16_t   last;             /* +8:    last level */
-    int16_t   ordinal;          /* +0xa */
-    int16_t   terminator;       /* +0xc:  set only on the last record */
-} episode_t;
+    r.top = v->top;  r.bottom = v->bottom;  r.left = v->left;  r.right = v->right;
+    return r;
+}
 
 menu_t         main_menu;               /* ds:0x1916, what main passes in */
 menu_t         menu_1989;               /* after starting, saving or loading */
@@ -126,7 +92,6 @@ extern int16_t    video_mode;    /* 0x04fe */
 extern int16_t    screen_width;  /* 0x0538 */
 extern int16_t    screen_height; /* 0x053a */
 extern int16_t    screen_x0;     /* 0x053c - the centring offset */
-extern void far (*plot)();       /* 0x053e/0x0540 - the plotter for this mode */
 extern uint8_t    current_plane; /* 0x177d - written by set_plane */
 extern uint16_t   page_front;    /* 0x1725 - swapped by page_flip */
 extern uint16_t   page_back;     /* 0x1727 */
@@ -178,10 +143,9 @@ uint8_t    g_2038;               /* 0x2038 - how many demos to choose from;
 /* strings and buffers */
 char       save_name[];          /* 0x21a5 - the template "GAME-.SG" */
 char far  *settings_name;        /* 0x21d2 - "settings.dat" */
-uint8_t    g_28ff[];             /* 0x28ff - main's first splash source */
+uint8_t    g_28ff[1];            /* 0x28ff - main's first splash source */
 void far  *buf_200f, *buf_203b, *buf_203f, *buf_2043;  /* freed per demo */
-void far  *res;                  /* 0x1894:0 - the table the intro indexes
-                                         * for its splashes and labels */
+restable_t far *res;             /* 0x1894:0 - see dos.h */
 
 /* startup and settings */
 int16_t    sound_available;      /* 0x2104 - detect_hardware's result */
@@ -394,7 +358,7 @@ void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour)
         if (previous_type == 0x0f || previous_type == 0x10)
             outline_sprite(&index, x, y, sprite_table, &view);
 
-        draw_sprite(&index, x, y, sprite_table, &view, colour);
+        draw_sprite(&index, x, (int32_t) y, sprite_table, &view, colour);
 
         /* Type 5 with y <= 0 retires the entity through 0x78d4, which mutates
          * game state rather than drawing - the reason the native declines here
@@ -425,7 +389,7 @@ void far show_resource_loop(desc_t far *desc, int16_t frames)
         si -= (frames > 0);
         for (plane = 0; plane < 4; plane++) {
             set_plane(plane);
-            blit_rows(desc, viewport_screen);            /* 20 bytes by value */
+            blit_rows(desc, screen_rect(&viewport_screen), 0);
         }
         page_flip();
         palette_fade_step(0);
@@ -443,7 +407,7 @@ void far draw_number(int16_t value, int16_t x, int16_t y, viewport_t far *clip,
 
     for (i = digits - 1; i >= 0; i--) {    /* `dec ax` then count down */
         glyph = 0x71 + (value % 10);       /* idiv by 10, remainder + 0x71 */
-        draw_sprite(sprite_table, glyph, *clip, x + i * 12, y, flags);
+        draw_sprite(&glyph, x + i * 12, y, sprite_table, clip, (uint8_t) flags);
         value /= 10;
     }
 }
@@ -495,9 +459,10 @@ void far draw_number2(int16_t value, int16_t digits, int16_t x, int16_t y)
     int16_t i;
 
     for (i = digits - 1; i >= 0; i--) {
-        draw_sprite(sprite_table, 0x70, hud_clip, x + i * 12, y, 0);  /* the tile */
-        draw_sprite(sprite_table, 0x71 + (value % 10),
-                    hud_clip, x + i * 12, y, 0);                      /* over it */
+        int16_t tile = 0x70, glyph = 0x71 + (value % 10);
+
+        draw_sprite(&tile,  x + i * 12, y, sprite_table, &hud_clip, 0); /* behind */
+        draw_sprite(&glyph, x + i * 12, y, sprite_table, &hud_clip, 0); /* over it */
         value /= 10;
     }
 }
@@ -513,14 +478,14 @@ void far cutscene_welcome_home(void)
     desc_t  desc;
     int16_t page, plane;
 
-    if (!resource_load(&desc, 0x4d, 0x36, 0, 0, 0xff, 1))   /* the banner */
+    if (!resource_load(&desc, 0x4d, 0x36, 0, 0, 0xff, 1))
         return;
     clear_vram();
     palette_build();
     for (page = 0; page < 2; page++) {
         for (plane = 0; plane < 4; plane++) {
             set_plane(plane);
-            blit_rows(&desc, viewport_screen);
+            blit_rows(&desc, screen_rect(&viewport_screen), 0);
         }
         page_flip();
         if (page == 0)
@@ -549,7 +514,7 @@ void far cutscene_photos(void)
         for (page = 0; page < 2; page++) {
             for (plane = 0; plane < 4; plane++) {
                 set_plane(plane);
-                blit_rows(&desc, viewport_screen);
+                blit_rows(&desc, screen_rect(&viewport_screen), 0);
             }
             page_flip();
         }
@@ -569,11 +534,12 @@ void far cutscene_photos(void)
  */
 void far show_splash(void far *image, int16_t frames)
 {
-    viewport_t a, b;
+    viewport_t  a;
+    desc_t      b;
     int16_t    si = 0, di = frames, plane;
 
     make_rect(&a, 80, 104, screen_x0, screen_x0 + 320);   /* centred */
-    make_rect(&b, 320, 24);
+    b.w = 320;  b.h = 24;              /* the banner's own size */
     f_0615a(1, 0x53, &loc, 0xff);  f_056f7(0);
     f_0b5cf(image, &loc, 0x12, &b, 0, 0x1c);       /* decodes it into b */
     clear_vram();
@@ -585,7 +551,7 @@ void far show_splash(void far *image, int16_t frames)
         si++;
         for (plane = 0; plane < 4; plane++) {
             set_plane(plane);
-            blit_rows(&b, a, 0);
+            blit_rows(&b, screen_rect(&a), 0);
         }
         page_flip();
         palette_fade_step(0);
@@ -861,7 +827,8 @@ void far init(void)
     puts("DUCKS v1.21");                           /* DGROUP+0x2808 */
     for (i = 0; i < 3; i++) {                      /* three 22-byte objects */
         init_objects[i] = malloc(22);              /* [0x210c], stride 4 */
-        init_objects[i]->w = 316;  init_objects[i]->h = 15;
+        ((desc_t far *) init_objects[i])->w = 316;
+        ((desc_t far *) init_objects[i])->h = 15;
         f_15388(init_objects[i]);
     }
     /* the remaining banners */

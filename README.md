@@ -164,3 +164,28 @@ Thirteen types changed. The ones worth knowing:
 32-bit from "the offset two along is also touched", which made `page_front` and
 `page_back` - two adjacent words - into one long. Adjacency is not evidence; the
 `adc` is.
+
+## Building it
+
+```sh
+cd reconstruct && make        # -> ./ducks, against SDL3
+make run
+```
+
+`game.c` + `sdl_io.c` + `stubs.c`. Link `dos_io.c` in place of `sdl_io.c` and the
+same game would talk to a VGA - that swap is the whole point of the split, and the
+fact that it compiles either way is the first real check that the line was drawn
+in the right place.
+
+**It is not the game yet.** Most of the segment is unread, and `stubs.c` is the
+list of what: `run_screen` above all, since every menu is that one function on
+different data, and then the egg reader, which is what makes a resource exist at
+all. `in_game_frame` is deliberately a no-op returning "the run ended", so
+`game_main`'s inner loop falls through to the screens either side of it - the
+menus are what this is for at the moment, not the gameplay.
+
+What happens if you run it today: `init` spins until a key, then `game_main` calls
+`run_screen`, which is stubbed to answer QUIT, so it takes main's teardown path
+and exits. That is a full pass through the program's real control flow with almost
+none of its content - which is the point of getting it to link this early. The
+shape is testable before the pixels are.

@@ -25,11 +25,35 @@
  */
 
 #include <SDL3/SDL.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "dos.h"
 
-/* ------------------------------------------------------------------ state */
+/* ------------------------------------------------------------------ state
+ *
+ * The video state is the backend's, so this file defines it exactly as dos_io.c
+ * does - link one or the other, never both.
+ */
+
+int16_t    video_mode;
+int16_t    screen_width;
+int16_t    screen_height;
+int16_t    screen_x0;
+void far (*plot)(int16_t x, int16_t y, uint8_t colour);
+uint8_t    current_plane;
+uint16_t   page_front, page_back;
+int16_t    flip_phase;
+
+/* There are no ports here. The game still writes the DAC directly in one place -
+ * cutscene_photos flashes the screen white - so these exist to let that link, and
+ * the flash is a palette operation waiting to be written. */
+void outp(uint16_t port, uint8_t v)    { (void) port; (void) v; }
+void outpw(uint16_t port, uint16_t v)  { (void) port; (void) v; }
+uint8_t inp(uint16_t port)             { (void) port; return 0; }
+void far delay(int16_t ms)             { SDL_Delay((Uint32) ms); }
+
+/* ------------------------------------------------------------ private state */
 
 #define SCALE_DEFAULT 3          /* the window is this many times the mode */
 
@@ -298,11 +322,63 @@ void far blit_rows_masked(desc_t far *desc, rect_t rect, int16_t srcrow)
     }
 }
 
-/* TODO: compose_layer, compose_scroll, draw_sprite and outline_sprite are the
- * four that read the game's own data structures, so porting them is a transcription
- * of dos_io.c with the addressing changed and nothing else. Left until the
- * structures they walk - the row tables and the sprite descriptors - are settled,
- * because writing them twice against a guess is worse than writing them once. */
+/* dos_io.c's body with the addressing changed: linear instead of planar, and the
+ * clip arithmetic left exactly as it was. */
+void far draw_sprite(int16_t far *index, int16_t x, int32_t y,
+                     table_t far *table, viewport_t far *clip, uint8_t colour)
+{
+    sprite_t far *desc;
+    int16_t  w, h, src = 0, row_extra = 0, row, col;
+    int16_t  x_end, y_end, yy = (int16_t) y;
+
+    if (!table || !table->base)
+        return;
+    desc = &table->base[*index];
+    w = desc->w;  h = desc->h;
+
+    x  -= desc->ox;
+    yy += clip->top - desc->oy;
+    x_end = x + w;
+    y_end = yy + h;
+
+    if (x < 0)                        { row_extra -= x;  src -= x;  x = 0; }
+    else if (clip->right < x_end)     { row_extra += x_end - clip->right;
+                                        x_end = clip->right; }
+    if (clip->top > yy)               { src += (clip->top - yy) * w;
+                                        yy = clip->top; }
+    else if (clip->bottom < y_end)    { y_end = clip->bottom; }
+
+    if (x_end <= x || y_end <= yy)
+        return;
+
+    for (row = yy; row < y_end; row++) {
+        for (col = x; col < x_end; col++)
+            if ((col & 3) == current_plane) {
+                uint8_t px = desc->pixels[src + (col - x)];
+                if (px)
+                    fb_back[(size_t) row * screen_width + col] =
+                        (uint8_t) (px + colour);
+            }
+        src += (x_end - x) + row_extra;
+    }
+}
+
+void far outline_sprite(int16_t far *index, int16_t x, int16_t y,
+                        table_t far *table, viewport_t far *clip)
+{
+    (void) index; (void) x; (void) y; (void) table; (void) clip;
+    /* TODO: four colour-0 pixels around each non-zero one, through `plot`. Left
+     * until a sprite is actually on screen to check it against. */
+}
+
+/* TODO: the two compositors read the game's row tables, which resource_load has
+ * not been read far enough to fill in. No-ops until it has - a menu draws through
+ * blit_rows, not through these, so the menus do not need them. */
+void far compose_layer(void) { }
+void far compose_scroll(int16_t scroll_x, int16_t scroll_y)
+{
+    (void) scroll_x; (void) scroll_y;
+}
 
 /* ------------------------------------------------------------------- mouse
  *
@@ -323,6 +399,25 @@ void sdl_pump_input(void)
 
     while (SDL_PollEvent(&e)) {
         switch (e.type) {
+        case SDL_EVENT_QUIT:
+            /* The original has no such thing - it leaves through QUIT DUCKS and
+             * then main's teardown. Closing the window is the one input DOS could
+             * not give it, so it is handled here rather than pretended away. */
+            SDL_Quit();
+            exit(0);
+            break;
+        case SDL_EVENT_KEY_DOWN:
+            /* last_key is what init spins on and what every fade tests to cut a
+             * splash short. The original holds the ASCII of the key; anything
+             * without one still has to register, so unprintables land as 1. */
+            if (e.key.key == SDLK_ESCAPE)       last_key = 0x1b;
+            else if (e.key.key == SDLK_RETURN)  last_key = 0x0d;
+            else if (e.key.key == SDLK_SPACE)   last_key = 0x20;
+            else if (e.key.key == SDLK_UP)      last_key = 0x148;
+            else if (e.key.key == SDLK_DOWN)    last_key = 0x150;
+            else if (e.key.key < 0x80)          last_key = (int16_t) e.key.key;
+            else                                last_key = 1;
+            break;
         case SDL_EVENT_MOUSE_MOTION:
             rel_x += (int16_t) e.motion.xrel;
             rel_y += (int16_t) e.motion.yrel;
@@ -343,6 +438,10 @@ void sdl_pump_input(void)
 
 void far mouse_motion(int16_t far *dx, int16_t far *dy)
 {
+    /* input_poll calls this first, every poll, so it is where the queue gets
+     * drained. The original had an interrupt doing it; here it has to be pulled. */
+    sdl_pump_input();
+
     *dx = rel_x;                          /* INT 33h 0x0b returns and clears */
     *dy = rel_y;
     rel_x = rel_y = 0;
