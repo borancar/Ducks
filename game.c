@@ -34,6 +34,26 @@ typedef struct {
     uint8_t       param;        /* +0xb:  episode ordinal, readme section, demo */
 } record_t;
 
+/* The 20-byte viewport every drawing routine clips against. make_rect (0x0881d)
+ * fills one from four numbers and derives the rest; the scroll pair is zeroed
+ * there and set by whoever is scrolling.
+ *
+ * native.py calls +4 "plane base" and +8 "right", which is the same record read
+ * from the drawing side: +4 is the left edge, which is added to a sprite's x and
+ * therefore also shifts which plane its pixels land in, and +8 is compared against
+ * an x that is already play-area-relative, so a width and a right edge agree.
+ */
+typedef struct {
+    int16_t top;                /* +0x00 */
+    int16_t bottom;             /* +0x02 */
+    int16_t left;               /* +0x04 - the centring offset, added to sprite x */
+    int16_t right;              /* +0x06 */
+    int16_t width;              /* +0x08 - derived: right - left */
+    int16_t height;             /* +0x0a - derived: bottom - top */
+    int32_t scroll_x;           /* +0x0c - zeroed by make_rect */
+    int32_t scroll_y;           /* +0x10 */
+} viewport_t;
+
 /* Three per-button counters, copied about as a unit. The shape is inferred from
  * the copies being six bytes wide; whether the original spelled it as a struct or
  * as an array inside one is not recoverable. */
@@ -232,6 +252,93 @@ void far input_poll(int16_t w, int16_t h)
     if (mouse_x < 0)                mouse_x = 0;
     if (mouse_y > (int32_t) h - 1)  mouse_y = h - 1;
     if (mouse_y < 0)                mouse_y = 0;
+}
+
+/* ------------------------------------------------------- 0x0881d: make_rect
+ *
+ * Fill a viewport from its four edges. The width and height are derived rather
+ * than passed, and the scroll pair is zeroed - so a caller that wants a scrolling
+ * viewport builds it here and sets the scroll afterwards.
+ *
+ * Kept in game.c rather than dos_io.c: it is arithmetic on a struct and touches
+ * no hardware. A port recompiles it unchanged.
+ */
+void far make_rect(viewport_t far *r, int16_t top, int16_t bottom,
+                   int16_t left, int16_t right)
+{
+    r->top      = top;
+    r->bottom   = bottom;
+    r->left     = left;
+    r->right    = right;
+    r->scroll_x = 0;
+    r->scroll_y = 0;
+    r->width    = right - left;      /* 0x0886b: cx - dx */
+    r->height   = bottom - top;      /* 0x08876: di - si */
+}
+
+/* ------------------------------------------------------ 0x0ab09: particles
+ *
+ * Walks an array of 16-byte records and plots each through the pointer at
+ * [0x53e] - plot_pixel, or its 360-wide twin. Called once per plane, so it offers
+ * every particle four times and the plotter keeps the quarter whose x & 3 matches.
+ *
+ * That is why plot_pixel saw 627,260 calls a session for ~157,000 written bytes,
+ * and why replacing plot_pixel was the wrong level to work at: there is no work to
+ * batch inside it. Replacing this loop turns ~205 emulated iterations per plane
+ * into one pass.
+ */
+void far particles(void)
+{
+    int16_t i;
+
+    for (i = 0; i < particle_count; i++) {         /* [0x18cd] */
+        particle_t far *p = &particle_array[i];    /* [0x18c1], 16-byte records */
+        plot(p->x >> 3, p->y >> 3, p->colour);     /* 1/8-pixel fixed point */
+    }
+}
+
+/* -------------------------------------------------- 0x0aba5: draw_entities
+ *
+ * One level above draw_sprite: walk a scene's entity array, work out which sprite
+ * each entity shows, and blit it. Called once per plane like everything else in
+ * the frame loop, which is where its ~34,000 calls a session come from.
+ *
+ *   scene   +2 entity count, +8 far pointer to the array
+ *   view    the 20-byte viewport by value; its address is what draw_sprite gets
+ *           as its clip rectangle
+ *   colour  offset added to every pixel drawn
+ *
+ * Most entity types read their sprite index out of the record; types 1, 2 and 4
+ * compute it arithmetically, and 0x26 and 0x36 adjust y first.
+ */
+void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour)
+{
+    int16_t i;
+
+    for (i = 0; i < scene->count; i++) {
+        entity_t far *e = &scene->entities[i];     /* 0x29-byte records */
+        int16_t index = sprite_index_for(e);       /* type-dependent */
+        int16_t x = e->x - view.scroll_x;
+        int16_t y = e->y - view.scroll_y;
+
+        /* An entity following one of type 0x0f or 0x10 is haloed as well as
+         * drawn. This is the path the native declines on rather than
+         * reimplementing, and it is what most declines are: a scene usually holds
+         * one highlighted entity, so the entity after it takes it. */
+        if (previous_type == 0x0f || previous_type == 0x10)
+            outline_sprite(&index, x, y, sprite_table, &view);
+
+        draw_sprite(&index, x, y, sprite_table, &view, colour);
+
+        /* Type 5 with y <= 0 retires the entity through 0x78d4, which mutates
+         * game state rather than drawing - the reason the native declines here
+         * too. Verified by driving the guest's own code on synthetic input, since
+         * a balloon floating off the top is not a state you can ask for. */
+        if (e->type == 5 && y <= 0)
+            retire_entity(e);                      /* 0x078d4 */
+
+        previous_type = e->type;
+    }
 }
 
 /* ---------------------------------------------- 0x0b52f: show_resource_loop
