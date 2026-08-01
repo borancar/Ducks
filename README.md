@@ -75,7 +75,7 @@ worth having as source.
 | file | contents so far |
 | --- | --- |
 | [`game.c`](game.c) | nineteen functions: `close_egg_files`, `input_poll`, `particles`, `draw_entities`, `show_resource_loop`, `draw_number`, `egg_load_pass_0x48`, `show_resource`, `draw_number2`, `cutscene_welcome_home`, `cutscene_photos`, `show_splash`, `episode_end_gate`, `menu_screen_driver`, `game_main`, `scan_save_slots`, `save_settings`, `init`, `main` |
-| [`dos_io.c`](dos_io.c) | twenty functions: mode, planes, DAC, page flip, the three INT 33h wrappers, and every drawing primitive the native port replaced - `clear_vram`, `plot_pixel` and its stride-90 twin, `palette_fade_step`, `blit_rows`, `blit_rows_masked`, `compose_layer`, `compose_scroll`, `draw_sprite`, `outline_sprite`. No TODOs left in this file |
+| [`dos_io.c`](dos_io.c) | nineteen functions: `set_bios_mode`, mode, planes, DAC, page flip, the three INT 33h wrappers, and every drawing primitive the native port replaced - `clear_vram`, `plot_pixel` and its stride-90 twin, `palette_fade_step`, `blit_rows`, `blit_rows_masked`, `compose_layer`, `compose_scroll`, `draw_sprite`, `outline_sprite`. No TODOs left in this file |
 
 `game.c` keeps its functions in **address order**, which within a module is the
 order the compiler emits them and therefore the order they were defined in - a
