@@ -72,13 +72,17 @@ worth having as source.
 
 ## Files
 
-| file | segment | contents so far |
-| --- | --- | --- |
-| [`game.c`](game.c) | `0x04ca` | seventeen functions: `page_flip`, `close_egg_files`, `input_poll`, `show_resource_loop`, `egg_load_pass_0x48`, `show_resource`, `cutscene_welcome_home`, `cutscene_photos`, `show_splash`, `episode_end_gate`, `menu_screen_driver`, `set_mode_x`, `game_main`, `scan_save_slots`, `save_settings`, `init`, `main` |
+| file | contents so far |
+| --- | --- |
+| [`game.c`](game.c) | `close_egg_files`, `input_poll`, `show_resource_loop`, `egg_load_pass_0x48`, `show_resource`, `cutscene_welcome_home`, `cutscene_photos`, `show_splash`, `episode_end_gate`, `menu_screen_driver`, `game_main`, `scan_save_slots`, `save_settings`, `init`, `main` |
+| [`dos_io.c`](dos_io.c) | `set_mode_x`, `set_plane`, `dac_set_black`, `palette_upload`, `page_flip`, `mouse_motion`, `mouse_presses`, `mouse_releases`, and a list of the ten primitives still to be read out |
 
-Functions appear in address order, which is the order the compiler emits them
-within a module - so the order here is also the order they were defined in the
-source, if they shared one.
+`game.c` keeps its functions in **address order**, which within a module is the
+order the compiler emits them and therefore the order they were defined in - a
+free piece of information, so it is worth not throwing away. `dos_io.c` is grouped
+**by device** instead: mode, planes, DAC, flip, mouse. The two files interleave in
+the address space, which is a reminder that this split is ours and the original
+had one module here, or several we cannot see.
 
 Still missing from this segment and worth adding as they are read: the in-game
 frame at `0x0d7ee` and the four plane loops inside it, the drawing routines
