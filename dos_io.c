@@ -271,17 +271,72 @@ void far blit_rows(desc_t far *desc, viewport_t clip, int16_t flags)
     }
 }
 
-/* 0x063d6. One sprite, again filtered to the current plane. The sprite table is
- * indexed with a stride of 0x0e, and the clip rectangle arrives by value.
+/* 0x063d6. The clipped sprite blitter, and the busiest routine in the game -
+ * draw_entities alone calls it ~34,000 times a session.
  *
- * TODO 0x06417-0x065f0: the row loop, the mask handling and the shadow path -
- * the last of which is only reached when an entity of type 0x0f or 0x10 precedes
- * another, and has never been observed to run.
+ * A 14-byte descriptor gives width, height, origin and a far pointer to the
+ * pixels. `colour` is added to every pixel written, which is how the game
+ * highlights a sprite. Zero is transparent.
+ *
+ * Like everything else here it writes only columns whose x & 3 matches the
+ * current plane, so the game calls it four times per sprite - four times the loop
+ * iterations for one sprite's worth of pixels. That multiplication is the whole
+ * argument for flat drawing.
  */
-void far draw_sprite(sprite_t far *table, int16_t index, viewport_t clip,
-                     int16_t x, int16_t y, int16_t flags)
+void far draw_sprite(int16_t far *index, int16_t x, int32_t y,
+                     table_t far *table, viewport_t far *clip, uint8_t colour)
 {
-    /* TODO: read out. */
+    sprite_t far *desc = &table->base[*index];      /* stride 14 */
+    int16_t  w = desc->w, h = desc->h;
+    uint8_t far *pixels = desc->pixels;
+    int16_t  src = 0, row_extra = 0, row, col, stride;
+    int16_t  x_end, y_end;
+    uint8_t far *dst;
+
+    x -= desc->ox;                                  /* the sprite's origin */
+    y += clip->top - desc->oy;
+    x_end = x + w;
+    y_end = y + h;
+
+    if (x < 0) {                                    /* clip left: skip into the row */
+        row_extra -= x;
+        src       -= x;
+        x = 0;
+    } else if (clip->right < x_end) {               /* clip right */
+        row_extra += x_end - clip->right;
+        x_end = clip->right;
+    }
+    if (clip->top > y) {                            /* clip top: skip whole rows */
+        src += (clip->top - y) * w;
+        y = clip->top;
+    } else if (clip->bottom < y_end) {
+        y_end = clip->bottom;
+    }
+    if (x_end <= x || y_end <= y)                   /* nothing left of it */
+        return;
+
+    stride = video_mode ? 90 : 80;
+    dst = &((uint8_t far *) vram)[page_back
+                                  + (video_mode ? current_plane : 0)];
+
+    for (row = y; row < y_end; row++) {
+        for (col = x; col < x_end; col++)
+            if ((col & 3) == current_plane) {       /* three calls in four skip */
+                uint8_t px = pixels[src + (col - x)];
+                if (px)                             /* zero is transparent */
+                    dst[row * stride + (col >> 2)] = px + colour;
+            }
+        src += (x_end - x) + row_extra;             /* next source row */
+    }
+
+    /* The clipping arithmetic above is native.py's, byte-compared against this
+     * routine on every call under --verify. Two details are worth keeping when
+     * porting: `row_extra` exists because a horizontally clipped row still has to
+     * advance the source by the full width, and in the wide mode the plane index
+     * is added to the destination base, which is not something the 320 path does.
+     *
+     * TODO: the shadow path, reached only when an entity of type 0x0f or 0x10
+     * precedes another, has never been observed to run and is not written here. */
 }
 
 /* 0x0bb3b. A number as sprites: glyph 0x71 + digit from the same table the
