@@ -63,15 +63,26 @@ menu_t         menu_1c3b;               /* after a resolution change */
  * pointer, anything indexed - so "no write found" below is a gap in the scan and
  * not evidence of an external owner. game_speed is the clearest example: nothing
  * matched, yet the GAME SPEED slider was watched writing it.
+ *
+ * Types come from how the code reads each one, never from the literals it stores:
+ * `cbw`/`cwd` or a signed jump after a compare means signed, a zeroed high half or
+ * an unsigned jump means unsigned, and the width comes from the access size, with
+ * `les`/`lds` marking a far pointer and an `adc` marking 32-bit arithmetic. The
+ * WIDTH below is evidence-backed throughout. SIGNEDNESS is only established where
+ * the comment says so - about a third of them. The rest are int16_t because that
+ * is what a Turbo C++ `int` is, and that is a default rather than a finding.
  */
 
 /* video and the flip */
 int16_t    video_mode;           /* 0x04fe - what set_mode_x is given */
-int16_t    game_speed;           /* 0x1fd4 - 0..0x1f, higher is faster */
+uint8_t    game_speed;           /* 0x1fd4 - 0..0x1f, higher is faster; read
+                                  * as `mov al / mov ah, 0`, so unsigned */
 uint16_t   page_front, page_back;/* 0x1725, 0x1727 - swapped per flip */
 int16_t    flip_phase;           /* 0x0d61 - 0..9 */
-int16_t    current_plane;        /* 0x177d - written by set_plane */
-int16_t    fade_level;           /* 0x1798 - 0..15, scales the palette */
+uint8_t    current_plane;        /* 0x177d - written by set_plane; high half
+                                  * zeroed on every read */
+int16_t    fade_level;           /* 0x1798 - 0..15, scales the palette. A word,
+                                  * but also read a byte at a time in places */
 int8_t     fade_direction;       /* 0x179a - +1 or -1; palette_fade_step reads it
                                   * with `mov al / cbw / add [fade_level], ax`, and
                                   * that cbw is what makes it signed rather than
@@ -83,7 +94,10 @@ void far  *default_buffer;       /* ds:0x13f1 - what set_buffer restores */
 int16_t    g_53c;                /* 0x053c - show_splash's x origin */
 
 /* input */
-int32_t    mouse_x, mouse_y;     /* 0x18d3, 0x18d7 - 32-bit, accumulated */
+uint32_t   mouse_x, mouse_y;     /* 0x18d3, 0x18d7 - 32-bit (add/adc pairs),
+                                  * and compared with `ja`, so unsigned: a
+                                  * negative delta wraps high and the same
+                                  * clamp catches it */
 int16_t    mouse_dx, mouse_dy;   /* 0x18db, 0x18dd - one poll's motion */
 int16_t    button_map_a;         /* 0x20e4 - which INT 33h button is which */
 int16_t    button_map_b;         /* 0x20e6 */
@@ -91,7 +105,8 @@ int16_t    button_map_c;         /* 0x20e8 */
 int16_t    button_a_down;        /* 0x18df */
 int16_t    button_b_down;        /* 0x18e7 */
 int16_t    g_18e5;               /* 0x18e5 - any button; escapes the fades */
-int16_t    last_key;             /* 0x18f6 - the ASCII of the last key */
+int16_t    last_key;             /* 0x18f6 - a word holding the ASCII of the
+                                  * last key; often read as just the low byte */
 
 /* the egg files and the indexes built from them */
 egg_file_t far *egg_files;       /* 0x20a9 - stride 0x17 */
@@ -101,17 +116,21 @@ int16_t         episode_count;   /* 0x20c2 */
 int16_t         draw_flag;       /* 0x054d - set to 4 around a loader pass */
 
 /* progress and the shareware gate */
-int16_t    level_attempted;      /* 0x2032 - the level about to be played */
+int16_t    level_attempted;      /* 0x2032 - the level about to be played. A
+                                  * word; some sites read only its low byte */
 int16_t    episode_egg_index;    /* 0x0094 - which egg the episode is in */
-int16_t    shareware_limit;      /* 0x054a - per egg, not a constant */
+uint8_t    shareware_limit;      /* 0x054a - per egg, not a constant; read as
+                                  * a byte with the high half zeroed */
 int16_t    registered;           /* 0x0548 */
 int16_t    lives;                /* 0x2034 - decremented on a lost run */
-int16_t    max_save_value;       /* 0x2055 - scan_save_slots' only output */
+uint16_t   max_save_value;       /* 0x2055 - scan_save_slots' only output;
+                                  * compared with `jbe` */
 
 /* the menu and the attract cycle */
 int16_t    attract_choice;       /* 0x21ae - 0 demos, non-zero shows a screen */
 int16_t    menu_idle_suppress;   /* 0x2177 - non-zero holds the menu still */
-int16_t    g_2038;               /* 0x2038 - how many demos to choose from */
+uint8_t    g_2038;               /* 0x2038 - how many demos to choose from;
+                                  * byte, high half zeroed */
 
 /* strings and buffers */
 char       save_name[];          /* 0x21a5 - the template "GAME-.SG" */
@@ -128,8 +147,11 @@ int16_t    settings[];           /* 0x04f4 - the word array save_settings
                                          * writes; settings[0] gates sound */
 
 /* used but not identified */
-int16_t  g_509, g_50b, g_18f5, g_1fd3, g_1ffa, g_1ffc, g_1ffe;
-int16_t  g_201c, g_2036, g_21a3;
+int16_t  g_509, g_50b, g_1ffa, g_1ffc, g_1ffe;
+uint8_t  g_18f5, g_1fd3;        /* both byte-sized on every access */
+int16_t  g_201c;                /* compared with jle, so signed */
+uint16_t g_2036;                /* compared with jb, so unsigned */
+int16_t  g_21a3;
 
 /* ------------------------------------------------------- 0x04d4b: page_flip
  *

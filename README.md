@@ -99,15 +99,32 @@ screens, `run_screen` (`0x0c716`) itself, and `high_score_screen`.
   after a load is what makes it signed, `mov ah, 0` what makes it unsigned, and the
   store width what gives the size. Put the evidence in the comment.
 
-## Open: every type in the globals block needs this check
+## The type pass, done 2026-08-01
 
-Only two have had it - `fade_direction`, which turned out to be `int8_t` stepping
-the fade by -1 and not `uint8_t` holding 0xff, and `fade_start_colour`, which is a
-word and had been typed as a byte. **The rest were typed by eye** and are exactly
-as likely to be wrong.
+Every global in `game.c` was checked against how the code reads it, by
+disassembling each Borland prologue to its `ret` and collecting, per DGROUP
+offset: the access widths, `les`/`lds` (a far pointer), `adc` (32-bit
+arithmetic), `cbw`/`cwd` and signed jumps (signed), zeroed high halves and
+unsigned jumps (unsigned).
 
-The check per variable is mechanical: find the reads, look for `cbw`/`cwd` (signed)
-or a zeroed high half (unsigned), and take the size from the store width. Worth
-doing as one pass over the block rather than one variable at a time, and worth
-recording signedness in `symbols.py` as it goes, so the control socket's
-`read d+0x…` agrees with the reconstruction.
+**Width is now evidence-backed throughout. Signedness is established for about a
+third**; the rest are `int16_t` because that is what a Turbo C++ `int` is, which
+is a default and not a finding, and the block comment says so.
+
+Thirteen types changed. The ones worth knowing:
+
+- `mouse_x`, `mouse_y` are **`uint32_t`**, not signed: 32-bit from the `add`/`adc`
+  pairs, and compared with `ja`. A negative delta wraps high and the same clamp
+  catches it, which is why the position never goes below zero without an explicit
+  test for it.
+- `game_speed`, `current_plane`, `shareware_limit`, `g_1fd3`, `g_2038`, `g_18f5`
+  are byte-sized with the high half zeroed on every read - `uint8_t`.
+- `max_save_value` and `g_2036` are compared with `jbe`/`jb`: unsigned.
+- `g_201c` is compared with `jle`: signed.
+- `fade_level`, `level_attempted` and `last_key` are words that some sites read a
+  byte at a time, which is worth knowing before assuming a 16-bit access.
+
+**The first attempt at this was wrong and is worth remembering.** It inferred
+32-bit from "the offset two along is also touched", which made `page_front` and
+`page_back` - two adjacent words - into one long. Adjacency is not evidence; the
+`adc` is.
