@@ -92,16 +92,56 @@ to be attempted, and `main_menu` writes it from the chosen episode record's
 *first* level at `0x137a7`, so a poke only sticks once you are inside the inner
 loop - on the screen offering the next level, not on the episode select. From
 there `write d+0x2032 50 00` over the control socket is enough, and
-`snapshots/snap010.snap` holds the result. Two cautions, both observed: the idle
-attract demo plays levels and carries the counter with it, so a poke left sitting
-drifts; and level 80 is the first state ever to run the background warp, which is
-its own unfinished business (see the root README).
+`snapshots/level80-ducking-hell.snap` holds the result.
 
-**The `0x0fc8b` loose end.** It is the only one of the five that never reached
-its own return, in four separate runs — the others exit after a fixed hold. It
-either waits on something the synthetic call does not supply, or its hold counts
-from state the real sequence sets first. A breakpoint on its loop back-edge would
-say which.
+Two cautions. **A poke left sitting drifts**, because the attract demo plays real
+levels and takes the counter with it: a menu capture replayed headlessly for 700
+frames, with nobody at the keyboard, ran 2057 in-game frames and moved `[0x2032]`
+from 0 to 26. So poke it immediately before starting the level and read it back.
+(First written here as a guess from a counter that moved by two while a person
+was also playing, which proved nothing either way; the replay is what settles
+it.) And level 80 is the first state ever to run the background warp, which is
+its own unfinished business - see the root README.
+
+## Watched for real, 2026-08-01
+
+Boran finished level 80 and the sequence played, exactly as the gate predicted.
+The run in full, captured as it went:
+
+| snapshot | screen |
+| --- | --- |
+| `level80-late` | level 80 in play, four ducks left |
+| `ending-bonus` | **BONUS SCREEN** - time, survivors, lives, total, score |
+| `ending-completed` | **EPISODE COMPLETED!** |
+| `ending-landing` | `cutscene_rocket_landing`, running |
+| `ending-highscore` | **NEW HIGH SCORE! ENTER YOUR NAME**, after the photographs |
+
+That last one puts a screen against `0x1396e call 0x100f4`, the call immediately
+after `cutscene_photos` and the only thing between it and the fade to black. That
+is position, not proof - the trap this project keeps falling into - so `0x100f4`
+stays unnamed until a breakpoint on it fires with that screen up.
+
+`EPISODE COMPLETED!` is `episode_end_gate`'s own splash - the same slot that
+showed "That's enough training" for `TRAINING LEVELS`, this time from the record
+whose flag is set. So the whole chain is now observed rather than read: last
+level -> bonus -> the episode's splash -> flag 1 -> the block.
+
+**The driven screens are not the whole picture.** `snap023` has **two ducks
+standing on the grass**, waving, beside the rockets; `show_cutscene.py` draws the
+same screen with rockets alone. The 12 `draw_sprite` calls place characters from
+state the real sequence sets up before calling, and a synthetic `push cs; call
+near` supplies none of it. The tool is still the way to *see* these screens
+without 80 levels, but it shows a backdrop, not the finished frame - and anything
+claimed about their content should come from a real run.
+
+That also answers the loose end below, or nearly: `0x0fc8b` never reached its own
+return under the synthetic call, in four separate runs, while the others exit
+after a fixed hold. Animating against state that was never set up is a better
+explanation than a missing input, and a real capture of it running would settle
+it.
+
+**The `0x0fc8b` loose end.** A breakpoint on its loop back-edge, against
+`snap023` rather than a driven call, is the thing to try.
 
 ## Seeing them: [`show_cutscene.py`](../../show_cutscene.py)
 

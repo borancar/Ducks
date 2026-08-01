@@ -594,7 +594,7 @@ code for it: when `[0x2022]` is set, each row's x displacement comes from a
 of `DUCKING HELL` - which is why every session before that reported
 `background-warp path: 0 calls`. The warning fired as designed, `[0x2022]` reads
 1, and the table at `[0x179f]` is populated with start phase `0x41` and step 1.
-`snapshots/snap010.snap` is captured in that state, so it is now reproducible
+`snapshots/level80-ducking-hell.snap` is captured in that state, so it is now reproducible
 rather than hypothetical.
 
 **It looked right on screen and that is all that is established.** No

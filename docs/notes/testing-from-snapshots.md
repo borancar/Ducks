@@ -141,7 +141,12 @@ missed.
 | `click-snow` | in play, snow-and-hedge level, waiting for a mouse click |
 | `click-cave-1/2/3` | the same cave moment at frames 2249, 2256 and 2266 |
 | `teleporter-level` | start of the red-brick-and-snow level with a teleporter |
-| `snap010` | **level 80**, the last of `DUCKING HELL`, mid-play. Reached by poking `[0x2032]`, and the first state ever to run the background warp - `[0x2022]` is 1. Finishing it should open the homecoming gate. Wants a proper name |
+| `level80-ducking-hell` | **level 80**, the last level in the game, mid-play. Reached by poking `[0x2032]` rather than by playing 79 levels, and the first state ever to run the background warp - `[0x2022]` is 1 |
+| `level80-late` | the same level near its end, four ducks left |
+| `ending-bonus` | the bonus screen after level 80 - time, survivors, lives, total, score |
+| `ending-completed` | `EPISODE COMPLETED!` - `episode_end_gate`'s own splash, from the record whose flag is set |
+| `ending-landing` | `cutscene_rocket_landing` **running for real**, ducks on the grass. The only capture of a homecoming screen as the game draws it, rather than driven by `show_cutscene.py` |
+| `ending-highscore` | `NEW HIGH SCORE! ENTER YOUR NAME`, after the photographs |
 
 The five `click-*` states are all mid-play, stopped at the point where the game
 is waiting for a mouse click. They are the states to reach for when a native

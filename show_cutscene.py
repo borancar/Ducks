@@ -20,6 +20,12 @@ is also where this stops - run past it and the guest carries on through the rest
 of the sequence and draws the *next* screen, which is what made four of the five
 first appear to be the same picture.
 
+**What this shows is a backdrop, not the finished frame.** Watched for real, the
+landing screen has ducks standing on the grass waving; driven from here it draws
+the rockets alone, because the sprites are placed from state the real sequence
+sets up before calling, and two words on the stack supply none of it. Good enough
+to see what a screen *is*; not evidence about what is on it.
+
 `--chunk` is small for a reason. A display frame is a fixed instruction budget,
 not a game frame: at the default, 0x0f5b1's entire screen ran inside 21 of them
 and every capture came back black. Pacing does not fix that - it only inserts
