@@ -62,8 +62,10 @@ match it plays a sound and shows that episode's own splash. Then:
 the last record**. So the gate answers "was that the final episode?", not "did an
 episode end", and only `DUCKING HELL` (51-80, flag 1) passes it.
 
-Measured, rather than read: `snapshots/snap005.snap` is the end of the training
-episode. Restored, `[0x2032]` reads **10** — `TRAINING LEVELS` ends at 10 — and
+Measured, rather than read, on a capture of the end of the training episode -
+one taken before that state had a name, and since lost to the numbering, so it is
+recorded here rather than kept. Restored, `[0x2032]` read **10** —
+`TRAINING LEVELS` ends at 10 — and
 `[0x94]` reads 0, so the search matches record 0 and the splash is drawn. A
 breakpoint on `0x13913` then catches **`AX = 0x0000`**, and the jump at `0x13917`
 skips the sequence. The stack at that moment ran

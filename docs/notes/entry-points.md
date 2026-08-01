@@ -335,8 +335,9 @@ same routine written twice.
 ## 0x102d7 is show_splash, and it holds another plane loop
 
 **Read out 2026-07-29** by breakpointing its entry on a cold boot, then reading
-the body over the socket. `snapshots/snap001.snap` is captured at that entry, so
-this state is reachable without playing to it.
+the body over the socket. It was captured at that entry as `snap001.snap`, which
+a later session's numbering has since reused - a numbered capture is not a
+citation, and anything worth referring to needs a name.
 
 ```c
 void far show_splash(void far *image /* ds:0x28ff */, int frames /* 100 */)
@@ -384,9 +385,9 @@ times, then `page_flip`. It draws the splash screens and still runs on the
 emulated CPU. It would not appear in any profile taken during a level, which is
 the likely reason it was missed.
 
-Confirmed from the snapshot rather than from the listing: replaying
-`snap001.snap` for five frames records exactly **4 `set_plane`, 4 `blit_rows`,
-one `page_flip`** — one iteration of this loop and nothing else drawing.
+Confirmed from the snapshot rather than from the listing: replaying that capture
+for five frames records exactly **4 `set_plane`, 4 `blit_rows`, one
+`page_flip`** — one iteration of this loop and nothing else drawing.
 
 **It was written up as "the fifth" and that was wrong too.** `0x0b52f` above is
 another, found hours later, and a census of calls reaching `set_plane` finds

@@ -164,6 +164,11 @@ rather than by playing.
 Each carries its own description, `elapsed` and `chain4`, and each was verified
 byte-for-byte after being renamed.
 
+**Name a capture the moment it is worth citing.** `snapNNN` is allocated from the
+first free slot, so deleting or renaming one frees its number for the next `F2` -
+and two notes ended up pointing at files that had since been overwritten with
+something else entirely. A numbered capture is scratch; a named one is evidence.
+
 **To look at a captured state, render it with `--frames 0`.** Anything else runs the
 game on from there, and unpaced even one display frame is dozens of game frames -
 which is how two perfectly good bonus-screen captures got reported as black.
