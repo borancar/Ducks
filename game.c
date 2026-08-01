@@ -7,10 +7,11 @@
  * the disassembly. Names ending in a comment saying "unnamed" are ours only in
  * the sense that we have not identified the routine.
  *
- * One file per code segment, because that is the division the binary actually
- * proves - 0x04ca0-0x14620 is a full 64 KB and holds main, the menus, the
- * cutscenes and the drawing. Whether the original author split it across several
- * .c files cannot be recovered from far calls; see README.md.
+ * The game's own logic. The hardware and DOS primitives it calls - set_plane,
+ * page_flip, the blitters, the mouse wrappers - are in dos_io.c, split out for
+ * porting. Both files are the same code segment (0x04ca): that boundary is ours,
+ * chosen for what a port must replace, not something the binary proves. See
+ * README.md.
  *
  * Functions are in address order, which within a module is source order.
  *
@@ -165,24 +166,6 @@ uint8_t  g_18f5, g_1fd3;        /* both byte-sized on every access */
 int16_t  g_201c;                /* compared with jle, so signed */
 uint16_t g_2036;                /* compared with jb, so unsigned */
 int16_t  g_21a3;
-
-/* ------------------------------------------------------- 0x04d4b: page_flip
- *
- * Replaced natively: the retrace wait below was 94% of all port I/O, ~1836 reads
- * of 0x3da per flip, each one a Python callback.
- */
-void far page_flip(void)
-{
-    delay(0x1f - game_speed);              /* [0x1fd4]; 31 is no delay at all */
-    while (inp(0x3da) & 1)                 /* wait for display enable to fall */
-        ;
-    swap(&page_front, &page_back);         /* [0x1725], [0x1727] */
-    outpw(0x3d4, (hi << 8) | 0x0c);        /* CRTC start address high */
-    outpw(0x3d4, (lo << 8) | 0x0d);        /* ... and low */
-    while (!(inp(0x3da) & 8))              /* wait for vertical retrace */
-        ;
-    flip_phase = (flip_phase + 1) % 10;    /* [0xd61] */
-}
 
 /* ------------------------------------------------ 0x051b7: close_egg_files */
 void far close_egg_files(void)
@@ -467,45 +450,6 @@ record_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
     } while (!leave);                              /* 0x12892 */
 
     return r;                                      /* dx:ax */
-}
-
-/* --------------------------------------------------------- 0x13519: set_mode_x
- *
- * The argument does NOT choose the BIOS mode - 0x13 is always what is asked for.
- * It chooses whether to reprogram the CRTC afterwards for the wider mode, which
- * is what VIDEO SETTINGS > RESOLUTION selects through video_mode.
- *
- * The wide path is a 360-pixel Mode X: 0x3c2 takes 0xe7, selecting the 28 MHz dot
- * clock instead of 25 MHz, and CRTC 0x13 - the offset register - takes 0x2d = 45
- * words, so a row is 90 bytes. That is where plot_pixel's sibling at 0x057a1 gets
- * its stride of 90, and why the game swaps the far pointer at [0x53e] rather than
- * testing a resolution inside the routine.
- */
-void far set_mode_x(int16_t wide)
-{
-    set_bios_mode(0x13);                   /* always 0x13, whatever `wide` is */
-
-    outp(0x3c4, 4);   outp(0x3c5, 6);      /* sequencer memory mode: chain-4 off */
-    outp(0x3d4, 0x14); outp(0x3d5, 0);     /* underline location = 0 */
-    outp(0x3d4, 0x17); outp(0x3d5, 0xe3);  /* mode control: byte addressing */
-
-    if (!wide)
-        return;                            /* 320 wide: the standard Mode X */
-
-    outpw(0x3d4, 0x2c11);                  /* unprotect CRTC 0..7 */
-    outp(0x3c2, 0xe7);                     /* misc output: the 28 MHz clock */
-    outpw(0x3d4, 0x6b00);                  /* horizontal total */
-    outpw(0x3d4, 0x5901);                  /* end horizontal display */
-    outpw(0x3d4, 0x5a02);                  /* start blanking */
-    outpw(0x3d4, 0x8e03);                  /* end blanking */
-    outpw(0x3d4, 0x5e04);                  /* start retrace */
-    outpw(0x3d4, 0x8a05);                  /* end retrace */
-    outpw(0x3d4, 0x2d13);                  /* offset = 45 words = 90 bytes a row */
-    outpw(0x3d4, 0x8e11);  outpw(0x3d4, 0x2c11);
-    outpw(0x3d4, 0x0d06);  outpw(0x3d4, 0x3e07);
-    outpw(0x3d4, 0xea10);  outpw(0x3d4, 0xac11);
-    outpw(0x3d4, 0xdf12);
-    /* TODO 0x135c3-: a few more CRTC writes follow this one, not read. */
 }
 
 /* ------------------------------------------------- 0x13676: the game itself
