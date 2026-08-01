@@ -87,6 +87,16 @@ So this is the game's ending, sitting behind the 60 registered-only levels -
 content a shareware copy cannot reach, like the quit-path adverts in
 [entry-points](entry-points.md).
 
+**Getting to level 80 without playing 79 levels.** `[0x2032]` is the level about
+to be attempted, and `main_menu` writes it from the chosen episode record's
+*first* level at `0x137a7`, so a poke only sticks once you are inside the inner
+loop - on the screen offering the next level, not on the episode select. From
+there `write d+0x2032 50 00` over the control socket is enough, and
+`snapshots/snap010.snap` holds the result. Two cautions, both observed: the idle
+attract demo plays levels and carries the counter with it, so a poke left sitting
+drifts; and level 80 is the first state ever to run the background warp, which is
+its own unfinished business (see the root README).
+
 **The `0x0fc8b` loose end.** It is the only one of the five that never reached
 its own return, in four separate runs — the others exit after a fixed hold. It
 either waits on something the synthetic call does not supply, or its hold counts

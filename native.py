@@ -4649,6 +4649,7 @@ class Control:
         where                 CS:IP as an image offset, and its function
         regs                  the register file and the flags
         read <addr> [len]     hex and ASCII, default 64 bytes
+        write <addr> <bytes>  poke hex bytes, e.g. `write d+0x2032 50 00`
         disasm <addr> [n]     n instructions, default 16
         stack [depth]         the BP chain, each frame's return named
 
@@ -4769,6 +4770,9 @@ class Control:
         if cmd == "read":
             a, _, n = rest.partition(" ")
             return self._read(m, self._addr(m, a), int(n, 0) if n.strip() else 64)
+        if cmd == "write":
+            a, _, vals = rest.partition(" ")
+            return self._write(m, self._addr(m, a), vals)
         if cmd == "disasm":
             a, _, n = rest.partition(" ")
             return self._disasm(m, self._addr(m, a),
@@ -4892,6 +4896,34 @@ class Control:
             lines.append("  known variables in this range:")
             lines.extend(named)
         return "\n".join(lines)
+
+    @staticmethod
+    def _write(m, lin, vals):
+        """Poke bytes, and read them back so the answer is what the guest holds.
+
+        Little-endian words are the caller's job: `write d+0x2032 50 00` is 80.
+        Deliberately not typed - a byte list cannot silently write two bytes when
+        one was meant, which is the mistake a `word`/`byte` pair of verbs invites.
+        """
+        try:
+            data = bytes(int(v, 16) for v in vals.replace(",", " ").split())
+        except ValueError as e:
+            return f"error: expected hex bytes, e.g. `50 00` ({e})"
+        if not data:
+            return "error: nothing to write"
+        if len(data) > 64:
+            return f"error: {len(data)} bytes is more than this is for"
+        before = bytes(m.uc.mem_read(lin, len(data)))
+        m.write(lin, data)
+        after = bytes(m.uc.mem_read(lin, len(data)))
+        if after != data:
+            return (f"  {lin:#07x} did NOT take: wrote {data.hex(' ')}, "
+                    f"reads {after.hex(' ')}")
+        return (f"ok: {lin:#07x} was {before.hex(' ')}, now {after.hex(' ')}"
+                + (f"\n  d+{lin - m.dgroup_base:#07x} "
+                   f"{symbols.describe_variable(lin - m.dgroup_base)}"
+                   if 0 <= lin - m.dgroup_base < 0x10000
+                   and symbols.variable(lin - m.dgroup_base) else ""))
 
     @staticmethod
     def _branch_target(m, ins, seg):
