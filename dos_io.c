@@ -174,19 +174,148 @@ int16_t far mouse_releases(int16_t button)
     return r.x.bx;
 }
 
-/* ------------------------------------------------------------- still to move
+/* ------------------------------------------------------------ video: memory */
+
+/* 0x04d2a. Clears all four planes in one pass by opening the map mask to 0xff
+ * first, so each byte written lands in four. 0xfa00 = 64000 bytes of the aperture.
+ * The far pointer is reloaded every iteration, which is what dereferencing a
+ * global far pointer in the loop body compiles to.
+ */
+void far clear_vram(void)
+{
+    uint16_t i;
+
+    outpw(0x3c4, 0xff02);                  /* sequencer 2 (map mask) = 0x0f..0xff */
+    for (i = 0; i < 0xfa00; i++)
+        ((uint8_t far *) vram)[i] = 0;     /* vram is the far pointer at 0x16f1 */
+}
+
+/* 0x05761. One pixel, into the BACK page, and only if it belongs to the plane
+ * currently selected - Mode X puts column x in plane x & 3, so a caller runs the
+ * whole thing four times and three of those calls do nothing here.
  *
- * TODO: these belong in this file and have not been read out yet. All are
- * replaced natively, so native.py holds a verified description of each.
+ * The stride is 80 (`y << 6` plus `y << 4`), with no resolution check. Its twin
+ * at 0x057a1 is the same routine with a stride of 90, for the 360-pixel mode, and
+ * the game swaps the far pointer at [0x53e] rather than testing inside either.
+ */
+void far plot_pixel(int16_t x, int16_t y, uint8_t colour)
+{
+    if (current_plane != (x & 3))
+        return;
+    ((uint8_t far *) vram)[y * 80 + (x >> 2) + page_back] = colour;
+}
+
+/* ---------------------------------------------------------- video: the fade */
+
+/* 0x0b10b. The fade state machine, stepped once per frame by whoever is showing a
+ * screen. fade_direction of 0 means "not fading"; +1 in, -1 out.
+ */
+void far palette_fade_step(int16_t arg)
+{
+    int16_t i, si;
+
+    if (!fade_direction)                   /* nothing armed */
+        return;
+    if (fade_level == 0 && fade_direction == -1) {
+        fade_direction = 0;                /* faded out: disarm and stop */
+        return;
+    }
+
+    palette_build();                       /* 0x0b0c5 */
+    fade_level += fade_direction;          /* `mov al / cwd / add`: signed */
+
+    if (fade_level >= 15) {                /* fully in: hand over the real palette */
+        palette_upload();
+        fade_direction = 0;
+        return;
+    }
+
+    /* Otherwise scale each stored component by the level and push it out. This is
+     * the loop that was 94% of all port I/O, 768 writes a call. */
+    outp(0x3c8, fade_start_colour);
+    si = fade_start_colour * 3;
+    for (i = si; i < 0x300; i++)           /* 0x0b15f */
+        outp(0x3c9, (palette_stored[i] * fade_level) >> 6);
+
+    /* TODO 0x0b177-0x0b284: the tail, including the two 16-colour blink loops at
+     * 0x0b1c9 and 0x0b202 that sit behind a flag nothing in this build sets. */
+}
+
+/* ------------------------------------------------------------ video: drawing
  *
- *   0x04d2a  clear_vram
- *   0x05761  plot_pixel          stride 80; 0x057a1 is the same with stride 90
- *   0x05ac2  blit_rows_masked
- *   0x05c09  blit_rows
- *   0x05d3a  compose_layer
- *   0x05dc4  compose_scroll      holds the background warp
- *   0x063d6  draw_sprite
- *   0x065f1  outline_sprite
- *   0x0bb3b  draw_number         and 0x0d757 draw_number2
- *   0x0b10b  palette_fade_step   the fade state machine
+ * Everything below draws through the current plane, which is why each is called
+ * four times per frame and why replacing planar Mode X with flat drawing is the
+ * point of the exercise. All are replaced natively and byte-compared, so
+ * native.py holds a verified description of each while these bodies are read out.
+ */
+
+/* 0x05c09. Blits a run of rows from a decoded image. The source is a table of far
+ * pointers, one per row, indexed by the row counter and offset by the current
+ * plane - so the four passes read four interleaved columns of the same source.
+ *
+ * Note it checks [0x4fe] at the top, unlike plot_pixel: this one does handle both
+ * resolutions itself.
+ */
+void far blit_rows(desc_t far *desc, viewport_t clip, int16_t flags)
+{
+    int16_t row;
+
+    if (!video_mode) {
+        /* TODO 0x05c1b-: the 320-wide path. */
+    }
+    for (row = clip.top; row < clip.bottom; row++) {
+        uint8_t far *src = desc->rows[row][current_plane];   /* +0/+2 far ptr */
+        uint8_t far *dst = &((uint8_t far *) vram)[row * 80 + page_back];
+        /* TODO 0x05c4a-0x05d39: the inner copy, its clipping against the
+         * viewport, and the second resolution's 90-byte stride. */
+    }
+}
+
+/* 0x063d6. One sprite, again filtered to the current plane. The sprite table is
+ * indexed with a stride of 0x0e, and the clip rectangle arrives by value.
+ *
+ * TODO 0x06417-0x065f0: the row loop, the mask handling and the shadow path -
+ * the last of which is only reached when an entity of type 0x0f or 0x10 precedes
+ * another, and has never been observed to run.
+ */
+void far draw_sprite(sprite_t far *table, int16_t index, viewport_t clip,
+                     int16_t x, int16_t y, int16_t flags)
+{
+    /* TODO: read out. */
+}
+
+/* 0x0bb3b. A number as sprites: glyph 0x71 + digit from the same table the
+ * entities use, 12 pixels apart, least significant digit first. Fixed width with
+ * no leading-zero suppression, so a score of nothing is six noughts.
+ */
+void far draw_number(int16_t value, int16_t x, int16_t y, viewport_t far *clip,
+                     int16_t flags, int16_t digits)
+{
+    int16_t i, glyph;
+
+    for (i = digits - 1; i >= 0; i--) {    /* `dec ax` then count down */
+        glyph = 0x71 + (value % 10);       /* idiv by 10, remainder + 0x71 */
+        draw_sprite(sprite_table, glyph, *clip, x + i * 12, y, flags);
+        value /= 10;
+    }
+}
+
+/* -------------------------------------------------- still to read out
+ *
+ * TODO. All of these are replaced natively and byte-compared against the
+ * original, so native.py is a verified description of what each does while the
+ * disassembly is being turned into C here.
+ *
+ *   0x05ac2  blit_rows_masked   the flashing panels in the in-game frame
+ *   0x05d3a  compose_layer      the menu compositor
+ *   0x05dc4  compose_scroll     the scrolling background, and the only code in
+ *                               the game that has never executed until level 80:
+ *                               when [0x2022] is set each row's x displacement
+ *                               comes from the 32-entry table at [0x179f],
+ *                               starting at phase [0x17bf] and stepped by
+ *                               [0x17c0], re-masked to 0x1f every row - so it is
+ *                               not an arithmetic progression
+ *   0x065f1  outline_sprite     the outline around collected items on the HUD
+ *   0x0d757  draw_number2       a second number drawer, never seen to run
+ *   0x057a1  plot_pixel_wide    plot_pixel with a stride of 90
  */
