@@ -1,9 +1,11 @@
 /* game.c - code segment 0x04ca, which is the whole game.
  *
- * Reconstructed from Ducks.unpacked.exe. Not compiled and not run: every
- * function carries the image offset it was read from, so any line can be checked
- * against the disassembly. Names ending in a comment saying "unnamed" are ours
- * only in the sense that we have not identified the routine.
+ * Reconstructed from Ducks.unpacked.exe. C99, aimed at eventually building and
+ * running rather than at matching what Turbo C++ would accept; it does not
+ * compile yet, because most of the segment is still missing. Every function
+ * carries the image offset it was read from, so any line can be checked against
+ * the disassembly. Names ending in a comment saying "unnamed" are ours only in
+ * the sense that we have not identified the routine.
  *
  * One file per code segment, because that is the division the binary actually
  * proves - 0x04ca0-0x14620 is a full 64 KB and holds main, the menus, the
@@ -30,6 +32,13 @@ typedef struct {
     uint8_t       pad1;         /* +0xa */
     uint8_t       param;        /* +0xb:  episode ordinal, readme section, demo */
 } record_t;
+
+/* Three per-button counters, copied about as a unit. The shape is inferred from
+ * the copies being six bytes wide; whether the original spelled it as a struct or
+ * as an array inside one is not recoverable. */
+typedef struct {
+    int16_t n[3];
+} counts_t;
 
 /* The episode index built at startup from MAIN.EGG; four 14-byte records. */
 typedef struct {
@@ -103,8 +112,6 @@ int32_t    mouse_x, mouse_y;     /* 0x18d3, 0x18d7 - 32-bit from the add/adc
                                   * calls this unsigned, and did */
 int16_t    mouse_dx, mouse_dy;   /* 0x18db, 0x18dd - one poll's motion, signed:
                                   * each is `mov ax / cwd` before the add */
-int16_t    pressed_count[3];     /* 0x20ea, 0x20ec, 0x20ee - since the last poll */
-int16_t    released_count[3];    /* 0x20f0, 0x20f2, 0x20f4 */
 int16_t    button_map_a;         /* 0x20e4 - which INT 33h button is which */
 int16_t    button_map_b;         /* 0x20e6 */
 int16_t    button_map_c;         /* 0x20e8 */
@@ -194,29 +201,35 @@ void far close_egg_files(void)
  */
 void far input_poll(int16_t w, int16_t h)
 {
-    int16_t i, p[3], r[3];
+    counts_t p, r;
 
     mouse_motion(&mouse_dx, &mouse_dy);    /* 0x0675b - the only two arguments */
 
-    /* The button state, in two triples of counts since the last poll. The
-     * indexes are data: which physical button means what comes out of
+    /* The button state, as two struct-valued initialisers. Each compiles to
+     * three calls storing into a DGROUP temporary - 0x20ea and 0x20f0 - followed
+     * by the runtime's block-copy helper at 0x00ff4 moving six bytes to the
+     * local: far pointers on the stack, length in CX, `shr cx,1 / rep movsw /
+     * adc cx,cx / rep movsb`.
+     *
+     * Those two temporaries are written once each and read by nothing but that
+     * copy, which is what identifies them as compiler scratch rather than
+     * globals. An earlier draft of this file declared them as program variables
+     * and then wondered why the code kept both them and the locals.
+     *
+     * The indexes are data: which physical button means what comes out of
      * button_map_a/b/c, which is what the MOUSE BUTTONS screen sets. */
-    for (i = 0; i < 3; i++) {
-        pressed_count[i]  = mouse_presses(i);
-        released_count[i] = mouse_releases(i);
-    }
-    memcpy(&p[0], &pressed_count[0], 6);   /* onto the stack, to index by map */
-    memcpy(&r[0], &released_count[0], 6);
+    p = (counts_t) { mouse_presses(0),  mouse_presses(1),  mouse_presses(2)  };
+    r = (counts_t) { mouse_releases(0), mouse_releases(1), mouse_releases(2) };
 
-    if (p[button_map_a])  button_a_down = 1;     /* 0x18df */
-    if (r[button_map_a])  button_a_down = 0;
-    g_18e3 = p[button_map_b];              /* 0x18e3 - unnamed */
-    g_18e1 = p[button_map_c];              /* 0x18e1 - unnamed */
-    g_18e5 = (p[0] || p[1] || p[2]);       /* 0x18e5 - any button at all, which
+    if (p.n[button_map_a])  button_a_down = 1;   /* 0x18df */
+    if (r.n[button_map_a])  button_a_down = 0;
+    g_18e3 = p.n[button_map_b];            /* 0x18e3 - unnamed */
+    g_18e1 = p.n[button_map_c];            /* 0x18e1 - unnamed */
+    g_18e5 = (p.n[0] || p.n[1] || p.n[2]); /* 0x18e5 - any button at all, which
                                             * is what the fades test to cut a
                                             * splash short */
-    if (g_18e5)                    button_b_down = 1;   /* 0x18e7 */
-    if (r[0] || r[1] || r[2])      button_b_down = 0;
+    if (g_18e5)                              button_b_down = 1;   /* 0x18e7 */
+    if (r.n[0] || r.n[1] || r.n[2])          button_b_down = 0;
 
     /* The position, accumulated from the deltas and clamped. 32-bit, and the
      * comparisons are signed: high word with jg/jl, low word with ja/jae. */
