@@ -583,23 +583,33 @@ mode queries the video wrapper deliberately declines; and the mouse reset and
 mode set that Borland's `int86` builds at runtime, patching the interrupt number
 into a buffer - self-modifying by construction, and one call each.
 
-## The background warp: never seen, so never verified
+## The background warp: seen at last, still not verified
 
 The v1.2 changelog mentions a warped background, and `compose_scroll` has the
 code for it: when `[0x2022]` is set, each row's x displacement comes from a
 32-entry table at `[0x179f]`, starting at phase `[0x17bf]` and stepped by
 `[0x17c0]` per row.
 
-**It has never executed.** Every session reports `background-warp path: 0 calls`.
-So that branch has only ever been read out of the disassembly - unlike the rest
-of `compose_scroll`, which is byte-compared against the original body. If it ever
-runs, the game prints a warning saying so and naming what to check.
+**It executed for the first time on 2026-08-01**, on **level 80**, the last level
+of `DUCKING HELL` - which is why every session before that reported
+`background-warp path: 0 calls`. The warning fired as designed, `[0x2022]` reads
+1, and the table at `[0x179f]` is populated with start phase `0x41` and step 1.
+`snapshots/snap010.snap` is captured in that state, so it is now reproducible
+rather than hypothetical.
 
-Two things to know if that warning ever appears:
+**It looked right on screen and that is all that is established.** No
+byte-comparison has been run, so the branch is still unverified in the sense this
+project means. The state exists now, which is the expensive part; the check is
+outstanding.
 
-- Verify it before trusting the screen: `--verify-only compose_scroll` byte-compares
-  the native against the original on every call, even though the compositors are
-  in `VERIFY_SKIP`.
+Three things to know when running it:
+
+- `--verify-only compose_scroll` on that snapshot reports **0 compared**, which is
+  not a pass. The native plane loop calls the compositor's core as plain Python,
+  so nothing reaches the dispatcher - the trap `testing-from-snapshots.md`
+  records. Use `--verify-only plane_loop`, which diffs the planes across the whole
+  loop, or `--no-native-plane-loop --verify-only compose_scroll` to put the
+  compositor back through the dispatcher.
 - If it mismatches, doubt the phase sequence first. The original re-masks the
   phase to `0x1f` **every row**, so it is not an arithmetic progression and cannot
   be flattened to `table[(phase + row * step) & 0x1f]`. That is why the vectorised
