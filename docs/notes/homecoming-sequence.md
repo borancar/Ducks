@@ -132,11 +132,31 @@ screen is what came next. Two breakpoints say otherwise.
   house**, watched on the way past. It is the only animated screen in the
   sequence; the other five hold a still.
 
-So the ending is six screens, and `0x11d54` at `0x139a2` is the high-score name
-entry that follows them. That one stays tentative: `game_main` calls it at four
-sites, one of them before a level even starts, so it most likely tests whether
-the score qualifies and returns early - what it does at the other three has not
-been watched.
+So the ending is six screens, and `0x11d54` at `0x139a2` is what follows them.
+It is **both** high-score screens rather than one: driven with a Return at the
+name entry it goes on to draw `DUCKS HALL OF FAME`, and pausing there puts
+`0x11d54` on the stack again, returning to `0x11ef4` inside itself.
+`ending-highscore` and `ending-halloffame` hold the two halves. What it does at
+its other three call sites - one of them before a level even starts - has not
+been watched, so presumably it tests whether the score qualifies before drawing
+anything.
+
+`0x0f55c`, called immediately after it at `0x139a6` and paired with it at all
+four sites, is still unidentified. It is not the table.
+
+**The menu shows the same table, and not through this routine.** Left alone, the
+menu puts `DUCKS HALL OF FAME` up by itself now and then. Two captures of that,
+`menu-halloffame` and `menu-halloffame-2`, both walk back to
+`menu_screen_driver` (`0x1271b`) under `game_main`'s outer-loop call at
+`0x1368f` - `high_score_screen` is nowhere on either stack. So the attract cycle
+draws its own copy, and the guess that `0x11d54`'s other three call sites were
+doing it is wrong.
+
+The two captures also settle something smaller: they were caught at different
+depths, one returning to `0x12736` and the other to `0x12766`, which are
+`0x1271b`'s two internal call sites. The table appears under both, so those sites
+are not one screen apiece - `0x1271b` cycles menu, demo level and table through
+the same machinery.
 
 This is the third time in this note position has been wrong and a breakpoint has
 been right.

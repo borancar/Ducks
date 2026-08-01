@@ -27,6 +27,13 @@ prologue and called the same way — is reported as interior to `0x0b284`. Found
 incidentally, by the `set_plane` census printing an enclosing function that did
 not match the function the call is plainly inside.
 
+**And it bites in ordinary use, 2026-08-01.** Pausing a machine with the DUCKS
+HALL OF FAME on screen, `where` answered `image 0x0b5bc in 0x0b284` - the same
+wrong enclosure, this time in the middle of a stack walk being used to identify
+`high_score_screen`. The walk still worked, because the frame that mattered was
+`0x11d54`'s and the reader knew to distrust the label; someone who did not would
+have written down `0x0b284`.
+
 A third, and the first that fails loudly: `function_extent(img, 0x13676)` -
 `game_main` - raises `'NoneType' object cannot be interpreted as an integer`
 rather than returning a wrong answer. The next prologue after it is `0x13a98`, so

@@ -147,6 +147,8 @@ missed.
 | `ending-completed` | `EPISODE COMPLETED!` - `episode_end_gate`'s own splash, from the record whose flag is set |
 | `ending-landing` | `cutscene_rocket_landing` **running for real**, ducks on the grass. The only capture of a homecoming screen as the game draws it, rather than driven by `show_cutscene.py` |
 | `ending-highscore` | `NEW HIGH SCORE! ENTER YOUR NAME`, after the photographs |
+| `ending-halloffame` | `DUCKS HALL OF FAME`, the table `high_score_screen` shows once a name is entered |
+| `menu-halloffame`, `-2` | the same table, shown by the **menu's** attract cycle instead - `menu_screen_driver`, not `high_score_screen`. Caught at the two different depths its internal call sites give |
 
 The five `click-*` states are all mid-play, stopped at the point where the game
 is waiting for a mouse click. They are the states to reach for when a native

@@ -116,22 +116,27 @@ FUNCTIONS = {
                                         # confirmed from the return address on
                                         # its own stack frame, not the listing
     0x11547: "print_newline?",          # no args, bracketing the banners
-    0x11D54: "high_score_entry?",       # draws NEW HIGH SCORE! ENTER YOUR NAME -
-                                        # seen on the stack under that screen and
-                                        # again from a breakpoint. Tentative
-                                        # because game_main calls it at four
-                                        # sites, one of them before a level, so
-                                        # it probably tests whether the score
-                                        # qualifies and returns early
+    0x11D54: "high_score_screen",       # both halves of it: NEW HIGH SCORE!
+                                        # ENTER YOUR NAME, then DUCKS HALL OF
+                                        # FAME, each seen on the stack under the
+                                        # screen it draws. game_main calls it at
+                                        # four sites, one before a level starts,
+                                        # so it presumably tests whether the
+                                        # score qualifies first - that part has
+                                        # not been watched
     0x11C75: "episode_end_gate",        # (level, 0): find the episode whose last
                                         # level is this, show its splash, and
                                         # return that record's terminator flag -
                                         # so it says "the FINAL episode ended",
                                         # which is what gates the homecoming
-    0x1271B: "menu_screen_driver?",     # game_main's first call; observed on the
-                                        # stack above both the menu compositor
-                                        # (ret 0x12736) and the in-game frame
-                                        # (ret 0x12766), so it drives both
+    0x1271B: "menu_screen_driver",      # game_main's first call, and the whole
+                                        # attract cycle: the menu, a demo level
+                                        # it plays by itself, and DUCKS HALL OF
+                                        # FAME, all three caught above it on the
+                                        # stack. It has two internal call sites
+                                        # (ret 0x12736 and 0x12766) and the table
+                                        # has been caught under each, so they are
+                                        # not one screen apiece
     0x11EFB: "show_readme_section",     # (n) = ordinal into the readme index;
                                         # 2 is HOW TO REGISTER. The viewer the
                                         # readme crash happens in
