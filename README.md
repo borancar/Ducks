@@ -702,6 +702,16 @@ Working notes — the current state of the drawing port, the one open bug, the
 conventions, and a condensed log of each working session — live in
 [`docs/`](docs/).
 
+[`reconstruct/`](reconstruct/) holds C reconstructed from the disassembly of the
+**game's own code segment** — `0x04ca0`-`0x14620`, a full 64 KB holding `main`,
+the menus, the cutscenes and the drawing. It is not compiled and not run; every
+function carries the image offset it was read from. That the boundary falls
+exactly there is a fact about the binary rather than a guess: Turbo C++ gives each
+translation unit its own code segment in a far-code model, so every far call
+names its target's segment, and the six that exist separate the game from the C
+runtime, the sound API, the mixer, XMS and the BLASTER parser. The other five are
+out of scope — see [`reconstruct/README.md`](reconstruct/README.md).
+
 ## Licence
 
 The tooling in this repository is MIT licensed; see [`LICENSE`](LICENSE).

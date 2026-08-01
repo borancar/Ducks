@@ -63,6 +63,177 @@ of.
 on the `0x15` path. `0x0c716`'s own contents are documented elsewhere as holding
 `plane_loop_layer`, so the same routine draws menus and between-level screens.
 
+## game_main's side: a switch table at 0x13a70
+
+What `menu_screen_driver` hands back is an action code, and `game_main` dispatches
+it through a jump table sitting immediately after its own `retf`:
+
+```
+0x1369e  bx = record[+8]
+0x136a2  dec bx / cmp bx, 0x13 / jbe        codes 1..20
+0x136ab  shl bx, 1
+0x136ad  jmp word cs:[bx - 0x1230]          -> the table at image 0x13a70
+```
+
+| code | lands on | what it is |
+| --- | --- | --- |
+| 1 | `0x1377b` | into the episode unpack, then the inner loop - start playing |
+| 2 | `0x137f6` | the inner loop head directly |
+| 3 | `0x13a54` | `high_score_screen` |
+| 4 | `0x136c6` | clears the loop flag - QUIT |
+| 5 | `0x13742` | **`save_game_screen`**, then menu <- `ds:0x1989` |
+| 6 | `0x1376c` | **`load_game_screen`**, then menu <- `ds:0x1989` |
+| 7 | `0x13758` | `show_readme_section(record[+0xb])` |
+| 12, 13 | `0x136cb` | clear, set the video mode, black the DAC, menu <- `ds:0x1c3b` |
+| 14 | `0x13751` | **`register_screen`** |
+| 18 | `0x136b2` | menu <- `record[+4]/[+6]` - **this is how submenus work** |
+| 20 | `0x136fe` | the `button_map_a/b/c` pairwise checks - MOUSE BUTTONS |
+| 8-11, 15-17, 19 | `0x13a66` | nothing; fall through to the loop |
+
+Unpacked, `game_main` is a menu interpreter with the game as one of its cases:
+
+```c
+void far game_main(menu_t far *menu)      /* main passes ds:0x1916, the main menu */
+{
+    char buf[0x326];
+    int running = 1;                      /* si, set at 0x1367e */
+
+    do {
+        record_t far *r = menu_screen_driver(menu, &buf[?], 1);  /* five words */
+
+        switch (r->action) {              /* r[+8], via the table at 0x13a70 */
+
+        case 18:  menu = r->submenu;      break;   /* a submenu is data, not code */
+        case 4:   running = 0;            break;   /* QUIT */
+        case 14:  register_screen();      break;
+        case 7:   show_readme_section(r->param);   break;
+        case 5:   save_game_screen();     menu = &menu_1989;  break;
+        case 6:   load_game_screen();     menu = &menu_1989;  break;
+        case 3:   high_score_screen(); f_0f55c(); menu = &main_menu;  break;
+
+        case 20:                          /* MOUSE BUTTONS: reject duplicates */
+            if (button_map_a == button_map_b || button_map_a == button_map_c
+                || button_map_b == button_map_c) { ... }
+            break;
+
+        case 12: case 13:                 /* RESOLUTION */
+            clear_vram();
+            set_mode_x(r->action == 13);
+            dac_set_black(0, 0);
+            menu = &menu_1c3b;
+            break;
+
+        case 1:                           /* START: unpack the chosen episode */
+            [0x1ffc] = [0x1ffa] = 0;
+            menu = &menu_1989;
+            i = r->param;
+            level_attempted   = episode_index[i].first;               /* +4 */
+            episode_egg_index = episode_index[i].egg;                 /* +6 */
+            shareware_limit   = egg_files[episode_egg_index].limit;   /* +0x10 */
+            /* FALL THROUGH */
+
+        case 2:                           /* play, tally, repeat */
+            for (;;) {
+                if ([0x1ffc]) {                        /* 0x137f6 */
+                    sound_play_guarded(0x29, 1);
+                    show_splash(res->splash_a0, 200);
+                }
+                if (f_1102a([0x21a3]))                 /* a screen; non-zero exits */
+                    break;
+                [0x18f5] = 2;
+
+                if (shareware_limit < level_attempted   /* 0x13841 */
+                    && !registered && ![0x1ffc]) {
+                    f_09329();                          /* the refusal */
+                    egg_load_one(0xfc, 0x48, 0xff);
+                    menu = &main_menu;
+                    high_score_screen(); f_0f55c();
+                    break;
+                }
+
+                if (!in_game_frame(0)) {               /* 0x1387e: lost the game */
+                    [0x21a3] = 0;
+                    if (![0x50b]) {
+                        --lives;                        /* [0x2034] */
+                        sprintf(buf, "%s: %i", res->label_d4, lives);
+                        show_splash(buf, 100);
+                        release_sounds();
+                        if (lives == 0) {               /* GAME OVER */
+                            menu = &main_menu;
+                            sound_play_guarded(0x16, 1);
+                            show_resource(0x4d, 6, 0x32, 0xff);
+                            ...
+                        }
+                    }
+                    break;
+                }
+
+                if ([0x1ffc] || [0x1ffe])              /* 0x1388b, 0x13895 */
+                    break;
+
+                [0x21a3] = 1;                          /* the level was completed */
+                sound_play_guarded(2, 1);
+                show_resource(0x4d, 2, 0x32, 0xff);    /* BONUS SCREEN */
+                f_0becb();
+                ... show_splash, release_sounds ...
+
+                if (episode_end_gate(level_attempted, episode_egg_index)
+                    && episode_egg_index == 0) {       /* 0x1390d, 0x1391a */
+                    cutscene_rocket_space();           /* the homecoming */
+                    f_147c5(0x4a, [0x1fd3], 0xff);
+                    cutscene_rocket_landing();
+                    cutscene_doorstep();
+                    cutscene_welcome_home();
+                    release_sounds();
+                    cutscene_photos();
+                    f_147c5(...);
+                    cutscene_night_monster();
+                    release_sounds();
+                    dac_set_black(0, 0);
+                    input_poll(320, 200);
+                    high_score_screen(); f_0f55c();
+                }
+                level_attempted++;                     /* 0x139ab */
+            }
+            break;
+
+        default:  break;                  /* 8-11, 15-17, 19 */
+        }
+    } while (running);                    /* 0x13a66 */
+}
+```
+
+The inner `for (;;)` is drawn from the back edges at `0x13a45`/`0x13a4f` and the
+several `jmp 0x13a33` exits; the `break`s above are those jumps. `res` is the
+far pointer at `0x1894:0`, which the function indexes for splashes and labels.
+
+`do ... while` rather than `while`, because that is the shape emitted: `si` is set
+to 1 at `0x1367e`, the loop top at `0x13681` is entered directly, and the only test
+is `or si, si / je / jmp` at `0x13a66`. A `while` would normally begin with a jump
+to that test. Not proof - a compiler may fold a first test it can see is true -
+but the body-then-test form is what is there.
+
+Three things read off that shape. **Quitting is a case**, not an exit path: code 4
+clears `running` and the loop ends on the next test, which is why everything after
+`game_main` in `main` - the adverts, the readme, `exit_cleanup` - runs only then.
+**Three menu descriptors exist**: `ds:0x1916` (the main menu, which `main` passes
+in and case 3 restores), `ds:0x1989` (after starting, saving or loading a game)
+and `ds:0x1c3b` (after a resolution change). **Case 1 falls into case 2**, so
+"start an episode" is "unpack three globals, then play".
+
+**Code 18 explains why every submenu has the same stack.** Choosing PLAY DUCKS or
+OPTIONS does not call anything: it returns a record carrying a pointer to another
+menu descriptor, `game_main` swaps it into its own argument, and the next pass
+draws that instead. One `run_screen` call site, many menus. SELECT AN EPISODE,
+LOAD / SAVE, the readme list and the quit confirmation are all the same code
+reading different data - which is why walking the stack in four different
+submenu captures named the same two frames every time.
+
+The three screens that *are* separate routines were each caught at their entry by
+choosing the item that reaches them: SAVE THIS GAME, LOAD SAVED GAME and REGISTER
+DUCKS. All three then run their own `menu_screen_driver` loop for the slot or
+name list.
+
 ## The menu tree, driven with the keyboard
 
 With `--no-demo` holding the menu still, every option was reached over the
