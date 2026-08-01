@@ -39,9 +39,9 @@ typedef struct {
     int       terminator;       /* +0xc:  set only on the last record */
 } episode_t;
 
-extern menu_t         main_menu;        /* ds:0x1916, what main passes in */
-extern menu_t         menu_1989;        /* after starting, saving or loading */
-extern menu_t         menu_1c3b;        /* after a resolution change */
+menu_t         main_menu;               /* ds:0x1916, what main passes in */
+menu_t         menu_1989;               /* after starting, saving or loading */
+menu_t         menu_1c3b;               /* after a resolution change */
 
 /* ---------------------------------------------------------------- globals
  *
@@ -49,69 +49,81 @@ extern menu_t         menu_1c3b;        /* after a resolution change */
  * indexes and what `read d+0x...` over the control socket prints. Names come
  * from symbols.py, which carries the evidence for each; a name of the form
  * `g_xxxx` means the offset is used here but the variable is not identified.
+ *
+ * Definitions rather than externs, and that is a claim with evidence behind it.
+ * Scanning the whole image for writes to each of these and binning the writing
+ * instruction by code segment: every variable that is written at all is written
+ * only from the game's own segment. Nothing in the runtime, the sound API, the
+ * mixer, XMS or the BLASTER parser assigns to any of them, so they belong to this
+ * module rather than being imported into it.
+ *
+ * The scan misses some write forms - byte stores through AL, stores through a
+ * pointer, anything indexed - so "no write found" below is a gap in the scan and
+ * not evidence of an external owner. game_speed is the clearest example: nothing
+ * matched, yet the GAME SPEED slider was watched writing it.
  */
 
 /* video and the flip */
-extern int        video_mode;           /* 0x04fe - what set_mode_x is given */
-extern int        game_speed;           /* 0x1fd4 - 0..0x1f, higher is faster */
-extern unsigned   page_front, page_back;/* 0x1725, 0x1727 - swapped per flip */
-extern int        flip_phase;           /* 0x0d61 - 0..9 */
-extern int        current_plane;        /* 0x177d - written by set_plane */
-extern int        fade_level;           /* 0x1798 - 0..15, scales the palette */
-extern char       fade_direction;       /* 0x179a - 0xff fades out */
-extern char       fade_start_colour;    /* 0x179b */
-extern viewport_t viewport_1769;        /* ds:0x1769 - the global clip rect */
-extern void far  *default_buffer;       /* ds:0x13f1 - what set_buffer restores */
-extern int        g_53c;                /* 0x053c - show_splash's x origin */
+int        video_mode;           /* 0x04fe - what set_mode_x is given */
+int        game_speed;           /* 0x1fd4 - 0..0x1f, higher is faster */
+unsigned   page_front, page_back;/* 0x1725, 0x1727 - swapped per flip */
+int        flip_phase;           /* 0x0d61 - 0..9 */
+int        current_plane;        /* 0x177d - written by set_plane */
+int        fade_level;           /* 0x1798 - 0..15, scales the palette */
+char       fade_direction;       /* 0x179a - 0xff fades out */
+char       fade_start_colour;    /* 0x179b */
+viewport_t viewport_1769;        /* ds:0x1769 - the global clip rect */
+void far  *default_buffer;       /* ds:0x13f1 - what set_buffer restores */
+int        g_53c;                /* 0x053c - show_splash's x origin */
 
 /* input */
-extern long       mouse_x, mouse_y;     /* 0x18d3, 0x18d7 - 32-bit, accumulated */
-extern int        mouse_dx, mouse_dy;   /* 0x18db, 0x18dd - one poll's motion */
-extern int        button_map_a;         /* 0x20e4 - which INT 33h button is which */
-extern int        button_map_b;         /* 0x20e6 */
-extern int        button_map_c;         /* 0x20e8 */
-extern int        button_a_down;        /* 0x18df */
-extern int        button_b_down;        /* 0x18e7 */
-extern int        g_18e5;               /* 0x18e5 - any button; escapes the fades */
-extern int        last_key;             /* 0x18f6 - the ASCII of the last key */
+long       mouse_x, mouse_y;     /* 0x18d3, 0x18d7 - 32-bit, accumulated */
+int        mouse_dx, mouse_dy;   /* 0x18db, 0x18dd - one poll's motion */
+int        button_map_a;         /* 0x20e4 - which INT 33h button is which */
+int        button_map_b;         /* 0x20e6 */
+int        button_map_c;         /* 0x20e8 */
+int        button_a_down;        /* 0x18df */
+int        button_b_down;        /* 0x18e7 */
+int        g_18e5;               /* 0x18e5 - any button; escapes the fades */
+int        last_key;             /* 0x18f6 - the ASCII of the last key */
 
 /* the egg files and the indexes built from them */
-extern egg_file_t far *egg_files;       /* 0x20a9 - stride 0x17 */
-extern int             egg_file_count;  /* 0x20ad */
-extern episode_t  far *episode_index;   /* 0x20ba - four 14-byte records */
-extern int             episode_count;   /* 0x20c2 */
-extern int             draw_flag;       /* 0x054d - set to 4 around a loader pass */
+egg_file_t far *egg_files;       /* 0x20a9 - stride 0x17 */
+int             egg_file_count;  /* 0x20ad */
+episode_t  far *episode_index;   /* 0x20ba - four 14-byte records */
+int             episode_count;   /* 0x20c2 */
+int             draw_flag;       /* 0x054d - set to 4 around a loader pass */
 
 /* progress and the shareware gate */
-extern int        level_attempted;      /* 0x2032 - the level about to be played */
-extern int        episode_egg_index;    /* 0x0094 - which egg the episode is in */
-extern int        shareware_limit;      /* 0x054a - per egg, not a constant */
-extern int        registered;           /* 0x0548 */
-extern int        lives;                /* 0x2034 - decremented on a lost run */
-extern int        max_save_value;       /* 0x2055 - scan_save_slots' only output */
+int        level_attempted;      /* 0x2032 - the level about to be played */
+int        episode_egg_index;    /* 0x0094 - which egg the episode is in */
+int        shareware_limit;      /* 0x054a - per egg, not a constant */
+int        registered;           /* 0x0548 */
+int        lives;                /* 0x2034 - decremented on a lost run */
+int        max_save_value;       /* 0x2055 - scan_save_slots' only output */
 
 /* the menu and the attract cycle */
-extern int        attract_choice;       /* 0x21ae - 0 demos, non-zero shows a screen */
-extern int        menu_idle_suppress;   /* 0x2177 - non-zero holds the menu still */
-extern int        g_2038;               /* 0x2038 - how many demos to choose from */
+int        attract_choice;       /* 0x21ae - 0 demos, non-zero shows a screen */
+int        menu_idle_suppress;   /* 0x2177 - non-zero holds the menu still */
+int        g_2038;               /* 0x2038 - how many demos to choose from */
 
 /* strings and buffers */
-extern char       save_name[];          /* 0x21a5 - the template "GAME-.SG" */
-extern char far  *settings_name;        /* 0x21d2 - "settings.dat" */
-extern char       g_28ff[];             /* 0x28ff - main's first splash source */
-extern void far  *buf_200f, *buf_203b, *buf_203f, *buf_2043;  /* freed per demo */
-extern void far  *res;                  /* 0x1894:0 - the table the intro indexes
+char       save_name[];          /* 0x21a5 - the template "GAME-.SG" */
+char far  *settings_name;        /* 0x21d2 - "settings.dat" */
+char       g_28ff[];             /* 0x28ff - main's first splash source */
+void far  *buf_200f, *buf_203b, *buf_203f, *buf_2043;  /* freed per demo */
+void far  *res;                  /* 0x1894:0 - the table the intro indexes
                                          * for its splashes and labels */
 
 /* startup and settings */
-extern int        sound_available;      /* 0x2104 - detect_hardware's result */
-extern void far  *init_objects[3];      /* 0x210c - three 22-byte objects, stride 4 */
-extern int        settings[];           /* 0x04f4 - the word array save_settings
+int        sound_available;      /* 0x2104 - detect_hardware's result */
+void far  *init_objects[3];      /* 0x210c - three 22-byte objects, stride 4 */
+int        settings[];           /* 0x04f4 - the word array save_settings
                                          * writes; settings[0] gates sound */
 
 /* used but not identified */
-extern int  g_509, g_50b, g_18f5, g_1fd3, g_1ffa, g_1ffc, g_1ffe;
-extern int  g_201c, g_2036, g_21a3;
+int  g_509, g_50b, g_18f5, g_1fd3, g_1ffa, g_1ffc, g_1ffe;
+int  g_201c, g_2036, g_21a3;
 
 /* ------------------------------------------------------- 0x04d4b: page_flip
  *
