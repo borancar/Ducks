@@ -204,13 +204,21 @@ int16_t far resource_load_full(desc_t far *desc, int16_t set_size,
         ((uint8_t far *) current_buffer)[pal_at * 3 + i] =
             egg_read_byte(egg_stream);
 
-    f_0580b();                                     /* 0x0580b - unnamed */
+    f_0580b();                                     /* reset the chunk decoder */
 
-    /* TODO 0x0599f-0x05a66: the row decoder. It reads a byte at a time through
-     * 0x05821 and treats zero as a control code, which is the shape of a run
-     * length scheme, but it has not been read out. x0 above is what it offsets
-     * each row by. */
+    /* The rows. One pixel at a time out of the decoder, placed at x0 so a source
+     * narrower than the destination lands centred. Zero is transparent unless the
+     * caller asked for it to be kept - which is the arg18 test at 0x059b6. */
+    for (i = 0; i < h; i++) {
+        int16_t x;
 
+        for (x = 0; x < w; x++) {
+            uint8_t px = egg_next_pixel();
+
+            if (px || arg18)
+                desc->rows[i][x0 + x] = px;
+        }
+    }
     return 1;
 }
 
@@ -400,6 +408,44 @@ void far draw_number(int16_t value, int16_t x, int16_t y, viewport_t far *clip,
         draw_sprite(&glyph, x + i * 12, y, sprite_table, clip, (uint8_t) flags);
         value /= 10;
     }
+}
+
+/* ------------------------------------------------------ 0x0c0c2: egg_load_one
+ *
+ * Called once per open egg by egg_load_pass_0x48. It is not only a loader - it
+ * draws, which is what makes the version and credits page appear before the logo,
+ * and it holds until a key.
+ *
+ * Two resources: the blueprint frame at 0x4d:7 as a background, then a type 0x48
+ * block on top. The 0x48 blocks are *text* - the readme pages, every byte shifted
+ * up by one, which is the same cipher the episode index uses - so drawing them
+ * needs the font, and that is not read out yet.
+ */
+void far egg_load_one(int16_t index, int16_t type, int16_t egg)
+{
+    uint8_t scratch[0x302];
+    desc_t  desc;
+    int16_t saved;
+
+    clear_vram();                                  /* 0x0c0ca */
+    set_buffer(&scratch[0]);
+    saved = draw_flag;                             /* [0x54d] */
+    draw_flag = 4;
+
+    if (resource_load(&desc, 0x4d, 7, 0, 1, 0xff, 1)) {   /* the blueprint frame */
+        f_054c_set();                              /* [0x54c] = 1 */
+        show_resource_loop(&desc, 100);            /* fade in, hold, fade out */
+        resource_release(&desc);
+    }
+
+    /* TODO 0x0c108-0x0c1ac: the second load - type 0x48, the text block - and
+     * whatever draws it. The text is there and decodes with a -1 shift; what is
+     * missing is the font and the layout, so the page currently shows its
+     * background and none of its words. */
+    (void) index; (void) type; (void) egg;
+
+    draw_flag = saved;
+    set_buffer(default_buffer);
 }
 
 /* ------------------------------------------------ 0x0c156: egg_load_pass_0x48 */
@@ -815,6 +861,9 @@ void far init(void)
     int16_t i;
 
     puts("DUCKS v1.21");                           /* DGROUP+0x2808 */
+    egg_bringup_open();                            /* stands in for the egg
+                                                    * opening and indexing the
+                                                    * original does here */
     for (i = 0; i < 3; i++) {                      /* three 22-byte objects */
         init_objects[i] = malloc(22);              /* [0x210c], stride 4 */
         ((desc_t far *) init_objects[i])->w = 316;

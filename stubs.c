@@ -85,26 +85,11 @@ void far show_attract_screen(int16_t f)   { (void) f; }
 void far *egg_stream;
 void far *current_buffer;
 
-int16_t far egg_find_block(uint8_t type, uint8_t index, int16_t arg)
-{
-    (void) type; (void) index; (void) arg;
-    return 0;                            /* nothing found: callers give up */
-}
-int16_t far egg_read_word(void far *s)    { (void) s; return 0; }
-uint8_t far egg_read_byte(void far *s)    { (void) s; return 0; }
-int16_t far alloc_image(void far *d, int16_t a, int16_t b, int16_t c, int16_t e)
-{
-    (void) d; (void) a; (void) b; (void) c; (void) e;
-    return 0;
-}
-void far egg_load_one(int16_t a, int16_t b, int16_t c)
-{
-    (void) a; (void) b; (void) c;
-}
 int16_t far load_demo(uint8_t index)      { (void) index; return 0; }
 int16_t far pick_random_demo(void)        { return 0; }
-void far resource_release(void far *d)    { (void) d; }
-void far set_buffer(void far *p)          { (void) p; }
+/* 0x0b9ea. Eighteen bytes in the original: it stores the far pointer at [0x1721]
+ * and returns. Real, because resource_load writes the palette through it. */
+void far set_buffer(void far *p)          { current_buffer = p; }
 
 /* ------------------------------------------------------------- the sound */
 
@@ -117,13 +102,35 @@ void far sound_init(int16_t rate)         { (void) rate; }
 void far install_int23(void far *h)       { (void) h; }
 void far ctrl_break_handler(void)         { }
 int16_t far detect_hardware(void)         { return 0; }
+
+/* The original opens its eggs during startup and builds an index over them -
+ * 0x11657, which prints "Using file EGGS\\MAIN.EGG - 303 slices". Until that is
+ * read out, open the one egg here so the resource loader has a file to seek in.
+ * DUCKS_GAME_DIR matches the tooling's own environment variable. */
+/* The table at 0x1894:0 that the intro indexes for its splash sources. It is
+ * built during startup from the egg, which has not been read out, so it is zeroed
+ * here: every splash then gets a null image and draws nothing, which is what
+ * main's first splash genuinely does anyway. */
+static restable_t bringup_res;
+
+void egg_bringup_open(void)
+{
+    res = &bringup_res;
+
+    const char *dir = getenv("DUCKS_GAME_DIR");
+    char        path[512];
+    int         n;
+
+    snprintf(path, sizeof path, "%s/Eggs/Main.egg", dir ? dir : "../game");
+    n = egg_open(path);
+    printf("Using file %s - %d slices\n", path, n);
+}
 void far crt_exit(void)                   { }
 void far print_newline(void)              { }
 void far set_text_colour(int16_t c)       { (void) c; }
 
 /* ------------------------------------------------ unnamed, by image offset */
 
-void far f_0580b(void)                    { }
 void far f_04dcd(int16_t n)               { (void) n; }
 void far f_056f7(int16_t n)               { (void) n; }
 void far f_0615a(int16_t a, int16_t b, void far *c, int16_t d)
@@ -133,14 +140,22 @@ void far f_0615a(int16_t a, int16_t b, void far *c, int16_t d)
 void far f_088b3(void far *p)             { (void) p; }
 void far f_088fa(void)                    { }
 void far f_09329(void)                    { }
+/* 0x0b5cf. Decodes an image into the descriptor handed to it - show_splash's own
+ * local. Zeroed here rather than left alone: the caller's descriptor is an
+ * uninitialised local, and blitting from a garbage row table crashes where the
+ * original would merely draw nothing. Scaffolding, and it goes when this is read
+ * out - which is also what would make main's first splash draw something. */
 void far f_0b5cf(void far *img, void far *loc, int16_t a, void far *b,
                  int16_t c, int16_t d)
 {
-    (void) img; (void) loc; (void) a; (void) b; (void) c; (void) d;
+    (void) img; (void) loc; (void) a; (void) c; (void) d;
+    if (b)
+        memset(b, 0, sizeof(desc_t));
 }
 void far f_0becb(void)                    { }
 void far f_0f55c(void)                    { }
 void far f_0f8bd(void)                    { }
+void far f_054c_set(void)                 { }   /* [0x54c] = 1; unread */
 int16_t far f_1102a(int16_t a)            { (void) a; return 0; }
 void far f_11bee(void far *name, int16_t egg) { (void) name; (void) egg; }
 void far f_147c5(int16_t a, int16_t b, int16_t c)
@@ -158,6 +173,12 @@ void far loc(void)                        { }
 uint8_t palette_stored[768];
 uint8_t palette_washed[48];
 
-/* The palette builder at 0x0b0c5, which the fade calls every step. Without it
- * palette_stored never changes, so the fade fades to and from whatever is there. */
-void far palette_build(void)              { }
+/* 0x0b0c5. Reads through the current buffer - `les bx, [0x1721]` - and builds the
+ * palette the DAC loops upload. Enough of it here to see a picture: copy what
+ * resource_load just wrote into the buffer across to palette_stored. The real one
+ * applies gamma and the washed ramp on the way. */
+void far palette_build(void)
+{
+    if (current_buffer)
+        memcpy(palette_stored, current_buffer, sizeof palette_stored);
+}
