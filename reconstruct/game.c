@@ -87,9 +87,12 @@ void far input_poll(int w, int h)
     if (mouse_x > w - 1) mouse_x = w - 1;  /* and clamped at 0 below */
     if (mouse_y > h - 1) mouse_y = h - 1;
 
-    /* Buttons go through [0x20e4]/[0x20e6]/[0x20e8], which say which INT 33h
-     * button index means what - the mapping is data, not code. */
-    ...
+    /* TODO 0x06886-0x069xx: the button half, read but not written out. It calls
+     * mouse_presses(0..2) into [0x20ea]/[0x20ec]/[0x20ee] and mouse_releases(0..2)
+     * into [0x20f0]/[0x20f2]/[0x20f4], copies each triple onto the stack, and then
+     * indexes those by button_map_a/b/c - so the mapping is data, not code. Out of
+     * it come [0x18df] (held), [0x18e1], [0x18e3], [0x18e5] (any button) and
+     * [0x18e7]. The tail past 0x0696f has not been read at all. */
 }
 
 /* ---------------------------------------------- 0x0b52f: show_resource_loop
@@ -299,7 +302,10 @@ record_t far *menu_screen_driver(menu_t far *menu, void far *a, int b)
 
         case 0x15:                                 /* play the demo named */
             if (load_demo(r->param)) {             /* 0x1240f */
-                /* ... byte for byte the same as the branch above ... */
+                /* TODO 0x12811-0x1283a: elided because it is byte for byte the
+                 * same as the branch above - the three frees, [0x18f5], the
+                 * [0x509] save and restore. Worth writing out if that ever turns
+                 * out not to be exactly true. */
                 in_game_frame(1);                  /* 0x1283a */
             } else {
                 show_splash("DEMO MISSING", 100);
@@ -325,7 +331,10 @@ void far set_mode_x(int mode)
     set_bios_mode(mode);                   /* 0x04d04 -> int86(0x10) */
     outp(0x3c4, 4);  outp(0x3c5, 6);       /* sequencer memory mode: chain-4 off */
     outp(0x3d4, 0x14);  outp(0x3d5, 0);    /* CRTC underline = 0 */
-    outp(0x3d4, 0x17);  ...                /* CRTC mode control */
+    outp(0x3d4, 0x17);                     /* CRTC mode control */
+    /* TODO: the rest of the unchaining sequence past 0x13519's third port pair
+     * has not been read; the inventory in docs/notes/port-io.md lists which
+     * ports it touches but not the order or the values. */
 }
 
 /* ------------------------------------------------- 0x13676: the game itself
@@ -421,7 +430,8 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                 sound_play_guarded(2, 1);
                 show_resource(0x4d, 2, 50, 0xff);  /* the BONUS SCREEN */
                 f_0becb();
-                /* ... a comparison of [0x2036] against [0x201c], not read ... */
+                /* TODO 0x138c4-0x13904: a comparison of [0x2036] against
+                 * [0x201c] and whatever it guards, not read. */
 
                 /* The ending. Only DUCKING HELL - level 80 - passes the gate. */
                 if (episode_end_gate(level_attempted, episode_egg_index)
@@ -480,9 +490,10 @@ void far scan_save_slots(void)
 void far save_settings(void)
 {
     fp = fopen(settings_name, "wb");               /* ds:[0x21d2] -> settings.dat */
-    fwrite(&settings[0], ...);                     /* the word array at [0x4f4],
-                                                    * whose first word gates
-                                                    * sound_play_guarded */
+    /* TODO: the write itself - how many words, and whether it is fwrite or a
+     * loop - has not been read. What is established is the source: the word array
+     * at [0x4f4], whose first word gates sound_play_guarded. */
+    fwrite(&settings[0], /* TODO */);
     fclose(fp);
 }
 

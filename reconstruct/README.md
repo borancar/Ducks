@@ -80,5 +80,13 @@ frame at `0x0d7ee` and the four plane loops inside it, the drawing routines
 `compose_scroll`, `draw_entities` and `draw_sprite`, the other four cutscene
 screens, `run_screen` (`0x0c716`) itself, and `high_score_screen`.
 
-The convention is that every function carries its image offset, and anything
-unverified is marked in a comment rather than smoothed over.
+## Conventions
+
+- **Every function carries the image offset it was read from**, so any line can be
+  checked against the disassembly.
+- **A missing body is a `TODO`, never an ellipsis.** `...` reads as "and so on",
+  which is a claim that the rest is obvious; it usually means nobody looked. A
+  `TODO` says which address range is unread and what is known about it, so the
+  gap can be closed by someone who did not write it.
+- **Anything unverified says so** in a comment rather than being smoothed over -
+  a name we guessed, a structure field we inferred, a branch never seen to run.
