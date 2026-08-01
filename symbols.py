@@ -88,6 +88,15 @@ FUNCTIONS = {
     0x0675B: "mouse_motion",            # native
     0x0678E: "mouse_presses",           # native
     0x067BA: "mouse_releases",          # native
+    # The font. One proportional outlined face, 94 glyphs, loaded from the
+    # egg's single 'F' block into a 256-entry table at d+0x54d.
+    0x06A87: "font_clear",              # zeroes all 256 widths
+    0x06AA4: "font_load",               # reads block 'F', mallocs each glyph
+    0x06C29: "glyph_to_screen",         # (ch, x, y) through the plot pointer
+    0x06CB6: "glyph_to_image",          # (desc, ch, x, y) into a row table
+    0x06D52: "text_width",              # sums width-1 over a string, from 1
+    0x06D84: "draw_string",             # (desc, str, x, y): glyph_to_image
+                                        # per character, advancing by its return
     0x0876A: "build_washed_ramp",       # v*0.75+64 into [0x0dad]
     0x0AB09: "particles",               # native
     0x0ABA5: "draw_entities",           # native
@@ -239,7 +248,19 @@ def describe(off):
 # memory. Mixing the two is the mistake documented in
 # docs/notes/address-spaces.md.
 VARIABLES = {
-    0x054D: "draw_flag?",               # set to 4 around a loader pass
+    # Text. A glyph's pixels are 0 transparent, 1 fill, 2 outline, and both
+    # glyph drawers look the value up as [colour_base + value] - so 1 reads
+    # 0x54c and 2 reads 0x54d. The screens set these two bytes around a page and
+    # put them back; nothing writes 0x54b, which value 0 would have selected.
+    0x054C: "text_fill",                # colour for a glyph's value 1
+    0x054D: "text_outline",             # colour for its value 2. The same byte
+                                        # is font[0]'s width, which is harmless:
+                                        # a string ends at character 0, so that
+                                        # slot is never measured or drawn
+    0x054E: "font",                     # really 0x54d: 256 entries of 8 bytes,
+                                        # { uint16 w, uint16 h, uint8 far *px },
+                                        # indexed by character. Named one byte
+                                        # on so the two colours read back
     0x0DAD: "palette_washed",           # 48 bytes: the lifted terrain ramp
     0x0D61: "flip_phase",               # 0..9, advanced by page_flip
     0x0DDD: "blink_toggle",             # flips between the two blink palettes
