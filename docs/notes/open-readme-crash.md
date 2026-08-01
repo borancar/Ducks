@@ -80,6 +80,37 @@ was really a segment register.
 in the image. This one is not in the image - it is a byte inside a vector table
 entry, at linear `0x000fa`.
 
+## It is not only the readme
+
+**Seen 2026-07-31.** A played session that never opened the readme ended the same
+way. It was `native.py --load-snapshot` at the main menu, played through a level
+to a game over and back to the menu, and it died with this signature:
+
+```
+[wild] control just left the code: executing 0x1b7d2 = DGROUP+0x1d82, which is data
+[crash] CS:IP 19a5:1d82 -> image 0x1a6d2 = DGROUP+0x1d82 (DATA, not code)
+[crash] SS:SP 1d82:ffe2 BP 19a5 FLAGS 1d82 [TF DF SF]
+```
+
+Same `19a5`/`1d82`, same `TF` arriving in a restored flags word, and **`SP` at
+`0xffe2`** — wrapped past zero, which is the stack exhaustion this note
+describes, not something that merely resembles it.
+
+The last thing in the log before the wild jump is the sample loader: XMS handle
+30 allocated and resized, sound `#112` played, then the jump. So it happens
+during a load, on a path with nothing to do with the readme viewer.
+
+That matters for the question at the end of this note. If the readme viewer were
+the deep call chain, the readme would be the bug; a second unrelated path running
+out of the same 2.2 KB says the stack is short for the program as a whole, and
+points the investigation at what sets `SP` to `0x08a2` rather than at
+`show_readme_section`.
+
+Not yet known: the exact input, and whether this reproduces. The session was
+being played by hand while breakpoints were armed for unrelated work, and no
+snapshot was taken near the end — the capture that would make this a test does
+not exist yet. Worth taking one at the next game over.
+
 ## Ruled out
 
 - Every native (the table above).
