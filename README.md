@@ -455,8 +455,14 @@ score of nothing is six noughts.
 
 **Two plotters, and a lesson.** `0x5761` computes its row stride as 80 with no
 `[0x4fe]` resolution check — which looks like a bug until you find `0x57a1`, the
-same routine with a stride of 90. The game swaps a far pointer at `[0x53e]` when it
-changes resolution rather than testing inside the routine. Resolving that pointer
+same routine with a stride of 90. That 90 comes from `set_mode_x`: given a
+non-zero argument it reprograms the CRTC for a **360-pixel** Mode X — `0x3c2`
+takes `0xe7`, selecting the 28 MHz dot clock, and the offset register `0x13` takes
+`0x2d` = 45 words = 90 bytes a row. So the two plotters are the two resolutions,
+and VIDEO SETTINGS > RESOLUTION is what switches between them.
+
+The game swaps a far pointer at `[0x53e]` when it changes resolution rather than
+testing inside the routine. Resolving that pointer
 by its offset word alone recognises neither (the segment is not the one image
 offsets are measured from), and the failure is silent: the loop just skips its
 pixel run. `--verify` reported it as five mismatched bytes a call, and only on the
