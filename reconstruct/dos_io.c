@@ -45,6 +45,11 @@ void far set_mode_x(int16_t wide)
      *
      *   wide:    width 360, height 240, plotter 0x057a1, x origin 20
      *   narrow:  width 320, height 200, plotter 0x05761, x origin 0
+     *
+     * screen_x0 is a centring offset, not a width: the play area stays 320 across
+     * in both modes and every viewport is built x0 .. x0 + 320, so what the wide
+     * mode does horizontally is translate the picture right by 20 pixels. The
+     * extra 40 rows are where the status panel goes.
      */
 
     outp(0x3c4, 4);    outp(0x3c5, 6);     /* sequencer memory mode: chain-4 off */

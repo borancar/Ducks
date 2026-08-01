@@ -236,6 +236,19 @@ VARIABLES = {
     0x0544: "registered_name_seg",      # out of the egg; valid only if 0x548
     0x0548: "registered",               # non-zero = registered. init prints
                                         # "Registered to: <name>" or UNREGISTERED
+    # The geometry set_mode_x selects, which everything above it reads instead of
+    # testing the resolution itself.
+    0x0538: "screen_width",             # 360 wide, 320 narrow
+    0x053A: "screen_height",            # 240 wide, 200 narrow
+    0x053C: "screen_x0",                # the horizontal centring offset: 20 in
+                                        # the 360-wide mode, 0 otherwise. The play
+                                        # area stays 320 wide and every viewport
+                                        # and splash rect is built x0 .. x0 + 320,
+                                        # so the wide mode translates the picture
+                                        # right by 20 rather than widening it
+    0x053E: "plot",                     # far pointer to the pixel plotter,
+    0x0540: "plot_seg",                 # swapped by set_mode_x: 0x05761 at
+                                        # stride 80, 0x057a1 at stride 90
     0x054A: "shareware_limit",          # reads 20; the intro screen says "20
                                         # levels classed as shareware"
     0x0094: "episode_egg_index",        # the episode record's +6, and game_main
