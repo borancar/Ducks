@@ -72,13 +72,15 @@ extern viewport_t viewport_panel;    /* 0x1741 - the bottom 40 rows */
 extern viewport_t viewport_screen;   /* 0x1769 - the centred 320x200 window */
 extern viewport_t viewport_full;     /* 0x1755 - everything */
 
-/* elsewhere in the image, and not ours */
-extern void far   delay(int16_t ms);         /* 0x0223e, Borland's */
+/* Borland's, in the runtime segment below 0x04ca0 - not the game's code at all,
+ * and a port supplies its own. */
+extern void far   delay(int16_t ms);         /* 0x0223e */
 extern int16_t far int86(int16_t n, union REGS far *in, union REGS far *out);
                                              /* 0x0293a - builds the INT on its
                                               * own stack, which is why no INT 33h
                                               * instruction exists in the image */
-extern void far   set_bios_mode(int16_t m);  /* 0x04d04 */
+
+/* the game's, but in game.c */
 extern void far   make_rect(viewport_t far *r, int16_t top, int16_t bottom,
                             int16_t left, int16_t right);   /* 0x0881d */
 extern void far   palette_build(void);       /* 0x0b0c5 */
@@ -86,6 +88,19 @@ extern void far   f_057db(void);             /* 0x057db - unnamed; the tail ever
                                               * dac_set_black caller reaches */
 
 /* ------------------------------------------------------------- video: mode */
+
+/* 0x04d04. The one BIOS call in the video path: AH = 0, AL = mode, through
+ * int86. Everything after this point programs the hardware directly, which is why
+ * set_mode_x can ask for 0x13 unconditionally and then rewrite the CRTC.
+ */
+void far set_bios_mode(uint8_t mode)
+{
+    union REGS r;
+
+    r.h.ah = 0;                            /* [bp-0xf] = 0 */
+    r.h.al = mode;                         /* [bp-0x10] = the argument */
+    int86(0x10, &r, &r);                   /* same struct in and out */
+}
 
 /* 0x13519. The argument does NOT choose the BIOS mode - 0x13 is always what is
  * asked for. It chooses whether to reprogram the CRTC for the wider mode, which
