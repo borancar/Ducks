@@ -36,6 +36,17 @@ void far set_mode_x(int16_t wide)
 {
     set_bios_mode(0x13);                   /* always 0x13, whatever `wide` is */
 
+    /* The tail of this function is where the two resolutions actually diverge as
+     * far as the rest of the game is concerned: it writes the geometry globals and
+     * swaps the pixel plotter's far pointer. That is the swap the notes describe -
+     * 0x4ca:0x0b01 is image 0x057a1, the stride-90 plotter, and 0x4ca:0x0ac1 is
+     * 0x05761, the stride-80 one. Neither routine tests the resolution because
+     * this does it once, here.
+     *
+     *   wide:    width 360, height 240, plotter 0x057a1, x origin 20
+     *   narrow:  width 320, height 200, plotter 0x05761, x origin 0
+     */
+
     outp(0x3c4, 4);    outp(0x3c5, 6);     /* sequencer memory mode: chain-4 off */
     outp(0x3d4, 0x14); outp(0x3d5, 0);     /* underline location = 0 */
     outp(0x3d4, 0x17); outp(0x3d5, 0xe3);  /* mode control: byte addressing */
@@ -56,7 +67,27 @@ void far set_mode_x(int16_t wide)
     outpw(0x3d4, 0x0d06);  outpw(0x3d4, 0x3e07);
     outpw(0x3d4, 0xea10);  outpw(0x3d4, 0xac11);
     outpw(0x3d4, 0xdf12);
-    /* TODO 0x135c3-: a few more CRTC writes follow this one, not read. */
+    outpw(0x3d4, 0xe715);  outpw(0x3d4, 0x0616);
+
+    /* ... and both paths end here, with the geometry the rest of the game reads */
+    if (wide) {
+        screen_width  = 360;               /* [0x538] */
+        screen_height = 240;               /* [0x53a] */
+        plot          = plot_pixel_wide;   /* [0x53e]/[0x540] = 0x4ca:0x0b01 */
+        screen_x0     = 20;                /* [0x53c] */
+    } else {
+        screen_width  = 320;
+        screen_height = 200;
+        plot          = plot_pixel;        /* 0x4ca:0x0ac1 */
+        screen_x0     = 0;
+    }
+    video_mode = wide;                     /* [0x4fe] */
+
+    /* Both paths then build the viewports the drawing code clips against, from
+     * the geometry just set: `make_rect(&viewport_1741, height - 40, height,
+     * x0, x0 + 320)` and one more like it.
+     * TODO 0x13613-0x13676: the exact argument order of the two make_rect calls
+     * has not been checked against make_rect's own body. */
 }
 
 /* ------------------------------------------------------------ video: planes */
@@ -153,8 +184,9 @@ void far mouse_motion(int16_t far *dx, int16_t far *dy)
 
 /* 0x0678e - INT 33h function 0x05, presses of one button since the last call.
  * BX selects the button (0 left, 1 right, 2 middle) and the call clears that
- * button's counter; ignoring BX makes every button behave as one.
- * TODO: read out, currently inferred from the native and from the notes. */
+ * button's counter; ignoring BX makes every button behave as one. Read out: the
+ * struct is filled with AX = 5 and BX = button, handed to int86 as both the in
+ * and out struct, and BX read straight back out of it. */
 int16_t far mouse_presses(int16_t button)
 {
     union REGS r;
@@ -165,8 +197,8 @@ int16_t far mouse_presses(int16_t button)
     return r.x.bx;                         /* the count, then cleared */
 }
 
-/* 0x067ba - INT 33h function 0x06, releases. Same shape as presses.
- * TODO: read out, currently inferred from the native and from the notes. */
+/* 0x067ba - INT 33h function 0x06, releases: the same routine as presses with
+ * AX = 6. */
 int16_t far mouse_releases(int16_t button)
 {
     union REGS r;
@@ -240,8 +272,29 @@ void far palette_fade_step(int16_t arg)
     for (i = si; i < 0x300; i++)           /* 0x0b15f */
         outp(0x3c9, (palette_stored[i] * fade_level) >> 6);
 
-    /* TODO 0x0b177-0x0b284: the tail, including the two 16-colour blink loops at
-     * 0x0b1c9 and 0x0b202 that sit behind a flag nothing in this build sets. */
+    /* Fading out, the level bottoms out at zero and disarms itself. */
+    if (fade_level <= 0) {
+        fade_level = 0;
+        fade_direction = 0;
+        return;
+    }
+
+    /* Then the blink, which no play-through has ever reached: it is gated on
+     * blink_enable ([0x2157]), and the only write to the flag it is assigned from
+     * stores zero. When it does run it counts blink_countdown down and, at zero,
+     * flips blink_toggle and uploads sixteen colours at DAC index 0x40 from one of
+     * two palettes - the level's own ramp, and a washed copy of it built once at
+     * 0x0876a. Verified all the same, by forcing the gate open: 4,656 comparisons,
+     * 0 mismatched. */
+    if (!blink_enable || fade_level == 0)
+        return;
+    if (blink_countdown) {
+        blink_countdown--;
+        return;
+    }
+    blink_toggle = !blink_toggle;
+    /* TODO 0x0b1b8-0x0b284: the two 16-colour upload loops and the random
+     * reload of blink_countdown. */
 }
 
 /* ------------------------------------------------------------ video: drawing
@@ -259,18 +312,23 @@ void far palette_fade_step(int16_t arg)
  * Note it checks [0x4fe] at the top, unlike plot_pixel: this one does handle both
  * resolutions itself.
  */
-void far blit_rows(desc_t far *desc, viewport_t clip, int16_t flags)
+void far blit_rows(desc_t far *desc, rect_t rect, int16_t srcrow)
 {
-    int16_t row;
+    int16_t stride = video_mode ? 90 : 80;
+    int16_t row, x;
 
-    if (!video_mode) {
-        /* TODO 0x05c1b-: the 320-wide path. */
-    }
-    for (row = clip.top; row < clip.bottom; row++) {
-        uint8_t far *src = desc->rows[row][current_plane];   /* +0/+2 far ptr */
-        uint8_t far *dst = &((uint8_t far *) vram)[row * 80 + page_back];
-        /* TODO 0x05c4a-0x05d39: the inner copy, its clipping against the
-         * viewport, and the second resolution's 90-byte stride. */
+    for (row = rect.top; row <= rect.bottom; row++) {
+        /* One far pointer per source row, and the plane is *added to the pointer*
+         * rather than to the index - which is how the four passes read four
+         * interleaved columns of the same source. */
+        uint8_t far *src = desc->rows[srcrow + row] + current_plane;
+        uint8_t far *dst = &((uint8_t far *) vram)[row * stride + page_back];
+
+        /* Source steps 4 bytes per pixel, staying inside one plane; the
+         * destination steps 1. No transparency test - this one copies
+         * unconditionally, which is the only difference from blit_rows_masked. */
+        for (x = rect.left; x <= rect.right; x++)
+            dst[x] = src[x * 4];
     }
 }
 
@@ -351,17 +409,19 @@ void far draw_sprite(int16_t far *index, int16_t x, int32_t y,
  */
 void far blit_rows_masked(desc_t far *desc, rect_t rect, int16_t srcrow)
 {
+    int16_t stride = video_mode ? 90 : 80;
     int16_t row, x;
 
     for (row = rect.top; row <= rect.bottom; row++) {
-        uint8_t far *src = desc->rows[srcrow + row][current_plane];
-        uint8_t far *dst = &((uint8_t far *) vram)[row * 80 + page_back];
-        for (x = rect.left; x <= rect.right; x += 4)
-            if (src[x >> 2])                   /* zero is transparent */
-                dst[x >> 2] = src[x >> 2];
+        uint8_t far *src = desc->rows[srcrow + row] + current_plane;
+        uint8_t far *dst = &((uint8_t far *) vram)[row * stride + page_back];
+
+        for (x = rect.left; x <= rect.right; x++) {
+            uint8_t px = src[x * 4];
+            if (px)                            /* zero leaves the screen alone */
+                dst[x] = px;
+        }
     }
-    /* TODO 0x05ac2-0x05c08: the clipping and the second resolution, not read;
-     * the shape above is native.py's, which is byte-compared against this. */
 }
 
 /* 0x05d3a. The menu and between-level compositor. Takes no arguments at all -
@@ -422,9 +482,9 @@ void far compose_scroll(int16_t scroll_x, int16_t scroll_y)
             }
         }
     }
-    /* TODO: the exact source indexing is native.py's, which is byte-compared
-     * against this routine on every call - except the warp branch, which had
-     * never run until 2026-08-01 and is still unverified. See the root README. */
+    /* The source indexing above is native.py's, byte-compared against this
+     * routine on every call - except the warp branch, which had never run until
+     * 2026-08-01 and is still unverified. See the root README. */
 }
 
 /* 0x065f1. Halo a sprite: a colour-0 pixel above, below, left and right of each
