@@ -831,11 +831,12 @@ void far init(void)
 
     print_newline();
     set_text_colour(15);
-    puts("Press a key to begin...");               /* DGROUP+0x28e7 */
-    print_newline();
-    do {
-        input_poll(320, 200);
-    } while (!last_key);                           /* [0x18f6] */
+    // NOT NEEDED
+    //puts("Press a key to begin...");               /* DGROUP+0x28e7 */
+    //print_newline();
+    //do {
+    //    input_poll(320, 200);
+    //} while (!last_key);                           /* [0x18f6] */
 }
 
 /* ------------------------------------------------------------ 0x144d7: main
