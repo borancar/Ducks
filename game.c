@@ -99,7 +99,10 @@ int8_t     fade_direction;       /* 0x179a - +1 or -1; palette_fade_step reads i
                                   * 0xff being a large positive byte */
 int16_t    fade_start_colour;    /* 0x179b - a word: every store to it is
                                   * `mov word [0x179b], imm`, not a byte store */
-viewport_t viewport_1769;        /* ds:0x1769 - the global clip rect */
+viewport_t viewport_game;        /* ds:0x172d - the in-game scenes' clip */
+viewport_t viewport_panel;       /* ds:0x1741 - the bottom 40 rows */
+viewport_t viewport_full;        /* ds:0x1755 - everything */
+viewport_t viewport_screen;      /* ds:0x1769 - the centred 320x200 window */
 void far  *default_buffer;       /* ds:0x13f1 - what set_buffer restores */
 int16_t    g_53c;                /* 0x053c - show_splash's x origin */
 
@@ -242,7 +245,7 @@ void far show_resource_loop(desc_t far *desc, int16_t frames)
         si -= (frames > 0);
         for (plane = 0; plane < 4; plane++) {
             set_plane(plane);
-            blit_rows(desc, viewport_1769);            /* 20 bytes by value */
+            blit_rows(desc, viewport_screen);            /* 20 bytes by value */
         }
         page_flip();
         palette_fade_step(0);
@@ -337,7 +340,7 @@ void far cutscene_welcome_home(void)
     for (page = 0; page < 2; page++) {
         for (plane = 0; plane < 4; plane++) {
             set_plane(plane);
-            blit_rows(&desc, viewport_1769);
+            blit_rows(&desc, viewport_screen);
         }
         page_flip();
         if (page == 0)
@@ -366,7 +369,7 @@ void far cutscene_photos(void)
         for (page = 0; page < 2; page++) {
             for (plane = 0; plane < 4; plane++) {
                 set_plane(plane);
-                blit_rows(&desc, viewport_1769);
+                blit_rows(&desc, viewport_screen);
             }
             page_flip();
         }
