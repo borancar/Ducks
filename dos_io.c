@@ -29,20 +29,22 @@
  * and so does this.
  */
 
-/* the geometry set_mode_x selects, which everything else reads */
-extern int16_t    video_mode;        /* 0x04fe - non-zero is the 360-wide mode */
-extern int16_t    screen_width;      /* 0x0538 - 360 or 320 */
-extern int16_t    screen_height;     /* 0x053a - 240 or 200 */
-extern int16_t    screen_x0;         /* 0x053c - centring offset, 20 or 0 */
-extern void far (*plot)();           /* 0x053e - plot_pixel or its stride-90 twin */
+/* Owned here, because the routines in this file are the ones that write them:
+ * set_mode_x sets the geometry and swaps the plotter, set_plane sets the plane,
+ * page_flip swaps the pages. game.c declares these extern and reads a few. */
+int16_t    video_mode;               /* 0x04fe - non-zero is the 360-wide mode */
+int16_t    screen_width;             /* 0x0538 - 360 or 320 */
+int16_t    screen_height;            /* 0x053a - 240 or 200 */
+int16_t    screen_x0;                /* 0x053c - centring offset, 20 or 0 */
+void far (*plot)();                  /* 0x053e - plot_pixel or its stride-90 twin */
+uint8_t    current_plane;            /* 0x177d - the filter every drawing routine
+                                      * applies */
+uint16_t   page_front;               /* 0x1725 - swapped by page_flip */
+uint16_t   page_back;                /* 0x1727 - what everything draws into */
+int16_t    flip_phase;               /* 0x0d61 - 0..9 */
 
-/* the frame */
+/* the rest is game.c's */
 extern uint8_t    game_speed;        /* 0x1fd4 - delay(0x1f - this) per flip */
-extern uint16_t   page_front;        /* 0x1725 - swapped by page_flip */
-extern uint16_t   page_back;         /* 0x1727 - what everything draws into */
-extern int16_t    flip_phase;        /* 0x0d61 - 0..9 */
-extern uint8_t    current_plane;     /* 0x177d - set_plane's argument, and the
-                                      * filter every drawing routine applies */
 extern void far  *vram;              /* 0x16f1 - the Mode X aperture */
 
 /* the palette and the fade */
