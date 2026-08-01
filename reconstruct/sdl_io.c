@@ -297,12 +297,28 @@ void far blit_rows(desc_t far *desc, viewport_t rect, int16_t srcrow)
 {
     int16_t row, x;
 
-    for (row = rect.top; row <= rect.bottom; row++) {
-        const uint8_t *src = desc->rows[srcrow + row] + current_plane;
-        uint8_t       *dst = fb_back + (size_t) row * screen_width;
+    /* Bring-up guard, not something the original needs: until the egg reader
+     * exists, resource_load fails and leaves descriptors without a row table, and
+     * the screen players blit from them anyway. */
+    if (!desc || !desc->rows)
+        return;
 
-        for (x = rect.left; x <= rect.right; x++)
-            dst[x] = src[x * 4];
+    /* The original's rectangle counts destination *bytes*, because its destination
+     * is one plane at 80 bytes a row. Here both sides are linear pixels, so the
+     * same pass is "every fourth column, starting at the plane" - the x >> 2 and
+     * the x * 4 both disappear and the stepping does the work. */
+    for (row = rect.top; row < rect.bottom; row++) {
+        const uint8_t *src;
+        uint8_t       *dst;
+
+        if (row + srcrow < 0 || row + srcrow >= desc->h || row >= screen_height)
+            break;
+        src = desc->rows[srcrow + row];
+        dst = fb_back + (size_t) row * screen_width;
+
+        for (x = rect.left + current_plane; x < rect.right; x += 4)
+            if (x >= 0 && x < screen_width && x < desc->w)
+                dst[x] = src[x];
     }
 }
 
@@ -310,15 +326,21 @@ void far blit_rows_masked(desc_t far *desc, viewport_t rect, int16_t srcrow)
 {
     int16_t row, x;
 
-    for (row = rect.top; row <= rect.bottom; row++) {
-        const uint8_t *src = desc->rows[srcrow + row] + current_plane;
-        uint8_t       *dst = fb_back + (size_t) row * screen_width;
+    if (!desc || !desc->rows)
+        return;
 
-        for (x = rect.left; x <= rect.right; x++) {
-            uint8_t px = src[x * 4];
-            if (px)
-                dst[x] = px;
-        }
+    for (row = rect.top; row < rect.bottom; row++) {
+        const uint8_t *src;
+        uint8_t       *dst;
+
+        if (row + srcrow < 0 || row + srcrow >= desc->h || row >= screen_height)
+            break;
+        src = desc->rows[srcrow + row];
+        dst = fb_back + (size_t) row * screen_width;
+
+        for (x = rect.left + current_plane; x < rect.right; x += 4)
+            if (x >= 0 && x < screen_width && x < desc->w && src[x])
+                dst[x] = src[x];
     }
 }
 
