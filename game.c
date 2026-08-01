@@ -104,7 +104,14 @@ viewport_t viewport_panel;       /* ds:0x1741 - the bottom 40 rows */
 viewport_t viewport_full;        /* ds:0x1755 - everything */
 viewport_t viewport_screen;      /* ds:0x1769 - the centred 320x200 window */
 void far  *default_buffer;       /* ds:0x13f1 - what set_buffer restores */
-int16_t    g_53c;                /* 0x053c - show_splash's x origin */
+int16_t    screen_width;         /* 0x0538 - 360 wide, 320 narrow */
+int16_t    screen_height;        /* 0x053a - 240 wide, 200 narrow */
+int16_t    screen_x0;            /* 0x053c - the centring offset: 20 wide, 0
+                                  * narrow. The play area stays 320 across, so
+                                  * the wide mode translates it right rather
+                                  * than widening it */
+void far (*plot)();              /* 0x053e/0x0540 - the pixel plotter for the
+                                  * current resolution */
 
 /* input */
 int32_t    mouse_x, mouse_y;     /* 0x18d3, 0x18d7 - 32-bit from the add/adc
@@ -392,7 +399,7 @@ void far show_splash(void far *image, int16_t frames)
     viewport_t a, b;
     int16_t    si = 0, di = frames, plane;
 
-    make_rect(&a, 80, 104, g_53c, g_53c + 320);
+    make_rect(&a, 80, 104, screen_x0, screen_x0 + 320);   /* centred */
     make_rect(&b, 320, 24);
     f_0615a(1, 0x53, &loc, 0xff);  f_056f7(0);
     f_0b5cf(image, &loc, 0x12, &b, 0, 0x1c);       /* decodes it into b */
