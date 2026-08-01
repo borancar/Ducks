@@ -75,7 +75,7 @@ worth having as source.
 | file | contents so far |
 | --- | --- |
 | [`game.c`](game.c) | `close_egg_files`, `input_poll`, `show_resource_loop`, `egg_load_pass_0x48`, `show_resource`, `cutscene_welcome_home`, `cutscene_photos`, `show_splash`, `episode_end_gate`, `menu_screen_driver`, `game_main`, `scan_save_slots`, `save_settings`, `init`, `main` |
-| [`dos_io.c`](dos_io.c) | `set_mode_x`, `set_plane`, `dac_set_black`, `palette_upload`, `page_flip`, `mouse_motion`, `mouse_presses`, `mouse_releases`, and a list of the ten primitives still to be read out |
+| [`dos_io.c`](dos_io.c) | mode, planes, DAC, page flip, mouse, and the drawing primitives: `set_mode_x`, `set_plane`, `dac_set_black`, `palette_upload`, `page_flip`, the three INT 33h wrappers, `clear_vram`, `plot_pixel`, `palette_fade_step`, `blit_rows`, `draw_sprite`, `draw_number`. Six more are listed at the end of the file as `TODO` |
 
 `game.c` keeps its functions in **address order**, which within a module is the
 order the compiler emits them and therefore the order they were defined in - a
