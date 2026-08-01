@@ -90,10 +90,35 @@ FUNCTIONS = {
     0x0C1AD: "show_resource",           # (type 0x4d, index, frames, 0xff):
                                         # load, display through 0x0b52f, release
     0x0D757: "draw_number2",            # native
+    # The homecoming sequence, in the order main_menu calls them at 0x1392f
+    # onwards. Each takes no arguments, loads its own resource by id and shows it
+    # through its own four-plane loop. Named for what they draw, which was
+    # watched; what triggers the sequence is not established - see
+    # docs/notes/homecoming-sequence.md
+    0x0F5B1: "cutscene_rocket_space",    # id 0x32: the rocket crossing a
+                                         # starfield, then leaving the frame
+    0x0F825: "cutscene_welcome_home",    # id 0x36: the flock under a
+                                         # "Welcome Home!" banner
+    0x0F913: "cutscene_photos",          # ids 0x3a-0x3c: three polaroids, one
+                                         # more per screen, each on a DAC flash
+    0x0F9FD: "cutscene_doorstep",        # ids 0x37/0x38: the lit doorway,
+                                         # silhouette then revealed
+    0x0FC8B: "cutscene_rocket_landing",  # ids 0x33/0x34: down on the grass at
+                                         # dusk; 12 draw_sprite calls. The only
+                                         # one that never reached its own return
     0x102D7: "show_splash",             # (image far *, frames): fade an image
                                         # in, hold for `frames` or until a key,
                                         # fade out. Holds a fifth plane loop.
     0x11547: "print_newline?",          # no args, bracketing the banners
+    0x11C75: "episode_end_gate",        # (level, 0): find the episode whose last
+                                        # level is this, show its splash, and
+                                        # return that record's terminator flag -
+                                        # so it says "the FINAL episode ended",
+                                        # which is what gates the homecoming
+    0x1271B: "menu_screen_driver?",     # main_menu's first call; observed on the
+                                        # stack above both the menu compositor
+                                        # (ret 0x12736) and the in-game frame
+                                        # (ret 0x12766), so it drives both
     0x11EFB: "show_readme_section",     # (n) = ordinal into the readme index;
                                         # 2 is HOW TO REGISTER. The viewer the
                                         # readme crash happens in

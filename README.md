@@ -673,6 +673,7 @@ so this is architectural, not an optimisation.
 | `test_symbols.py` | every native and hooked loop head is named, and the names agree |
 | `test_retire.py` | drives the guest's own code to reach a state play cannot |
 | `probe_plot_ptr.py` | resolves which pixel plotter `[0x53e]` points at |
+| `show_cutscene.py` | plays the ending sequence without finishing all 80 levels |
 | `export_sessions.py` | regenerates `docs/sessions/` from a session transcript |
 | `sb.py` | Sound Blaster DSP, DMA channel and IRQ model |
 | `xms.py` | XMS / HIMEM.SYS driver; without it the game has no sound |
