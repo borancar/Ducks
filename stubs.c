@@ -127,8 +127,13 @@ void egg_bringup_open(void)
 
     /* The count the original keeps at [0x20ad], which egg_load_pass_0x48 loops
      * over. One egg here. Without this the pass has nothing to iterate and the
-     * version page never draws - which is exactly what it did. */
+     * version page never draws - which is exactly what it did.
+     *
+     * The array itself has to exist as well as the count: close_egg_files is
+     * real, and it walks one record per count on the way out. */
     egg_file_count = (n > 0) ? 1 : 0;
+    egg_files      = calloc(1, sizeof *egg_files);
+    egg_files[0].fp = fopen(path, "rb");
 }
 void far crt_exit(void)                   { }
 void far print_newline(void)              { }
@@ -160,21 +165,19 @@ void far f_0b5cf(void far *img, void far *loc, int16_t a, void far *b,
 void far f_0becb(void)                    { }
 void far f_0f55c(void)                    { }
 void far f_0f8bd(void)                    { }
-void far f_054c_set(void)                 { }   /* [0x54c] = 1; unread */
 
-/* 0x0b7c3. Finds a type 0x48 block and renders it into a descriptor: the readme
- * and credits pages. It calls egg_find_block, reads the block, and draws through
- * 0x06d52 three times - the glyph pass. Until it is read the pages show their
- * background and none of their words.
- *
- * The text itself is already legible: every byte in a 0x48 block is shifted up by
- * one, so 'Vtjoh' is 'Using', the same cipher the episode index uses. */
-int16_t far load_text_page(void far *desc, uint8_t type, uint8_t index,
-                           int16_t a, int16_t b, int16_t egg)
+/* 0x04de6. The fatal error reporter: it puts the screen back into text mode,
+ * prints the message and the argument, and exits(1). Only the printing and the
+ * exit are read out; the mode restoration in the middle is not. */
+void far fatal(const char far *msg, const char far *arg)
 {
-    (void) desc; (void) type; (void) index; (void) a; (void) b; (void) egg;
-    return 0;
+    if (arg)
+        fprintf(stderr, "%s: %s\n", msg, arg);
+    else
+        fprintf(stderr, "%s\n", msg);
+    exit(1);
 }
+
 int16_t far f_1102a(int16_t a)            { (void) a; return 0; }
 void far f_11bee(void far *name, int16_t egg) { (void) name; (void) egg; }
 void far f_147c5(int16_t a, int16_t b, int16_t c)

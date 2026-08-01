@@ -55,6 +55,7 @@ static int      dir_count;
 static size_t   data_base;      /* where the directory ends */
 
 static size_t   cursor;         /* the open "stream" every read advances */
+static int      block_open;     /* [0x20b6] - egg_find_block's lock */
 
 /* the decoder's state, which is [0x20ce], [0x20d2], [0x20d3] and [0x20d4] */
 static uint8_t  table[16];
@@ -114,6 +115,48 @@ int16_t far egg_read_word(void far *s)
     return (int16_t) ((hi << 8) | lo);
 }
 
+/* 0x04f4b. One string: a big-endian word of length, then that many bytes, each
+ * one *more* than the character it stands for - so 'Vtjoh' is 'Using'. The
+ * caller frees it. This is where the cipher is undone, and the reason the same
+ * shift shows up in the episode index: it is the only string reader there is.
+ *
+ * The original reads through the runtime's fgetc on the egg's FILE *, so the
+ * length word and the bytes come off the same stream position this cursor is. */
+char far *far egg_read_string(void far *s)
+{
+    int16_t  len = egg_read_word(s);
+    char far *buf = malloc((size_t) len + 1);
+    int16_t  i;
+
+    if (!buf)
+        fatal("No room for string", NULL);       /* ds:0x2269 */
+    for (i = 0; i < len; i++)
+        buf[i] = (char) (egg_read_byte(s) - 1);
+    buf[len] = 0;
+    return buf;
+}
+
+/* The glyph pixels are stored raw, so the original reads them with the
+ * runtime's fread(buf, size, n, egg) rather than through the chunk decoder. */
+void far egg_fread(void far *buf, int16_t size, int16_t n)
+{
+    size_t want = (size_t) size * (size_t) n;
+
+    if (cursor + want > egg_len)
+        want = egg_len - cursor;
+    memcpy(buf, egg + cursor, want);
+    cursor += want;
+}
+
+/* 0x0537d. Four instructions: it clears [0x20b6], which egg_find_block sets and
+ * then refuses to run against - "File slice already in use" - so it is the lock
+ * saying a block is open, not decoder state. Both readers of a whole block, the
+ * font and the text pages, end with it. */
+void far egg_block_end(void)
+{
+    block_open = 0;
+}
+
 /* 0x05232. Seeks the stream to a resource. The original walks the open egg files
  * and sets egg_stream to whichever holds it; there is one egg here, so this is
  * the directory search that was inside that. */
@@ -122,9 +165,12 @@ int16_t far egg_find_block(uint8_t type, uint8_t index, int16_t arg)
     int i;
 
     (void) arg;
+    if (block_open)                              /* 0x0524a, and it only warns */
+        printf("File slice already in use\n");   /* ds:0x22ae */
     for (i = 0; i < dir_count; i++)
         if (dir[i].type == type && dir[i].index == index) {
             cursor = data_base + dir[i].offset;
+            block_open = 1;                      /* 0x0536d */
             return 1;
         }
     return 0;

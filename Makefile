@@ -15,7 +15,7 @@ LDLIBS  ?= $(shell pkg-config --libs sdl3)
 OBJS = game.o sdl_io.o stubs.o egg.o
 
 ducks: $(OBJS)
-	$(CC) $(OBJS) $(LDLIBS) -o $@
+	$(CC) $(LDFLAGS) $(OBJS) $(LDLIBS) -o $@
 
 %.o: %.c dos.h
 	$(CC) $(CFLAGS) -c $< -o $@
