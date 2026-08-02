@@ -4906,10 +4906,6 @@ def _sign32(v):
     return v - 0x100000000 if v & 0x80000000 else v
 
 
-def _watch_dgroup(m, args):
-    return [(m.dgroup_base, 0x10000)]
-
-
 def _watch(off, n):
     """The commonest case: a fixed run of DGROUP, the same every call."""
     return lambda m, args: [(m.dgroup_base + off, n)]
@@ -4967,7 +4963,15 @@ def _watch_scene_entities(m, args):
 # What each native's verification watches besides the planes, given its own
 # arguments - see _verify_native.
 VERIFY_REGIONS = {
-    "tool_events": _watch_dgroup,
+    # d+0x1788 and nothing else. This watched the whole of DGROUP first, which
+    # cannot work: the stack is inside it - SP sits around d+0x4a24 - and the
+    # two bytes below SP are where the original's `push bp; push si` land. A
+    # native returns without pushing anything, so the two disagree on any frame
+    # where either register changed, and tool_events reported 12 mismatches in
+    # 690 calls at a fixed offset with a body that was word for word correct.
+    # The same effect is what made bios_video, isatty and dos_setblock each
+    # report a handful of bytes neither side got wrong.
+    "tool_events": _watch(0x1788, 1),
     "scene_keep_positions": _watch_scene_entities,
     "scroll_axis_toward": _watch_scroll_pos,
     "scroll_follow": _watch_scroll,
@@ -5024,13 +5028,14 @@ NATIVE_TABLE = [
     (0x0876A, "build_washed_ramp", native_build_washed_ramp, "far"),
     (0x05F15, "scroll_axis_snap", native_scroll_axis_snap, "far"),
     (0x0A3A7, "scene_swap_pair", native_scene_swap_pair, "far"),
+    (0x0D4C2, "tool_events", native_tool_events, "far"),
 ]
 
-# Written but not enabled: 0x0d4c2 is called once as a level starts, and every
-# snapshot is mid-level, so a --verify run never reaches it. Registering it would
-# mean the game running code nothing has checked. Add
-#     (0x0D4C2, "tool_events", native_tool_events, "far"),
-# to NATIVE_TABLE above once there is a run that starts a level under --verify.
+# tool_events sat here written and unregistered for a day, on the belief that it
+# ran once at level start and no snapshot could reach it. Wrong twice over: it
+# runs every frame, and what no snapshot reached was the demo path, because
+# in_game_frame(1) is the only caller. Three demo captures fire it ~690 times
+# each.
 
 # Enabled only with --native-sound. The whole family must go together: the game
 # queries and stops sounds by id and reads an active-voice count, so pygame and

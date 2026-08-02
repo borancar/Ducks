@@ -98,7 +98,22 @@ they identify it:
 `scene_swap_pair`, `egg_block_end`, `rle_reset`, `set_buffer`,
 `cursor_to_centre`, `bg_scroll_reset`, `palette_apply_gamma`,
 `build_washed_ramp`, `tool_list_has`, `tool_list_any_flagged`, `text_width`,
-`image_clear`. Nineteen more have all their callees native and are ready.
+`image_clear`, `tool_events`. Nineteen more have all their callees native and
+are ready.
+
+**2026-08-03: three demo captures changed what is reachable.** `in_game_frame(1)`
+is only ever called from the menu's idle timeout and the PLAYBACKTIME picker, so
+until there were snapshots of one, every `[bp+6]` branch was dead to `--verify` -
+and so was `tool_events`, which had sat written and unregistered on the belief
+that it ran once at level start. It runs every frame; what no snapshot reached
+was the demo. The captures also fixed the vacuous `scroll_follow` check: on a
+420x260 level the camera actually moves, and feeding it the y coordinate where x
+belonged now mismatches, where on level 80 it had not.
+
+They did not fix everything. The tool-event tables in all three fire at clocks
+337 to 642 and a `--verify` run reaches about 180, so those ~690 calls a run all
+take the do-nothing path; one capture has no tool events at all. **Called is not
+exercised**, and `test_gameplay.py` is what actually pins the write.
 
 **A snapshot cannot check most of them.** Twelve seconds of `--verify` on the
 level 80 snapshot is thirteen frames, and of the thirty routines that were ready

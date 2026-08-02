@@ -106,6 +106,7 @@ FUNCTIONS = {
     0x0A3A7: "scene_swap_pair",          # native
     0x0600D: "scroll_follow",            # native
     0x0B0C5: "palette_apply_gamma",      # native
+    0x0D4C2: "tool_events",              # native
     0x0D55D: "tool_list_has",            # native
     0x0D591: "tool_list_any_flagged",    # native
     0x0D6C3: "bg_scroll_reset",          # native

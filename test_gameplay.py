@@ -307,7 +307,32 @@ def case_scene_swap_pair(m, rng):
             "scene_swap_pair")
 
 
+def case_tool_events(m, rng):
+    """The level's scheduled tool changes, with records that actually fire.
+
+    The tables in the demo captures fire at clocks 337 to 642 and a --verify run
+    reaches about 180, so this is the only thing that exercises the write at all.
+    Half the records are put on the current tick deliberately: two on the same
+    tick leave the last one selected, which is the guest's behaviour and not
+    obviously deliberate, so it is worth pinning.
+    """
+    d = m.dgroup_base
+    clock = rng.randrange(0, 700)
+    n = rng.randrange(0, 10)
+    recs = b""
+    for _ in range(n):
+        when = clock if rng.randrange(0, 2) else rng.randrange(0, 700)
+        recs += struct.pack("<H", when) + bytes([rng.randrange(0, 256)])
+    m.uc.mem_write(SCRATCH_SEG * 16, recs or b"\0\0\0")
+    m.uc.mem_write(d + 0x203B, struct.pack("<HH", 0, SCRATCH_SEG))
+    m.uc.mem_write(d + 0x2047, struct.pack("<H", n))
+    m.uc.mem_write(d + 0x201A, struct.pack("<H", clock))
+    m.uc.mem_write(d + 0x1788, bytes([rng.randrange(0, 256)]))
+    return 0x0D4C2, b"", [(d + 0x1788, 1)], "tool_events"
+
+
 CASES = [case_scroll, case_scroll_axis, case_entity_set_type,
+         case_tool_events,
          case_scroll_axis_snap, case_scene_swap_pair,
          case_tool_list_has, case_tool_list_any_flagged, case_text_width,
          case_image_clear, case_build_washed_ramp,
