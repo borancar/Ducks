@@ -107,16 +107,8 @@ int16_t far detect_hardware(void)         { return 0; }
  * 0x11657, which prints "Using file EGGS\\MAIN.EGG - 303 slices". Until that is
  * read out, open the one egg here so the resource loader has a file to seek in.
  * DUCKS_GAME_DIR matches the tooling's own environment variable. */
-/* The table at 0x1894:0 that the intro indexes for its splash sources. It is
- * built during startup from the egg, which has not been read out, so it is zeroed
- * here: every splash then gets a null image and draws nothing, which is what
- * main's first splash genuinely does anyway. */
-static restable_t bringup_res;
-
 void egg_bringup_open(void)
 {
-    res = &bringup_res;
-
     const char *dir = getenv("DUCKS_GAME_DIR");
     char        path[512];
     int         n;
