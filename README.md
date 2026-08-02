@@ -81,7 +81,7 @@ worth having as source.
 | file | contents so far |
 | --- | --- |
 | [`dos.h`](dos.h) | the types and the interface both backends implement, so `game.c` does not know which it is linked against |
-| [`game.c`](game.c) | twenty-two functions: `close_egg_files`, `resource_load_full`, `resource_load`, `input_poll`, `make_rect`, `particles`, `draw_entities`, `show_resource_loop`, `draw_number`, `egg_load_pass_0x48`, `show_resource`, `draw_number2`, `cutscene_welcome_home`, `cutscene_photos`, `show_splash`, `episode_end_gate`, `menu_screen_driver`, `game_main`, `scan_save_slots`, `save_settings`, `init`, `main` |
+| [`game.c`](game.c) | twenty-two functions: `close_egg_files`, `resource_load_full`, `resource_load`, `input_poll`, `make_rect`, `particles`, `draw_entities`, `show_resource_loop`, `draw_number`, `egg_load_all`, `show_resource`, `draw_number2`, `cutscene_welcome_home`, `cutscene_photos`, `show_splash`, `episode_end_gate`, `menu_screen_driver`, `game_main`, `scan_save_slots`, `save_settings`, `init`, `main` |
 | [`dos_io.c`](dos_io.c) | nineteen functions: `set_bios_mode`, mode, planes, DAC, page flip, the three INT 33h wrappers, and every drawing primitive the native port replaced - `clear_vram`, `plot_pixel` and its stride-90 twin, `palette_fade_step`, `blit_rows`, `blit_rows_masked`, `compose_layer`, `compose_scroll`, `draw_sprite`, `outline_sprite`. No TODOs left in this file |
 | [`sdl_io.c`](sdl_io.c) | the same interface on SDL3: a linear framebuffer, an SDL palette, a 70 Hz deadline in place of the retrace spin, and SDL events counted into the INT 33h wrappers' shape. **Compiles** - `cc -c sdl_io.c $(pkg-config --cflags sdl3)` |
 

@@ -1331,7 +1331,7 @@ void far str_copy(const char far *s, char far **dest)
 
 /* ------------------------------------------------------ 0x0c0c2: egg_load_one
  *
- * Called once per open egg by egg_load_pass_0x48. It is not only a loader - it
+ * Called once per open egg by egg_load_all. It is not only a loader - it
  * draws, which is what makes the version and credits page appear before the logo,
  * and it holds until a key.
  *
@@ -1365,8 +1365,8 @@ void far egg_load_one(int16_t index, int16_t type, int16_t egg)
     set_buffer(default_buffer);
 }
 
-/* ------------------------------------------------ 0x0c156: egg_load_pass_0x48 */
-void far egg_load_pass_0x48(void)
+/* ------------------------------------------------ 0x0c156: egg_load_all */
+void far egg_load_all(void)
 {
     uint8_t scratch[0x302];
     int16_t i;
@@ -3436,7 +3436,7 @@ void far main(void)
      * nothing - the 320x24 source is allocated but empty, checked in the planes. */
     // NOT NEEDED
     //show_splash(g_28ff, 100);               /* 0x14520 - (1) blank */
-    egg_load_pass_0x48();                    /* 0x14527 - and it draws the version
+    egg_load_all();                    /* 0x14527 - and it draws the version
                                               * and credits page, which waits for
                                               * a key */
     sound_play_guarded(0x2b, 1);
