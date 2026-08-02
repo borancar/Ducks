@@ -34,14 +34,8 @@ int16_t far in_game_frame(int16_t arg)
     return 0;
 }
 
-/* Reads a sprite index out of an entity record. Types 1, 2 and 4 compute it
- * arithmetically instead; 0x26 and 0x36 adjust y first. */
-int16_t far sprite_index_for(void far *e)  { (void) e; return 0; }
-
-int16_t previous_type;
 int16_t particle_count;
 particle_t far *particle_array;
-table_t far *sprite_table;
 viewport_t hud_clip;
 
 /* The four ending screens that have not been read out. cutscene_welcome_home and
@@ -52,12 +46,6 @@ void far cutscene_doorstep(void)          { }
 void far cutscene_night_monster(void)     { }
 
 /* ------------------------------------------------------------ the screens */
-
-/* Every menu is real - run_screen and build_menus are in game.c - but the mouse
- * pointer a menu draws is not. It is one entity of type 0x14 in cursor_scene,
- * and it needs both of these: sprite_index_for above to say which sprite, and
- * sprite_table to hold it. Until then a menu is keyboard and mouse-position
- * only, with nothing under the cursor to see. */
 
 void far show_readme_section(uint8_t n)   { (void) n; }
 void far save_game_screen(void)           { }

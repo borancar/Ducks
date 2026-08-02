@@ -208,6 +208,9 @@ FUNCTIONS = {
     0x11EFB: "show_readme_section",     # (n) = ordinal into the readme index;
                                         # 2 is HOW TO REGISTER. The viewer the
                                         # readme crash happens in
+    0x13A98: "load_animations",         # the 'G' block: a sprite script and five
+                                        # per-type fields for each entity type,
+                                        # into the six arrays at d+0x009a
     0x11657: "build_episode_index",     # builds both indexes; prints the banner
     0x13F2:  "farmalloc?",              # sizes both index arrays
     0x13519: "set_mode_x",              # BIOS 13h, then unchains to Mode X

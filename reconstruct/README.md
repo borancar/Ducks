@@ -193,10 +193,8 @@ string tables at startup and `run_screen` runs whichever one `game_main` points
 at - so PLAY DUCKS, OPTIONS, the settings screens, READ ME! and QUIT DUCKS all
 navigate, the toggles toggle, and QUIT takes main's teardown path and exits.
 
-Three things are visibly absent from a menu. The mouse pointer is not drawn,
-because `animate_scene` (`0x0a52a`) and the sprite table it animates against are
-still stubbed - the keyboard and the mouse both still *move* the highlight. The
-sliders behind GAME SPEED, AMBIENCE VOLUME and GAMMA CORRECT are a screen of
-their own at `0x0c4f0` and are not read. And the episode, readme and demo lists
-come out empty, because `build_episode_index` (`0x11657`) has not been read, so
-there are no records for `menu_add_list` to page through.
+Two things are still absent from a menu. The sliders behind GAME SPEED, AMBIENCE
+VOLUME and GAMMA CORRECT are a screen of their own at `0x0c4f0` and are not read.
+And the episode, readme and demo lists come out empty, because
+`build_episode_index` (`0x11657`) has not been read, so there are no records for
+`menu_add_list` to page through.

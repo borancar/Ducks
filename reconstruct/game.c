@@ -155,6 +155,21 @@ int16_t    lives;                /* 0x2034 - decremented on a lost run */
 uint16_t   max_save_value;       /* 0x2055 - scan_save_slots' only output;
                                   * compared with `jbe` */
 
+/* ------------------------------------------------------- the animation tables
+ *
+ * load_animations fills all six of these from the 'G' block, one entry per
+ * entity type. They are consecutive in DGROUP and the last of them ends exactly
+ * where settings begins, which is what fixes the length at 112.
+ */
+int16_t far *anim_script[112];   /* 0x009a - a sprite index per step, 999 ends */
+uint8_t      anim_a[112];        /* 0x025a - read nowhere yet */
+uint8_t      anim_b[112];        /* 0x02c9 */
+uint8_t      anim_c[112];        /* 0x0338 */
+uint8_t      type_flags[112];    /* 0x03a7 - bit 2 says the type has a mirrored
+                                  * script in the next slot */
+int16_t      next_type[112];     /* 0x0416 - what a type becomes when its script
+                                  * runs out; a type that points at itself loops */
+
 /* the menu and the attract cycle */
 int16_t    attract_choice;       /* 0x21ae - 0 demos, non-zero shows a screen */
 int16_t    menu_idle_suppress;   /* 0x2177 - non-zero holds the menu still */
@@ -178,6 +193,12 @@ uint8_t    cheat_text_count;     /* 0x0504 */
  * bytes, and the array ends exactly where cheat_text begins. What run_screen
  * reads as "[0x515]" is element 8 of this, not a variable of its own. */
 int16_t    cheat_state[10];
+int16_t    left_handed;          /* 0x0511 - LEFT HANDED, which swaps the side of
+                                  * the pen the cursor's tool is drawn on */
+uint8_t    tool_shown;           /* 0x179e - which tool the cursor holds; a byte,
+                                  * and nothing that sets it has been read */
+table_t    sprite_table;         /* 0x18e9 - the set, not a pointer to it: every
+                                  * draw_sprite call pushes ds and this offset */
 char far **tool_names;           /* 0x2106 */
 uint8_t    tool_names_count;     /* 0x210a */
 
@@ -792,20 +813,34 @@ void far particles(void)
 
 /* 0x0a52a. Steps every entity in a scene one frame.
  *
- * The part that is read: each entity's frame counter is incremented, and the
- * script for its type - a far pointer out of the table at d+0x009a - is indexed
- * by the counter rounded down to an even step. A script entry of 999 means the
- * script has run out, and only then does the rest of the routine run.
+ * Each entity's counter goes up by one, and the script for its type is indexed
+ * by that counter halved - so every sprite in a script is held for two frames.
+ * A script entry of 999 means the script has run out, and only then does
+ * anything else happen.
  *
- * TODO 0x0a52a-0x0a83c: that rest is a switch on the entity type with a jump
- * table at 0x0a5ba9's segment offset, arms for types 0x1a-0x24, 0x2f, 0x46,
- * 0x47, 0x4e and 0x54, and a default. It is the game's animation system rather
- * than the menu's, and the menu's one entity - the mouse pointer, type 0x14 -
- * takes the default arm. Left as a no-op until the animation tables are read.
+ * When it has, the default is to become whatever next_type says and start again
+ * from zero. A type whose next_type is itself simply loops, which is what the
+ * mouse pointer does: its script is 0,0,0,0,1,1,1,1 and next_type[0x14] is 0x14,
+ * so it blinks between two sprites forever.
+ *
+ * TODO 0x0a58e-0x0a7ed: before the default there is a switch with arms for
+ * types 0x1a-0x24, 0x2f, 0x46, 0x47, 0x4e and 0x54 - the game's own animation
+ * behaviour, none of which any menu entity reaches.
  */
 void far animate_scene(scene_t far *scene)
 {
-    (void) scene;
+    int16_t i;
+
+    for (i = 0; i < scene->count; i++) {
+        entity_t far *e = &scene->entities[i];
+
+        e->frame++;
+        if (anim_script[e->type][e->frame >> 1] != 0x3e7)
+            continue;
+
+        e->type  = next_type[e->type];
+        e->frame = 0;
+    }
 }
 
 /* -------------------------------------------------- 0x0aba5: draw_entities
@@ -819,37 +854,81 @@ void far animate_scene(scene_t far *scene)
  *           as its clip rectangle
  *   colour  offset added to every pixel drawn
  *
- * Most entity types read their sprite index out of the record; types 1, 2 and 4
- * compute it arithmetically, and 0x26 and 0x36 adjust y first.
+ * Most types take the sprite straight out of their script. The two cursors
+ * compute theirs, type 4 has two fixed sprites for a non-zero facing, and two
+ * types move themselves before drawing.
  */
 void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour)
 {
     int16_t i;
+    int16_t haloed = 0;                            /* di, and it starts at 0 */
 
     for (i = 0; i < scene->count; i++) {
         entity_t far *e = &scene->entities[i];     /* 0x29-byte records */
-        int16_t index = sprite_index_for(e);       /* type-dependent */
-        int16_t x = e->x - view.scroll_x;
-        int16_t y = e->y - view.scroll_y;
+        int16_t  index;                            /* [bp-2] */
+        int32_t  y = e->y;                         /* [bp-8]/[bp-6] */
+        /* Worked out before the switch, and only taken up after this entity has
+         * been drawn: a scene usually holds one highlighted entity, and it is
+         * the entity *after* it that gets the halo. */
+        int16_t  halo_next = (e->type == 0x10 || e->type == 0x0f);
 
-        /* An entity following one of type 0x0f or 0x10 is haloed as well as
-         * drawn. This is the path the native declines on rather than
-         * reimplementing, and it is what most declines are: a scene usually holds
-         * one highlighted entity, so the entity after it takes it. */
-        if (previous_type == 0x0f || previous_type == 0x10)
-            outline_sprite(&index, x, y, sprite_table, &view);
+        switch (e->type) {
+        case 0x36:                                 /* 0x0ac53 */
+            index = anim_script[e->type][e->frame >> 1];
+            if (e->param != 1)                     /* +0x17 */
+                y += 8;
+            break;
 
-        draw_sprite(&index, x, (int32_t) y, sprite_table, &view, colour);
+        case 1:                                    /* 0x0acb7 - the two cursors */
+        case 2:
+            /* Left-handed swaps which side of the pen the tool sits on, which is
+             * the whole difference between the two arms. */
+            if (left_handed)
+                index = (2 - e->type) * 12 + e->f14 * 4 + tool_shown + 6;
+            else
+                index = (2 - e->type) * 12 + 6 - e->f14 * 4 + tool_shown;
+            break;
 
-        /* Type 5 with y <= 0 retires the entity through 0x78d4, which mutates
-         * game state rather than drawing - the reason the native declines here
-         * too. Verified by driving the guest's own code on synthetic input, since
-         * a balloon floating off the top is not a state you can ask for. */
-        if (e->type == 5 && y <= 0)
-            entity_set_type(e, 0);                 /* 0x078d4 - type 0 is what
-                                                    * retiring an entity is */
+        case 4:                                    /* 0x0ad4c */
+            if (e->f14)
+                index = 0x7b + (e->f14 < 0);       /* two fixed sprites */
+            else
+                index = anim_script[4][e->frame >> 1];
+            break;
 
-        previous_type = e->type;
+        case 0x26:                                 /* 0x0adb0 */
+            y -= e->f23;
+            index = anim_script[0x26][e->frame >> 1];
+            break;
+
+        case 5:                                    /* 0x0adf2 */
+            /* A 32-bit signed compare against zero, and only the high word
+             * decides it: y == 0 is not retired. */
+            if (e->y < 0)
+                entity_set_type(e, 0);             /* type 0 is retired */
+            /* FALL THROUGH */
+
+        default:                                   /* 0x0ae36 */
+            if (type_flags[e->type] & 4) {
+                /* The mirrored script lives in the next slot, and which of the
+                 * two is used depends on the facing matching the handedness. */
+                int16_t mirror = (e->f14 == (left_handed ? -1 : 1));
+
+                index = anim_script[e->type + mirror][e->frame >> 1];
+            } else {
+                index = anim_script[e->type][e->frame >> 1];
+            }
+            break;
+        }
+
+        if (haloed)
+            outline_sprite(&index, (int16_t) (e->x - view.scroll_x),
+                           (int16_t) (y - view.scroll_y), &sprite_table, &view);
+
+        draw_sprite(&index, (int16_t) (e->x - view.scroll_x),
+                    y - view.scroll_y, &sprite_table, &view, colour);
+
+        haloed = halo_next;
     }
 }
 
@@ -916,7 +995,7 @@ void far draw_number(int16_t value, int16_t x, int16_t y, viewport_t far *clip,
 
     for (i = digits - 1; i >= 0; i--) {    /* `dec ax` then count down */
         glyph = 0x71 + (value % 10);       /* idiv by 10, remainder + 0x71 */
-        draw_sprite(&glyph, x + i * 12, y, sprite_table, clip, (uint8_t) flags);
+        draw_sprite(&glyph, x + i * 12, y, &sprite_table, clip, (uint8_t) flags);
         value /= 10;
     }
 }
@@ -1645,8 +1724,8 @@ void far draw_number2(int16_t value, int16_t digits, int16_t x, int16_t y)
     for (i = digits - 1; i >= 0; i--) {
         int16_t tile = 0x70, glyph = 0x71 + (value % 10);
 
-        draw_sprite(&tile,  x + i * 12, y, sprite_table, &hud_clip, 0); /* behind */
-        draw_sprite(&glyph, x + i * 12, y, sprite_table, &hud_clip, 0); /* over it */
+        draw_sprite(&tile,  x + i * 12, y, &sprite_table, &hud_clip, 0); /* behind */
+        draw_sprite(&glyph, x + i * 12, y, &sprite_table, &hud_clip, 0); /* over it */
         value /= 10;
     }
 }
@@ -2229,6 +2308,49 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
     } while (running);                             /* 0x13a66 */
 }
 
+/* ---------------------------------------------- 0x13a98: load_animations
+ *
+ * The 'G' block, read once at startup: for each entity type a script of sprite
+ * indices, then four bytes and a word of per-type state. Six arrays, all indexed
+ * by type, and 111 is the most the block is allowed to hold - which is why they
+ * are 112 long and end exactly where settings begins.
+ *
+ * The script is stored with its length; the 999 that ends it is put on here
+ * rather than being in the file, so the reader and animate_scene agree without
+ * either of them carrying a count.
+ *
+ * TODO 0x13bcf-0x13cd?: the rest of this routine has nothing to do with
+ * animation. It walks the open eggs looking for a 'Z' block in each, and stores
+ * what it finds at +0x12 of that egg's record - the per-egg shareware limit,
+ * which belongs with build_episode_index rather than here.
+ */
+void far load_animations(void)
+{
+    int16_t types, n, i, j;
+
+    if (!egg_find_block(0x47, 0, 0xff))
+        fatal("No animation data", 0);             /* d+0x2763 */
+
+    types = egg_read_word(egg_stream);
+    if (types > 0x6f)
+        fatal("Too many animations", 0);           /* d+0x2775 */
+
+    for (i = 0; i < types; i++) {
+        n = egg_read_word(egg_stream);
+        anim_script[i] = malloc(((size_t) n + 1) * 2);
+        for (j = 0; j < n; j++)
+            anim_script[i][j] = egg_read_word(egg_stream);
+        anim_script[i][n] = 0x3e7;                 /* 999 ends a script */
+
+        anim_a[i]     = egg_read_byte(egg_stream);
+        anim_b[i]     = egg_read_byte(egg_stream);
+        anim_c[i]     = egg_read_byte(egg_stream);
+        type_flags[i] = egg_read_byte(egg_stream);
+        next_type[i]  = egg_read_word(egg_stream);
+    }
+    egg_block_end();
+}
+
 /* ------------------------------------------------- 0x13fea: scan_save_slots
  *
  * Takes nothing, returns nothing; its only output is one global. The names are
@@ -2311,6 +2433,11 @@ void far init(void)
                                                     * has any words to draw */
     load_string_tables();                          /* 0x094b7 - and the words
                                                     * themselves */
+    /* 0x143f8. The game's whole sprite set - 273 of them - and then the scripts
+     * that say which one an entity of a given type shows. Everything drawn as an
+     * entity, the mouse pointer included, needs both. */
+    sprite_set_load(0, 0x53, &sprite_table, 0xff);
+    load_animations();                             /* 0x143ff */
     build_menus();                                 /* 0x14407 - and the menus,
                                                     * which are made of them */
     scene_alloc(&cursor_scene, 1);                 /* 0x14411 - the one entity

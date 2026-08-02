@@ -353,7 +353,6 @@ uint8_t far egg_read_byte(void far *s);
 int16_t far alloc_image(void far *d, int16_t a, int16_t b, int16_t c, int16_t e);
 int16_t far load_demo(uint8_t index);
 int16_t far pick_random_demo(void);
-int16_t far sprite_index_for(void far *e);
 int16_t far detect_hardware(void);
 int16_t far f_1102a(int16_t a);
 int16_t far f_14e88(void far *fp);
@@ -417,9 +416,15 @@ void far f_11bee(void far *name, int16_t egg);
 void far f_147c5(int16_t a, int16_t b, int16_t c);
 void far f_15388(void far *o);
 
-extern int16_t previous_type, particle_count;
+extern int16_t particle_count;
 extern particle_t far *particle_array;
-extern table_t far *sprite_table;
+extern table_t sprite_table;
+extern int16_t far *anim_script[112];
+extern uint8_t      type_flags[112];
+extern int16_t      next_type[112];
+extern int16_t      left_handed;
+extern uint8_t      tool_shown;
+void far load_animations(void);
 extern viewport_t hud_clip;
 extern void far *egg_stream, *current_buffer;
 
