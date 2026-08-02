@@ -400,6 +400,24 @@ void far input_poll(int16_t w, int16_t h)
     if (mouse_x < 0)                mouse_x = 0;
     if (mouse_y > (int32_t) h - 1)  mouse_y = h - 1;
     if (mouse_y < 0)                mouse_y = 0;
+
+    /* 0x06a0d. The keyboard, and the last thing input_poll does. last_key is
+     * assigned on every call, including to zero when nothing is waiting - which
+     * is the whole of what run_screen's opening `while (last_key)` spins on, and
+     * why nothing anywhere else ever has to clear it.
+     *
+     * A key with no ASCII arrives as a zero followed by its scan code, and the
+     * scan code is what gets the 0x100 - so the up arrow reaches the menu as
+     * 0x148 rather than as 0x48, which would be 'H'. */
+    if (key_pending()) {                   /* 0:0x29fc - kbhit */
+        last_key = key_read();             /* 0:0x2814 - getch */
+        if (last_key == 0x3d)              /* 0x06a1e: '=' counts as '+' */
+            last_key = 0x2b;
+        if (last_key == 0)
+            last_key = key_read() + 0x100;
+    } else {
+        last_key = 0;
+    }
 }
 
 /* -------------------------------------------------- 0x0713e: sprite_to_image

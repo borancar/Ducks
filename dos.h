@@ -162,6 +162,11 @@ void far draw_sprite(int16_t far *index, int16_t x, int32_t y,
 void far outline_sprite(int16_t far *index, int16_t x, int16_t y,
                         table_t far *table, viewport_t far *clip);
 
+/* The runtime's kbhit and getch, at 0:0x29fc and 0:0x2814. A port replaces them
+ * along with everything else the DOS runtime supplied. */
+int16_t far key_pending(void);
+int16_t far key_read(void);
+
 void far mouse_motion(int16_t far *dx, int16_t far *dy);
 int16_t far mouse_presses(int16_t button);
 int16_t far mouse_releases(int16_t button);
