@@ -134,7 +134,16 @@ char       save_name[];          /* 0x21a5 - the template "GAME-.SG" */
 char far  *settings_name;        /* 0x21d2 - "settings.dat" */
 uint8_t    g_28ff[1];            /* 0x28ff - main's first splash source */
 void far  *buf_200f, *buf_203b, *buf_203f, *buf_2043;  /* freed per demo */
-restable_t far *res;             /* 0x1894:0 - see dos.h */
+/* The string tables - see dos.h. Two of them are far data at 0x1894:0 and
+ * 0x1894:4, which is why main loads them with an explicit segment. */
+char far **menu_text;            /* 0x1894:0000 */
+uint8_t    menu_text_count;      /* 0x0096 */
+char far **extra_text;           /* 0x1894:0004 */
+uint8_t    extra_text_count;     /* 0x0098 */
+char far **cheat_text;           /* 0x0519 */
+uint8_t    cheat_text_count;     /* 0x0504 */
+char far **tool_names;           /* 0x2106 */
+uint8_t    tool_names_count;     /* 0x210a */
 
 /* startup and settings */
 int16_t    sound_available;      /* 0x2104 - detect_hardware's result */
@@ -303,6 +312,56 @@ void far make_rect(viewport_t far *r, int16_t top, int16_t bottom,
     r->scroll_y = 0;
     r->width    = right - left;      /* 0x0886b: cx - dx */
     r->height   = bottom - top;      /* 0x08876: di - si */
+}
+
+/* -------------------------------------------------- 0x093fb: load_string_table
+ *
+ * One table: an 'H' block of strings read into a malloc'd array of far pointers,
+ * with the count written back through the caller's byte. Same block type as the
+ * readme pages, and the same reader, so the +1 shift comes off on the way in.
+ *
+ * The strings are the game's whole user-visible vocabulary - every menu item,
+ * every banner, every message. Nothing in the executable holds these words.
+ */
+void far load_string_table(uint8_t index, char far ***table, uint8_t far *count,
+                           const char far *missing, uint8_t egg)
+{
+    int16_t i;
+
+    if (!egg_find_block(0x48, index, egg))
+        fatal(missing, NULL);
+
+    *count = egg_read_byte(egg_stream);
+    *table = malloc((size_t) *count * 4);          /* four bytes a far pointer */
+    if (!*table)
+        fatal(out_of_memory, NULL);
+
+    for (i = 0; i < *count; i++)
+        (*table)[i] = egg_read_string(egg_stream);
+    egg_block_end();
+}
+
+/* 0x094b7. The four tables, then three assertions on their lengths - which is
+ * how the program tells an egg built for another version of itself: a block that
+ * is present but the wrong length is caught here rather than at the point some
+ * screen indexes off the end of it. */
+void far load_string_tables(void)
+{
+    /* TODO 0x094cd: the tool names go through 0x0e09b rather than the loader
+     * below, and that one has not been read. */
+    load_string_table(0xfd, &menu_text,  &menu_text_count,
+                      "No menu text", 0xff);
+    load_string_table(0xfb, &extra_text, &extra_text_count,
+                      "No v1.2 extended text", 0xff);
+    load_string_table(0xfe, &cheat_text, &cheat_text_count,
+                      "No cheats section", 0);
+
+    if (menu_text_count != 83)
+        fatal("Incorrect number of lines in menu text slice", NULL);
+    if (extra_text_count != 15)
+        fatal("Incorrect number of lines in extended text slice", NULL);
+    if (cheat_text_count != 10)
+        fatal("Incorrect number of cheats", NULL);
 }
 
 /* ------------------------------------------------------ 0x0ab09: particles
@@ -836,7 +895,7 @@ int16_t far episode_end_gate(int16_t level, int16_t egg)
         if (episode_index[i].egg  != egg)    continue;
 
         sound_play_guarded(0x1a, 1);
-        show_splash(res->splash_bc, 100);           /* the episode's own screen */
+        show_splash(menu_text[47], 100);            /* "EPISODE COMPLETED!" */
         f_11bee(episode_index[i].name, egg);        /* draws it - unnamed */
         flag = episode_index[i].terminator;         /* +0xc: the answer */
     }
@@ -954,7 +1013,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
             for (;;) {
                 if (g_1ffc) {
                     sound_play_guarded(0x29, 1);
-                    show_splash(res->splash_a0, 200);
+                    show_splash(menu_text[40], 200);   /* "SECRET LEVEL!" */
                 }
                 if (f_1102a(g_21a3))             /* a screen; non-zero leaves */
                     break;
@@ -973,7 +1032,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                     g_21a3 = 0;
                     if (!g_50b) {
                         --lives;                   /* [0x2034] */
-                        sprintf(buf, "%s: %i", res->label_d4, lives);
+                        sprintf(buf, "%s: %i", menu_text[53], lives);  /* "LIVES LEFT" */
                         show_splash(buf, 100);
                         release_sounds();
                         if (lives == 0) {          /* GAME OVER */
@@ -1098,6 +1157,8 @@ void far init(void)
     font_load();                                   /* 0x143e9 - the one 'F'
                                                     * block, before anything
                                                     * has any words to draw */
+    load_string_tables();                          /* 0x094b7 - and the words
+                                                    * themselves */
     /* the remaining banners */
 
     sound_available = detect_hardware();           /* 0x14974: the sound check,
@@ -1121,8 +1182,8 @@ void far init(void)
  * Mapped in docs/notes/entry-points.md by breakpointing a live machine - every
  * frame below was observed rather than read off the listing.
  *
- * `res` is the far pointer at 0x1894:0 that the intro indexes for its splashes;
- * the field names here are the offsets it uses.
+ * What it indexes at 0x1894:0 is menu_text, and the offsets are byte offsets
+ * into an array of far pointers, so +0x9c is menu_text[39] - "PRESENTS".
  */
 void far main(void)
 {
@@ -1142,12 +1203,12 @@ void far main(void)
                                               * a key */
     sound_play_guarded(0x2b, 1);
     show_resource(0x4d, 5, 50, 0xff);        /* 0x1453f - the Hungry Software logo */
-    show_splash(res->splash_9c, 100);        /* 0x1455c - "PRESENTS" */
+    show_splash(menu_text[39], 100);         /* 0x1455c - "PRESENTS" */
     sound_play_guarded(0x28, 1);
     show_resource(0x4d, 8, 100, 0xff);       /* 0x14577 - the title */
 
     if (!registered) {                       /* 0x1457d - [0x548] */
-        show_splash(res->splash_f8, 100);    /* 0x1459b - "UNREGISTERED" */
+        show_splash(menu_text[62], 100);     /* 0x1459b - "UNREGISTERED" */
         sound_play_guarded(0x0b, 1);
     }
 

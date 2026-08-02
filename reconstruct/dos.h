@@ -162,22 +162,26 @@ void far mouse_motion(int16_t far *dx, int16_t far *dy);
 int16_t far mouse_presses(int16_t button);
 int16_t far mouse_releases(int16_t button);
 
-/* The port table at 0x1894:0 the intro indexes for its splashes and labels. The
- * field names are the offsets the code uses; the structure has not been read, so
- * this is a shape rather than a finding. */
-typedef struct {
-    uint8_t pad[0x9c];
-    void far *splash_9c;        /* +0x9c - "PRESENTS" */
-    void far *splash_a0;        /* +0xa0 */
-    uint8_t pad2[0x18];
-    void far *splash_bc;        /* +0xbc - the episode's own end screen */
-    uint8_t pad3[0x14];
-    void far *label_d4;         /* +0xd4 - the "%s: %i" label */
-    uint8_t pad4[0x20];
-    void far *splash_f8;        /* +0xf8 - "UNREGISTERED" */
-} restable_t;
+/* The four string tables, each an array of far pointers built from an 'H' block
+ * at startup. What main indexes as "the table at 0x1894:0" is menu_text, and the
+ * offsets it uses are byte offsets into an array of far pointers - +0x9c is
+ * menu_text[39], which is "PRESENTS". They are the game's entire user-visible
+ * vocabulary; nothing in the executable holds these words.
+ *
+ * menu_text and extra_text live in their own segment at 0x1894:0 and 0x1894:4
+ * rather than in DGROUP; the other two are ordinary DGROUP variables. */
+extern char far **menu_text;         /* 0x1894:0000 - 'H' 253, 83 strings */
+extern uint8_t    menu_text_count;   /* 0x0096 - checked against 83 */
+extern char far **extra_text;        /* 0x1894:0004 - 'H' 251, 15 */
+extern uint8_t    extra_text_count;  /* 0x0098 - checked against 15 */
+extern char far **cheat_text;        /* 0x0519 - 'H' 254, 10 */
+extern uint8_t    cheat_text_count;  /* 0x0504 - checked against 10 */
+extern char far **tool_names;        /* 0x2106 */
+extern uint8_t    tool_names_count;  /* 0x210a */
 
-extern restable_t far *res;
+void far load_string_table(uint8_t index, char far ***table, uint8_t far *count,
+                           const char far *missing, uint8_t egg);
+void far load_string_tables(void);
 
 /* the four remaining cutscene screens, in game.c */
 void far cutscene_rocket_space(void);
