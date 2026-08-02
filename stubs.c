@@ -91,6 +91,10 @@ int16_t far pick_random_demo(void)        { return 0; }
  * and returns. Real, because resource_load writes the palette through it. */
 void far set_buffer(void far *p)          { current_buffer = p; }
 
+/* main runs before anything publishes a buffer, and show_splash writes its
+ * sprite set's palette through whatever is current, so start on the fallback. */
+void far buffer_init(void)                { current_buffer = default_buffer; }
+
 /* ------------------------------------------------------------- the sound */
 
 void far sound_play_guarded(int16_t id, int16_t mode) { (void) id; (void) mode; }
@@ -139,21 +143,8 @@ void far f_0615a(int16_t a, int16_t b, void far *c, int16_t d)
 {
     (void) a; (void) b; (void) c; (void) d;
 }
-void far f_088b3(void far *p)             { (void) p; }
 void far f_088fa(void)                    { }
 void far f_09329(void)                    { }
-/* 0x0b5cf. Decodes an image into the descriptor handed to it - show_splash's own
- * local. Zeroed here rather than left alone: the caller's descriptor is an
- * uninitialised local, and blitting from a garbage row table crashes where the
- * original would merely draw nothing. Scaffolding, and it goes when this is read
- * out - which is also what would make main's first splash draw something. */
-void far f_0b5cf(void far *img, void far *loc, int16_t a, void far *b,
-                 int16_t c, int16_t d)
-{
-    (void) img; (void) loc; (void) a; (void) c; (void) d;
-    if (b)
-        memset(b, 0, sizeof(desc_t));
-}
 void far f_0becb(void)                    { }
 void far f_0f55c(void)                    { }
 void far f_0f8bd(void)                    { }
@@ -178,7 +169,6 @@ void far f_147c5(int16_t a, int16_t b, int16_t c)
 }
 int16_t far f_14e88(void far *fp)         { (void) fp; return 0; }
 void far f_15388(void far *o)             { (void) o; }
-void far loc(void)                        { }
 
 /* The palette the game keeps and the DAC loops upload, and the washed copy the
  * blink alternates with. Both are DGROUP arrays in the original - 0x10e1 and
