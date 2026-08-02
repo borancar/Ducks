@@ -302,7 +302,7 @@ void far plot_pixel_wide(int16_t x, int16_t y, uint8_t colour)
 
 void far blit_rows(desc_t far *desc, viewport_t rect, int16_t srcrow)
 {
-    int16_t row, x;
+    int16_t row, src_row, x;
 
     /* Bring-up guard, not something the original needs: until the egg reader
      * exists, resource_load fails and leaves descriptors without a row table, and
@@ -313,41 +313,54 @@ void far blit_rows(desc_t far *desc, viewport_t rect, int16_t srcrow)
     /* The original's rectangle counts destination *bytes*, because its destination
      * is one plane at 80 bytes a row. Here both sides are linear pixels, so the
      * same pass is "every fourth column, starting at the plane" - the x >> 2 and
-     * the x * 4 both disappear and the stepping does the work. */
-    for (row = rect.top; row < rect.bottom; row++) {
+     * the x * 4 both disappear and the stepping does the work.
+     *
+     * The source row is counted from srcrow, independently of where on the screen
+     * the rectangle starts: the original keeps it in cx and increments it beside
+     * the destination row rather than deriving it. A splash is 24 rows drawn at
+     * screen row 80, so indexing the source by the screen row reads past the end
+     * of it and draws nothing at all. */
+    for (row = rect.top, src_row = srcrow; row < rect.bottom; row++, src_row++) {
         const uint8_t *src;
         uint8_t       *dst;
 
-        if (row + srcrow < 0 || row + srcrow >= desc->h || row >= screen_height)
+        if (src_row < 0 || src_row >= desc->h || row >= screen_height)
             break;
-        src = desc->rows[srcrow + row];
+        if (row < 0)
+            continue;
+        src = desc->rows[src_row];
         dst = fb_back + (size_t) row * screen_width;
 
-        for (x = rect.left + current_plane; x < rect.right; x += 4)
-            if (x >= 0 && x < screen_width && x < desc->w)
-                dst[x] = src[x];
+        /* The source is read from its own column 0 - rect.left only moves the
+         * destination, which is what centres a 320-wide picture in 360. */
+        for (x = current_plane; rect.left + x < rect.right; x += 4)
+            if (x < desc->w && rect.left + x >= 0 && rect.left + x < screen_width)
+                dst[rect.left + x] = src[x];
     }
 }
 
 void far blit_rows_masked(desc_t far *desc, viewport_t rect, int16_t srcrow)
 {
-    int16_t row, x;
+    int16_t row, src_row, x;
 
     if (!desc || !desc->rows)
         return;
 
-    for (row = rect.top; row < rect.bottom; row++) {
+    for (row = rect.top, src_row = srcrow; row < rect.bottom; row++, src_row++) {
         const uint8_t *src;
         uint8_t       *dst;
 
-        if (row + srcrow < 0 || row + srcrow >= desc->h || row >= screen_height)
+        if (src_row < 0 || src_row >= desc->h || row >= screen_height)
             break;
-        src = desc->rows[srcrow + row];
+        if (row < 0)
+            continue;
+        src = desc->rows[src_row];
         dst = fb_back + (size_t) row * screen_width;
 
-        for (x = rect.left + current_plane; x < rect.right; x += 4)
-            if (x >= 0 && x < screen_width && x < desc->w && src[x])
-                dst[x] = src[x];
+        for (x = current_plane; rect.left + x < rect.right; x += 4)
+            if (x < desc->w && rect.left + x >= 0 && rect.left + x < screen_width
+                && src[x])
+                dst[rect.left + x] = src[x];
     }
 }
 
