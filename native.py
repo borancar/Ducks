@@ -1818,10 +1818,27 @@ class Native(VgaDos):
     def _verify_native(self, uc, off, name, handler, kind):
         """Compare a native against the code it replaces, on a live call.
 
-        Snapshot the planes, let the native write into that snapshot, restore,
-        then let the original body run. A one-shot hook on the return address
-        diffs the two once the real code is done.
+        Snapshot the planes and DGROUP, let the native write into that snapshot,
+        restore, then let the original body run. A one-shot hook on the return
+        address diffs the two once the real code is done.
+
+        DGROUP goes too, but only for the natives in VERIFY_DGROUP. Every native
+        this started with wrote pixels and nothing else, so the planes were
+        enough; a gameplay routine writes tables and no pixels at all, and
+        comparing only the planes would call it a match however wrong it was -
+        including a native that did nothing.
+
+        It is opt-in rather than always because the shims that stand in for an
+        interrupt do not take the same path through the runtime as the interrupt
+        did, and leave different scratch behind: switching it on for everything
+        made bios_video, isatty and dos_setblock report mismatches of a handful
+        of bytes each, none of them anything either side got wrong.
+
+        What is still not compared either way: anything written outside DGROUP
+        and the planes - the far heap most of all. A native that only rearranges
+        a malloc'd block is not checked by this.
         """
+        deep = name in VERIFY_DGROUP
         ss, sp = self._reg(UC_X86_REG_SS), self._reg(UC_X86_REG_SP)
         ret_ip = struct.unpack("<H", uc.mem_read(ss * 16 + sp, 2))[0]
         ret_cs = struct.unpack("<H", uc.mem_read(ss * 16 + sp + 2, 2))[0] \
@@ -1829,12 +1846,15 @@ class Native(VgaDos):
         args_at = ss * 16 + sp + (4 if kind == "far" else 2)
 
         before = [bytes(p) for p in self.planes]
+        dg_before = bytes(uc.mem_read(self.dgroup_base, 0x10000)) if deep else None
         try:
             outcome = handler(self, args_at)
         except Exception as e:
             print(f"  [verify] {name}: native raised {e!r}")
             for i, p in enumerate(before):
                 self.planes[i][:] = p
+            if deep:
+                uc.mem_write(self.dgroup_base, dg_before)
             return
         if outcome is DECLINE:
             # A declining native is not predicting anything, so there is nothing
@@ -1845,10 +1865,16 @@ class Native(VgaDos):
             self.verify_declined += 1
             for i, p in enumerate(before):
                 self.planes[i][:] = p
+            if deep:
+                uc.mem_write(self.dgroup_base, dg_before)
             return
         predicted = [bytes(p) for p in self.planes]
+        dg_predicted = bytes(uc.mem_read(self.dgroup_base, 0x10000)) if deep \
+            else None
         for i, p in enumerate(before):
             self.planes[i][:] = p           # undo; the original will redo it
+        if deep:
+            uc.mem_write(self.dgroup_base, dg_before)
 
         ret_lin = ret_cs * 16 + ret_ip
         state = {"h": None}
@@ -1865,12 +1891,20 @@ class Native(VgaDos):
                     if a[j] != b[j]:
                         diffs += 1
                         if first is None:
-                            first = (pi, j, a[j], b[j])
+                            first = (f"plane{pi}", j, a[j], b[j])
+            dg_after = bytes(uc.mem_read(self.dgroup_base, 0x10000)) if deep \
+                else None
+            if deep and dg_predicted != dg_after:
+                for j in range(0x10000):
+                    if dg_predicted[j] != dg_after[j]:
+                        diffs += 1
+                        if first is None:
+                            first = ("d", j, dg_predicted[j], dg_after[j])
             self.verify_calls += 1
             if diffs:
                 self.verify_bad += 1
                 print(f"  [verify] {name}: MISMATCH {diffs} bytes, first "
-                      f"plane{first[0]} off {first[1]:#07x} "
+                      f"{first[0]} off {first[1]:#07x} "
                       f"native={first[2]:#04x} real={first[3]:#04x}")
             elif self.verify_calls <= 5 or self.verify_calls % 200 == 0:
                 print(f"  [verify] {name}: match #{self.verify_calls}")
@@ -4358,6 +4392,39 @@ def native_xms_get_entry(m, args):
     return None
 
 
+def native_tool_events(m, args):
+    """0x0d4c2: the level's scheduled tool changes. Takes no arguments.
+
+    A level carries a table of three-byte records at [0x203b], [0x2047] of them.
+    Each is a time and a tool index, and when the time matches the level clock at
+    [0x201a] the selection at [0x1788] becomes that index.
+
+    The loop does not stop at the first match, so two records on the same tick
+    leave the last one selected. That is the guest's behaviour and not obviously
+    deliberate, which is a reason to keep it rather than tidy it.
+
+    This is the first native that writes DGROUP and no pixels, which is what
+    VERIFY_DGROUP is for.
+    """
+    d = m.dgroup_base
+    off, seg = struct.unpack("<HH", m.uc.mem_read(d + 0x203B, 4))
+    base = seg * 16 + off
+    n = struct.unpack("<H", m.uc.mem_read(d + 0x2047, 2))[0]
+    clock = struct.unpack("<H", m.uc.mem_read(d + 0x201A, 2))[0]
+
+    for i in range(n):
+        rec = base + i * 3
+        when = struct.unpack("<H", m.uc.mem_read(rec, 2))[0]
+        if when == clock:
+            m.write(d + 0x1788, m.uc.mem_read(rec + 2, 1))
+    return None
+
+
+# Natives whose verification also diffs DGROUP - see _verify_native. A drawing
+# routine is fully described by the pixels it leaves; a routine that writes
+# tables and no pixels is not described by them at all.
+VERIFY_DGROUP = {"tool_events"}
+
 NATIVE_TABLE = [
     (0x05D3A, "compose_layer", native_compose_layer, "far"),
     (0x063D6, "draw_sprite", native_draw_sprite, "far"),
@@ -4374,6 +4441,12 @@ NATIVE_TABLE = [
     (0x0AB09, "particles", native_particles, "far"),
     (0x157C1, "sound_gather", native_sound_gather, "far"),
 ]
+
+# Written but not enabled: 0x0d4c2 is called once as a level starts, and every
+# snapshot is mid-level, so a --verify run never reaches it. Registering it would
+# mean the game running code nothing has checked. Add
+#     (0x0D4C2, "tool_events", native_tool_events, "far"),
+# to NATIVE_TABLE above once there is a run that starts a level under --verify.
 
 # Enabled only with --native-sound. The whole family must go together: the game
 # queries and stops sounds by id and reads an active-voice count, so pygame and
