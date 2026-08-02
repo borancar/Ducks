@@ -4,7 +4,7 @@
  * the caller carry on, and says what the real routine is: an image offset if we
  * know it, and what it would have to do.
  *
- * The gameplay is deliberately absent. in_game_frame is a no-op that reports
+ * The gameplay is deliberately absent. run_level() is a no-op that reports
  * "the run ended", so game_main's inner loop falls straight through to the
  * screens either side of it - which is what makes the menus testable on their
  * own.
@@ -28,7 +28,7 @@
  *
  * This is the largest single unread function in the segment - 4,287 bytes - and
  * two of the four native plane loops live inside it. */
-int16_t far in_game_frame(int16_t arg)
+int16_t far run_level(int16_t arg)
 {
     (void) arg;
     return 0;

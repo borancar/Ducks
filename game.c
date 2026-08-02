@@ -2370,12 +2370,12 @@ void far show_splash(const char far *text, int16_t frames)
  * returns that record's terminator flag. So it answers "was that the FINAL
  * episode", which is what gates the homecoming.
  */
-int16_t far episode_end_gate(int16_t level, int16_t egg)
+int16_t far episode_end_gate(int16_t number, int16_t egg)
 {
     int16_t i, flag = 0;
 
     for (i = 0; i < episode_count; i++) {
-        if (episode_index[i].last != level)  continue;
+        if (episode_index[i].last != number)  continue;
         if (episode_index[i].egg  != egg)    continue;
 
         sound_play_guarded(0x1a, 1);
@@ -2411,7 +2411,7 @@ item_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
                 free(buf_200f);
                 g_18f5 = 5;  g_1ffc = 0;
                 saved = g_509;  g_509 = 0;     /* switched off for the demo */
-                in_game_frame(1);                  /* 0x1279d - it IS the game */
+                run_level(1);                  /* 0x1279d - it IS the game */
                 g_509 = saved;
                 free(buf_2043);  free(buf_203f);  free(buf_203b);
                 release_sounds();
@@ -2427,7 +2427,7 @@ item_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
                  * same as the branch above - the three frees, g_18f5, the
                  * g_509 save and restore. Worth writing out if that ever turns
                  * out not to be exactly true. */
-                in_game_frame(1);                  /* 0x1283a */
+                run_level(1);                  /* 0x1283a */
             } else {
                 show_splash("DEMO MISSING", 100);
             }
@@ -2516,7 +2516,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                     break;
                 }
 
-                if (!in_game_frame(0)) {           /* 0x1387e: the run ended badly */
+                if (!run_level(0)) {           /* 0x1387e: the run ended badly */
                     g_21a3 = 0;
                     if (!g_50b) {
                         --lives;                   /* [0x2034] */
@@ -3771,12 +3771,10 @@ void far main(void)
     sound_play_guarded(0x28, 1);
     show_resource(0x4d, 8, 100, 0xff);       /* 0x14577 - the title */
 
-    /* Only the splash is inside the test - the `jne` at 0x14582 lands on the
-     * sound call, not past it - so the quack plays either way. */
     if (!registered)                         /* 0x1457d - [0x548] */
         show_splash(menu_text[62], 100);     /* 0x1459b - "UNREGISTERED" */
-    sound_play_guarded(0x0b, 1);             /* 0x145a1 */
 
+    sound_play_guarded(0x0b, 1);             /* 0x145a1 */
     game_main(&main_menu);                   /* 0x145b1 - does not return until
                                               * QUIT clears its loop flag */
 
