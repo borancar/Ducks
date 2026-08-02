@@ -193,6 +193,12 @@ string tables at startup and `run_screen` runs whichever one `game_main` points
 at - so PLAY DUCKS, OPTIONS, the settings screens, READ ME! and QUIT DUCKS all
 navigate, the toggles toggle, and QUIT takes main's teardown path and exits.
 
+The window captures the mouse, because the game keeps the pointer position
+itself as a running total of INT 33h deltas and a pointer that stops at the edge
+of a window is one the game believes stopped moving. **Ctrl+Alt** lets go, and
+takes hold again; so does clicking in the window. Losing focus releases it
+without forgetting what you asked for.
+
 Two things are still absent from a menu. The sliders behind GAME SPEED, AMBIENCE
 VOLUME and GAMMA CORRECT are a screen of their own at `0x0c4f0` and are not read.
 And the episode, readme and demo lists come out empty, because
