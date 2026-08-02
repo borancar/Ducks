@@ -125,7 +125,11 @@ int16_t    mouse_dx, mouse_dy;   /* 0x18db, 0x18dd - one poll's motion, signed:
  * and MOUSE BUTTONS indexes them by its items' params, which is what makes them
  * one array rather than three variables. Each holds 0, 1 or 2 - LEFT, RIGHT,
  * MIDDLE - and the cycle steps it modulo three. */
-int16_t    button_map[3];        /* 0x20e4, 0x20e6, 0x20e8 */
+int16_t    button_map[3] = { 1, 2, 0 };   /* 0x20e4, 0x20e6, 0x20e8 - and the
+                                  * image initialises them, so out of the box
+                                  * WALK is the right button, TOOL CYCLE the
+                                  * middle one and USE TOOL the left. All three
+                                  * zero is the one state DONE! refuses */
 int16_t    button_a_down;        /* 0x18df */
 int16_t    button_b_down;        /* 0x18e7 */
 int16_t    g_18e5;               /* 0x18e5 - any button; escapes the fades */
