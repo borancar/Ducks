@@ -430,20 +430,28 @@ void far palette_fade_step(int16_t arg)
 void far blit_rows(desc_t far *desc, viewport_t rect, int16_t srcrow)
 {
     int16_t stride = video_mode ? 90 : 80;
-    int16_t row, x;
+    int16_t row, src_row, x;
 
-    for (row = rect.top; row <= rect.bottom; row++) {
+    /* The source row is its own counter, kept in cx beside the destination row
+     * rather than derived from it, so a 24-row banner drawn at screen row 80
+     * reads its own rows 0..23. The rectangle is in pixels: the destination byte
+     * is x >> 2 because four pixels share one byte across the planes. */
+    for (row = rect.top, src_row = srcrow; row < rect.bottom; row++, src_row++) {
         /* One far pointer per source row, and the plane is *added to the pointer*
          * rather than to the index - which is how the four passes read four
          * interleaved columns of the same source. */
-        uint8_t far *src = desc->rows[srcrow + row] + current_plane;
+        uint8_t far *src = desc->rows[src_row] + current_plane;
         uint8_t far *dst = &((uint8_t far *) vram)[row * stride + page_back];
 
         /* Source steps 4 bytes per pixel, staying inside one plane; the
          * destination steps 1. No transparency test - this one copies
-         * unconditionally, which is the only difference from blit_rows_masked. */
-        for (x = rect.left; x <= rect.right; x++)
-            dst[x] = src[x * 4];
+         * unconditionally, which is the only difference from blit_rows_masked.
+         * The source is read from its own column 0 - rect.left moves only the
+         * destination, which is what centres 320 pixels in a 360-wide screen. */
+        for (x = rect.left + current_plane; x < rect.right; x += 4) {
+            dst[x >> 2] = *src;
+            src += 4;
+        }
     }
 }
 
@@ -526,16 +534,18 @@ void far draw_sprite(int16_t far *index, int16_t x, int32_t y,
 void far blit_rows_masked(desc_t far *desc, viewport_t rect, int16_t srcrow)
 {
     int16_t stride = video_mode ? 90 : 80;
-    int16_t row, x;
+    int16_t row, src_row, x;
 
-    for (row = rect.top; row <= rect.bottom; row++) {
-        uint8_t far *src = desc->rows[srcrow + row] + current_plane;
+    for (row = rect.top, src_row = srcrow; row < rect.bottom; row++, src_row++) {
+        uint8_t far *src = desc->rows[src_row] + current_plane;
         uint8_t far *dst = &((uint8_t far *) vram)[row * stride + page_back];
 
-        for (x = rect.left; x <= rect.right; x++) {
-            uint8_t px = src[x * 4];
+        for (x = rect.left + current_plane; x < rect.right; x += 4) {
+            uint8_t px = *src;
+
             if (px)                            /* zero leaves the screen alone */
-                dst[x] = px;
+                dst[x >> 2] = px;
+            src += 4;
         }
     }
 }
