@@ -64,6 +64,7 @@ void far delay(int16_t ms)             { SDL_Delay((Uint32) ms); }
 #define SCALE_DEFAULT 3          /* the window is this many times the mode */
 
 static SDL_Window  *window;
+static void         capture_refresh(void);   /* the mouse capture, below */
 static SDL_Surface *surface;     /* the window's own surface; no renderer */
 static int          scale = SCALE_DEFAULT;
 
@@ -119,6 +120,7 @@ void far set_mode_x(int16_t wide)
          * deadline below is what the game's timing actually depends on, so the
          * clock wins and vsync only removes tearing when the rates agree. */
         SDL_SetWindowSurfaceVSync(window, 1);
+        capture_refresh();
     } else {
         SDL_SetWindowSize(window, screen_width * scale, screen_height * scale);
     }
@@ -458,6 +460,55 @@ void far compose_scroll(int16_t scroll_x, int16_t scroll_y)
 static int16_t press_count[3], release_count[3];
 static int16_t rel_x, rel_y;
 
+/* ----------------------------------------------------------- mouse capture
+ *
+ * The original owned the machine. INT 33h reported motion with nothing for the
+ * pointer to run into and nowhere else for it to go, and the game leans on that:
+ * it keeps the position itself as a running total of deltas, so a pointer that
+ * stops moving because it has hit the edge of a window is a pointer the game
+ * thinks stopped moving. Capturing it - SDL's relative mode, which hides it,
+ * confines it to the window and reports motion unclipped - is what gives that
+ * assumption back.
+ *
+ * Ctrl+Alt lets go, and pressing it again takes hold. The game reads neither
+ * modifier, so the chord costs nothing, and it is the one every DOS emulator has
+ * used for this since DOSBox. While the mouse is loose a click inside the window
+ * takes hold again, and that click is swallowed rather than handed on - both
+ * halves of it, so the game is not left with a release it never saw pressed.
+ *
+ * What the user asked for and what SDL has been told are kept apart: losing
+ * focus drops the capture without changing the answer, and getting focus back
+ * restores whatever the answer was.
+ */
+static int capture_wanted = 1;          /* what Ctrl+Alt last said */
+static int capture_now;                 /* what SDL has been told */
+static int chord_was;                   /* Ctrl+Alt held on the previous pump */
+static int swallow_release[3];          /* the click that took hold again */
+
+static void capture_set(int on)
+{
+    static int complained;
+
+    if (!window || on == capture_now)
+        return;
+    if (!SDL_SetWindowRelativeMouseMode(window, on != 0) && !complained) {
+        complained = 1;                 /* once: a headless driver has no mouse
+                                         * to capture and says so every time */
+        SDL_Log("SDL_SetWindowRelativeMouseMode: %s", SDL_GetError());
+    }
+    capture_now = on;
+    SDL_SetWindowTitle(window, on ? "Ducks!  -  Ctrl+Alt frees the mouse"
+                                  : "Ducks!  -  click, or Ctrl+Alt, to capture");
+}
+
+/* Both conditions, every time: the user's answer, and this window having focus. */
+static void capture_refresh(void)
+{
+    capture_set(capture_wanted
+                && window != NULL
+                && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0);
+}
+
 /* The keyboard, as the runtime's kbhit and getch see it: a queue rather than a
  * single variable, because a key with no ASCII is two reads and the second one
  * has to still be there when input_poll asks for it. */
@@ -521,20 +572,53 @@ void sdl_pump_input(void)
             else if (e.key.key < 0x80)          key_push((int16_t) e.key.key);
             break;
         case SDL_EVENT_MOUSE_MOTION:
-            rel_x += (int16_t) e.motion.xrel;
-            rel_y += (int16_t) e.motion.yrel;
+            if (capture_now) {          /* a loose pointer is not the game's */
+                rel_x += (int16_t) e.motion.xrel;
+                rel_y += (int16_t) e.motion.yrel;
+            }
             break;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
-            if (e.button.button >= 1 && e.button.button <= 3)
-                press_count[e.button.button - 1]++;
+            if (e.button.button < 1 || e.button.button > 3)
+                break;
+            if (!capture_now) {
+                capture_wanted = 1;     /* the click takes hold instead */
+                capture_refresh();
+                swallow_release[e.button.button - 1] = 1;
+                break;
+            }
+            press_count[e.button.button - 1]++;
             break;
         case SDL_EVENT_MOUSE_BUTTON_UP:
-            if (e.button.button >= 1 && e.button.button <= 3)
+            if (e.button.button < 1 || e.button.button > 3)
+                break;
+            if (swallow_release[e.button.button - 1]) {
+                swallow_release[e.button.button - 1] = 0;
+                break;
+            }
+            if (capture_now)
                 release_count[e.button.button - 1]++;
+            break;
+        case SDL_EVENT_WINDOW_FOCUS_GAINED:
+        case SDL_EVENT_WINDOW_FOCUS_LOST:
+            capture_refresh();
             break;
         default:
             break;
         }
+    }
+
+    /* The chord, once the queue is drained: read as a state rather than caught
+     * as a key, so it does not matter which of the two went down last. The edge
+     * is what toggles - holding it does not flap. */
+    {
+        SDL_Keymod mods = SDL_GetModState();
+        int chord = (mods & SDL_KMOD_CTRL) != 0 && (mods & SDL_KMOD_ALT) != 0;
+
+        if (chord && !chord_was) {
+            capture_wanted = !capture_wanted;
+            capture_refresh();
+        }
+        chord_was = chord;
     }
 }
 
