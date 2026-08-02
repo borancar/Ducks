@@ -199,8 +199,11 @@ of a window is one the game believes stopped moving. **Ctrl+Alt** lets go, and
 takes hold again; so does clicking in the window. Losing focus releases it
 without forgetting what you asked for.
 
-Two things are still absent from a menu. The sliders behind GAME SPEED, AMBIENCE
-VOLUME and GAMMA CORRECT are a screen of their own at `0x0c4f0` and are not read.
-And the episode, readme and demo lists come out empty, because
-`build_episode_index` (`0x11657`) has not been read, so there are no records for
-`menu_add_list` to page through.
+READ ME! works end to end: `build_episode_index` (`0x11657`) reads the episode,
+readme and demo indexes out of the egg at startup, so SELECT AN EPISODE and
+READ ME! list what the file actually holds, and `show_readme_section`
+(`0x11efb`) draws a section's pages and turns them.
+
+One thing is still absent from a menu: the sliders behind GAME SPEED, AMBIENCE
+VOLUME and GAMMA CORRECT are a screen of their own at `0x0c4f0` and are not
+read.
