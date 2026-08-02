@@ -104,6 +104,12 @@ void egg_bringup_open(void)
     egg_file_count = (n > 0) ? 1 : 0;
     egg_files      = calloc(1, sizeof *egg_files);
     egg_files[0].fp = fopen(path, "rb");
+    /* The name is what build_episode_index prints and what the demo records are
+     * built from, and the original has it from opening the file. Everything else
+     * in the record - the kind, whether it contributes, the version, the limit -
+     * is filled in for real, by load_animations and build_episode_index. */
+    egg_files[0].name = malloc(sizeof "MAIN.EGG");
+    strcpy(egg_files[0].name, "MAIN.EGG");
 }
 void far crt_exit(void)                   { }
 void far print_newline(void)              { }

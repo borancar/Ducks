@@ -146,11 +146,24 @@ typedef struct {
     uint8_t colour;
 } particle_t;
 
-/* An egg file entry, stride 0x17. */
+/* An egg file entry, stride 0x17. Everything from +0x10 on is filled in by
+ * load_animations' tail and build_episode_index, out of the egg's own 'Z' and
+ * information blocks. */
 typedef struct {
-    void far *fp;
-    void far *block;            /* +8 - freed by close_egg_files */
+    void far *fp;               /* +0x00 - per-file state */
+    char far *name;             /* +0x04 - the file name, "MAIN.EGG" */
+    char far *id;               /* +0x08 - the egg's own name, out of its
+                                 *         information block. Two eggs with the
+                                 *         same one is fatal; freed on the way
+                                 *         out by close_egg_files */
+    int16_t   slices;           /* +0x0c - what the open banner prints */
+    int16_t   unread_e;         /* +0x0e */
     uint8_t   limit;            /* +0x10 - this egg's shareware limit */
+    uint8_t   demo_base;        /* +0x11 - the running demo total after it */
+    uint8_t   kind;             /* +0x12 - from its 'Z' block, or 1 */
+    uint8_t   version;          /* +0x13 - the format version, 4 to 6 */
+    int16_t   contributes;      /* +0x14 - whether its episodes count */
+    uint8_t   demos;            /* +0x16 - how many rolling demos it holds */
 } egg_file_t;
 
 /* ------------------------------------------------- the state the video owns */
