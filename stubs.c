@@ -110,7 +110,6 @@ void egg_bringup_open(void)
     egg_files[0].name = malloc(sizeof "MAIN.EGG");
     strcpy(egg_files[0].name, "MAIN.EGG");
 }
-void far crt_exit(void)                   { }
 void far set_text_colour(int16_t c)       { (void) c; }
 
 /* ------------------------------------------------ unnamed, by image offset */
