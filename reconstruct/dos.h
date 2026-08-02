@@ -97,6 +97,15 @@ struct menu_s {
 };                              /* 0x73 bytes; the fifteen of them are
                                  * consecutive in DGROUP, 0x1916 to 0x1fd2 */
 
+/* A row of the hall of fame: ten of them at d+0x2057, eight bytes each. The
+ * serial is which saved game earned it, so a game already on the board can be
+ * recognised when it is loaded and finished again. */
+typedef struct {
+    char far *name;             /* +0x00 */
+    int16_t   score;            /* +0x04 */
+    int16_t   serial;           /* +0x06 - save_serial at the time */
+} score_t;
+
 /* Three per-button counters, copied about as a unit. */
 typedef struct {
     int16_t n[3];
@@ -392,6 +401,12 @@ int16_t far name_entry(char far *buf, int16_t row, int16_t escape);
 void far register_screen(void);
 void far high_score_screen(void);
 void far show_attract_screen(int16_t frames);
+void far high_score_screen(void);
+void far high_score_name(char far *buf);
+void far score_set(int16_t score, char far *name, int16_t slot);
+void far menus_after_game(void);
+int16_t far load_settings(void);
+extern score_t score_table[10];
 void far egg_load_one(int16_t index, int16_t type, int16_t egg);
 extern int16_t egg_file_count;
 extern egg_file_t far *egg_files;
@@ -439,11 +454,13 @@ void far f_0615a(int16_t a, int16_t b, void far *c, int16_t d);
 void far f_088fa(void);
 void far f_09329(void);
 void far f_0becb(void);
-void far f_0f55c(void);
 void far f_0f8bd(void);
 void far f_11bee(void far *name, int16_t egg);
 void far f_147c5(int16_t a, int16_t b, int16_t c);
 void far f_15388(void far *o);
+void far f_12edf(char far *name, char far *key, int16_t arg);
+extern char far *owner_name;
+extern int16_t   owner_key;
 
 extern int16_t particle_count;
 extern particle_t far *particle_array;

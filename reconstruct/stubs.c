@@ -48,8 +48,6 @@ void far cutscene_night_monster(void)     { }
 /* ------------------------------------------------------------ the screens */
 
 void far register_screen(void)            { }
-void far high_score_screen(void)          { }
-void far show_attract_screen(int16_t f)   { (void) f; }
 
 /* ------------------------------------------------------------- the eggs */
 
@@ -120,7 +118,6 @@ void far f_0615a(int16_t a, int16_t b, void far *c, int16_t d)
 void far f_088fa(void)                    { }
 void far f_09329(void)                    { }
 void far f_0becb(void)                    { }
-void far f_0f55c(void)                    { }
 void far f_0f8bd(void)                    { }
 
 /* 0x04de6. The fatal error reporter: it puts the screen back into text mode,
@@ -143,6 +140,14 @@ void far f_147c5(int16_t a, int16_t b, int16_t c)
 }
 int16_t far f_14e88(void far *fp)         { (void) fp; return 0; }
 void far f_15388(void far *o)             { (void) o; }
+
+/* 0x12edf. Checks a registration name against its key. load_settings calls it
+ * with the pair it just read and 0 for the third argument; register_screen calls
+ * it with what the user typed. Not read, so a loaded settings.dat is trusted. */
+void far f_12edf(char far *name, char far *key, int16_t arg)
+{
+    (void) name; (void) key; (void) arg;
+}
 
 /* The palette the DAC loops upload, and the washed copy the blink alternates
  * with: 0x10e1 and 0x0dad. palette_build fills the first; nothing fills the

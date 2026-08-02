@@ -158,9 +158,14 @@ int16_t    episode_egg_index;    /* 0x0094 - which egg the episode is in */
 uint8_t    shareware_limit;      /* 0x054a - per egg, not a constant; read as
                                   * a byte with the high half zeroed */
 int16_t    registered;           /* 0x0548 */
+char far  *owner_name;           /* 0x0542 - who the copy is registered to */
+int16_t    owner_key;            /* 0x0546 */
 int16_t    lives;                /* 0x2034 - decremented on a lost run */
 uint16_t   max_save_value;       /* 0x2055 - scan_save_slots' only output;
                                   * compared with `jbe` */
+/* 0x2057. The hall of fame - ten rows, best first. The names are malloc'd and
+ * str_copy'd, and load_settings is what fills them from settings.dat. */
+score_t    score_table[10];
 int16_t    save_serial;          /* 0x2053 - which save is the newest: written
                                   * into the file, and given max_save_value + 1
                                   * when the slot has none of its own */
@@ -265,9 +270,6 @@ extern uint8_t bg_step_x, bg_step_y;    /* 0x1780, 0x1781 */
 
 /* used but not identified */
 int16_t  g_509, g_50b, g_1ffa, g_1ffc, g_1ffe, g_18e1, g_18e3;
-uint8_t  g_205d[80];            /* 0x205d - ten eight-byte records save_note
-                                 * reads the first word of; nothing that fills
-                                 * them has been read */
 uint8_t  g_18f5, g_1fd3;        /* both byte-sized on every access */
 int16_t  g_201c;                /* compared with jle, so signed */
 uint16_t g_2036;                /* compared with jb, so unsigned */
@@ -971,6 +973,52 @@ void far palette_build(void)
 
         palette_stored[i] = (uint8_t) (v > 255 ? 255 : v);
     }
+}
+
+/* ------------------------------------------- 0x0b9fc: show_attract_screen
+ *
+ * The hall of fame, and what the menu shows when it has been left alone: the
+ * blueprint page with the ten rows on it, held for `frames` and then faded out
+ * by show_resource_loop like any other screen.
+ *
+ * The first row is drawn in colour 1 and given four extra rows of space below
+ * it; the rest are colour 2. Scores are right-aligned against x = 0x113.
+ */
+void far show_attract_screen(int16_t frames)
+{
+    uint8_t buffer[768];                           /* [bp-0x32a] */
+    char    number[0x10];                          /* [bp-0x2a] */
+    desc_t  page;                                  /* [bp-0x1a] */
+    int16_t y = 0x32;                              /* di */
+    int16_t i;
+
+    set_buffer(buffer);
+    clear_vram();
+    if (!resource_load(&page, 0x4d, 7, 0, 1, 0xff, 1))
+        goto out;
+
+    text_colour[0] = 3;
+    text_colour[1] = 0;
+    draw_string(&page, menu_text[1],               /* "- DUCKS HALL OF FAME -" */
+                (0x140 - text_width(menu_text[1])) / 2, 0x1e);
+
+    text_colour[0] = 1;
+    for (i = 0; i < 10; i++) {
+        /* A row whose name was never set. The original draws it anyway - a far
+         * NULL there reads the interrupt table rather than faulting - and on a
+         * machine with a settings.dat it never happens. */
+        const char far *name = score_table[i].name ? score_table[i].name : "";
+
+        draw_string(&page, name, 0x2d, y);
+        sprintf(number, "%u", score_table[i].score);
+        draw_string(&page, number, 0x113 - text_width(number), y);
+        y += (i == 0 ? 1 : 0) * 4 + 0x0c;
+        text_colour[0] = 2;
+    }
+    show_resource_loop(&page, frames);
+    resource_release(&page);
+out:
+    set_buffer(default_buffer);
 }
 
 /* ---------------------------------------------- 0x0b52f: show_resource_loop
@@ -2036,6 +2084,18 @@ void far build_menus(void)
     menu_add_submenu(&menu_quit, menu_text[30], &main_menu, &menu_always);
 }
 
+/* 0x0f55c. The inverse of menus_resume: the two items it relabelled go back to
+ * what they were, PLAY DUCKS' first item points at the episode list again, and
+ * the game is no longer in progress. Called after every high_score_screen. */
+void far menus_after_game(void)
+{
+    menu_set_text(&main_menu.item[0], menu_text[2]);       /* "PLAY DUCKS" */
+    menu_set_text(&menu_play.item[0], menu_text[4]);       /* "START A NEW GAME" */
+    menu_play.item[0].action = 0x12;
+    menu_play.item[0].link   = &menu_episodes;
+    menu_idle_suppress = 0;
+}
+
 /* ------------------------------------------- 0x0f825: cutscene_welcome_home
  *
  * One of the six ending screens; the others have the same shape with different
@@ -2237,7 +2297,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
         case 7:   show_readme_section(r->param);   break;
         case 5:   save_game_screen();  menu = &menu_play;  break;   /* 0x13298 */
         case 6:   load_game_screen();  menu = &menu_play;  break;   /* 0x12951 */
-        case 3:   high_score_screen();  f_0f55c();
+        case 3:   high_score_screen();  menus_after_game();
                   menu = &main_menu;                       break;
 
         case 20:                                   /* 0x136fe: MOUSE BUTTONS */
@@ -2283,7 +2343,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                     f_09329();                     /* the refusal - unnamed */
                     egg_load_one(0xfc, 0x48, 0xff);
                     menu = &main_menu;
-                    high_score_screen();  f_0f55c();
+                    high_score_screen();  menus_after_game();
                     break;
                 }
 
@@ -2330,7 +2390,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                     dac_set_black(0, 0);
                     input_poll(320, 200);
                     set_buffer(&buf[0]);
-                    high_score_screen();  f_0f55c();
+                    high_score_screen();  menus_after_game();
                 }
                 level_attempted++;                 /* 0x139ab */
             }
@@ -2831,18 +2891,16 @@ void far menus_resume(void)
                          : menu_text[5]);          /* "RETRY LEVEL" */
 }
 
-/* 0x12916. Ten eight-byte records at d+0x205d, and only the first word of each
- * is read. Where one matches, a text page is shown - the same page every time,
- * so this is a "you have seen this before" gate rather than a lookup.
- *
- * TODO: what fills d+0x205d has not been read, so the records are a byte array
- * here rather than a type. */
+/* 0x12916. d+0x205d is not an array of its own: it is the serial field of the
+ * hall of fame, so this asks whether the game being loaded is already on the
+ * board - and if it is, says so. That is the "this game has already been
+ * finished, and has resulted in a score being added" page. */
 void far save_note(int16_t serial)
 {
     uint8_t i;
 
     for (i = 0; i < 10; i++)
-        if (((int16_t far *) g_205d)[i * 4] == serial)
+        if (score_table[i].serial == serial)
             egg_load_one(0xfa, 0x48, 0xff);
 }
 
@@ -2938,6 +2996,98 @@ int16_t far name_entry(char far *buf, int16_t row, int16_t escape)
     sprite_set_free(&menu_sprites);
     set_buffer(default_buffer);
     return ok;
+}
+
+/* 0x11d1b. One row of the board: the score, a copy of the name, and which saved
+ * game earned it. */
+void far score_set(int16_t score, char far *name, int16_t slot)
+{
+    score_table[slot].score = score;
+    str_copy(name, &score_table[slot].name);
+    score_table[slot].serial = save_serial;
+}
+
+/* --------------------------------------------- 0x11d54: high_score_screen
+ *
+ * The end of a game: GAME OVER, the score, and then the board - with the name
+ * entry in between if the score earned a place on it.
+ *
+ * `at` is the row the score belongs in; `di` is the row it may displace. The
+ * two are different because a game that was saved and finished before is
+ * already on the board: it is found by its serial and improved in place rather
+ * than added again, and a game with no serial can only ever take the last row.
+ */
+void far high_score_screen(void)
+{
+    char    line[0x18];
+    int16_t here = 9;                              /* di */
+    int16_t at;                                    /* [bp-2] */
+    int16_t i;
+
+    show_splash(menu_text[48], 100);               /* "GAME OVER" */
+    release_sounds();
+    g_1ffc = 0;
+    g_1ffe = 0;
+    sprintf(line, "%s: %i", menu_text[50], g_2036);        /* "SCORE" */
+    show_splash(line, 100);
+
+    if (save_serial) {                             /* already on the board? */
+        for (here = 0; here < 10; here++)
+            if (score_table[here].serial == save_serial)
+                break;
+        if (here == 10)
+            here--;
+    }
+    /* On it already with a score this good: nothing to add. */
+    if (save_serial && score_table[here].serial == save_serial
+        && (uint16_t) score_table[here].score >= g_2036)
+        goto show;
+
+    /* The lowest row this score does not beat, and then the one below it. */
+    for (at = 9; at >= 0; at--)
+        if ((uint16_t) score_table[at].score > g_2036)
+            break;
+    at++;
+    if (at > here)                                 /* not good enough */
+        goto show;
+
+    free(score_table[here].name);
+    for (i = here; i > at; i--)
+        score_table[i] = score_table[i - 1];
+
+    f_147c5(0x27, g_1fd3, 0xff);
+    high_score_name(line);
+    score_set((int16_t) g_2036, line, at);
+    release_sounds();
+
+show:
+    show_attract_screen(400);
+}
+
+/* --------------------------------------------- 0x12dfb: high_score_name
+ *
+ * NEW HIGH SCORE!, the score, and then the name typed on the line the menu was
+ * just showing. Same shape as the save screen: a menu run with `owns` clear so
+ * the backdrop survives, and then name_entry over the top of it. ESC does not
+ * abandon this one - a place on the board is not refusable.
+ */
+void far high_score_name(char far *buf)
+{
+    menu_t      m;
+    int16_t     chosen;
+
+    menu_reset(&m);
+    menu_add_title(&m, menu_text[0]);              /* "NEW HIGH SCORE!" */
+    menu_add_action(&m, menu_text[60], 0x0b, &menu_always, 0);  /* "ENTER YOUR NAME" */
+    sprintf(buf, "%s: %u", menu_text[50], g_2036);              /* "SCORE" */
+    menu_add_action(&m, buf, 0x0b, &menu_never, 0);
+    m.background = 7;
+
+    menu_screen_driver(&m, &chosen, 0);
+
+    strcpy(buf, "`");                              /* start empty, cursor only */
+    name_entry(buf, chosen, 0);
+    menu_free(&m);
 }
 
 /* ------------------------------------------------- 0x12951: load_game_screen
@@ -3094,9 +3244,81 @@ void far scan_save_slots(void)
     }
 }
 
+/* --------------------------------------------------- 0x13dfb: load_settings
+ *
+ * The other half of save_settings, and what fills the hall of fame. Returns
+ * non-zero when there was a file to read.
+ *
+ * The leading string doubles as a version stamp: a '!' anywhere in it means the
+ * current format. Without one the file is an older build's, and two things
+ * differ - the button map is derived from a single setting rather than stored,
+ * and one fewer byte follows it.
+ */
+int16_t far load_settings(void)
+{
+    char      line[0x1a];
+    FILE     *fp;
+    int16_t   old = 1;                             /* di */
+    int16_t   i;
+    uint8_t   c;
+
+    max_save_value = 0;
+    fp = fopen(settings_name, "rb");
+    if (!fp)
+        return 0;
+
+    do {
+        c = (uint8_t) fgetc(fp);
+        if (c == '!')
+            old = 0;
+    } while (c);
+    if (old)
+        printf("Old %s format! Converting file...\n\n", settings_name);
+
+    for (i = 0; i < 5; i++)
+        settings[i] = fgetc(fp);                   /* 0x04f4 */
+    video_mode = fgetc(fp);                        /* 0x04fe, the sixth of the
+                                                    * six the original reads as
+                                                    * one run */
+
+    if (old) {
+        button_map[0] = !settings[2];
+        button_map[1] = 2;
+        button_map[2] = settings[2];
+    } else {
+        for (i = 0; i < 3; i++)
+            button_map[i] = fgetc(fp);
+    }
+    /* Three bytes, or two on the old format. */
+    for (i = 0; i < 3 - old; i++)
+        ((uint8_t *) &g_1fd3)[i] = (uint8_t) fgetc(fp);
+
+    registered = fgetc(fp);                        /* 0x0548 */
+    if (registered) {
+        owner_name = egg_read_string(fp);          /* 0x0542 */
+        owner_key  = egg_read_word(fp);            /* 0x0546 */
+        sprintf(line, "%06u", owner_key - 1);      /* d+0x27fb */
+        f_12edf(owner_name, line, 0);
+    }
+
+    for (i = 0; i < 10; i++) {
+        free(score_table[i].name);
+        score_table[i].score  = egg_read_word(fp);
+        score_table[i].name   = egg_read_string(fp);
+        score_table[i].serial = egg_read_word(fp);
+        if ((uint16_t) score_table[i].serial > max_save_value)
+            max_save_value = score_table[i].serial;
+    }
+    fclose(fp);
+    return 1;
+}
+
 /* ---------------------------------------------------- 0x140b1: save_settings
  *
- * Every value goes out through Borland's putw, one word at a time, in four runs.
+ * The same values back out, in the same order. Every one of them goes through
+ * fputc, so a setting is a byte on the way out however wide it is here; only the
+ * registration key and the board's scores and serials are words, and those go
+ * through write_word, high byte first.
  */
 void far save_settings(void)
 {
@@ -3121,7 +3343,16 @@ void far save_settings(void)
                                                     * three bytes - the middle one
                                                     * is game_speed and the last
                                                     * is gamma */
-    /* TODO 0x1415e-: more writes follow, not read. */
+    fputc(registered, fp);                         /* 0x1415e */
+    if (registered) {
+        write_string(fp, owner_name);
+        write_word(owner_key, fp);
+    }
+    for (i = 0; i < 10; i++) {                     /* the hall of fame */
+        write_word(score_table[i].score, fp);
+        write_string(fp, score_table[i].name);
+        write_word(score_table[i].serial, fp);
+    }
     fclose(fp);
 }
 
@@ -3145,6 +3376,8 @@ void far init(void)
         f_15388(init_objects[i]);
     }
     buffer_init();                                 /* bring-up: see stubs.c */
+    load_settings();                               /* 0x1432c - the settings and
+                                                    * the hall of fame */
     build_charmap();                               /* 0x143e5 */
     font_load();                                   /* 0x143e9 - the one 'F'
                                                     * block, before anything
