@@ -377,7 +377,14 @@ void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour)
  */
 void far show_resource_loop(desc_t far *desc, int16_t frames)
 {
-    int16_t si = frames, plane;
+    /* 0x0b536: the count is taken, a step of 1 or 0 derived from whether it is
+     * non-zero, and only then is the count incremented. So a caller asking for
+     * zero frames gets si = 1 and a step of 0: the countdown never reaches zero
+     * and the page holds until a key. That +1 is the whole of the "no frame
+     * count means hold" behaviour, and without it the page lasts one frame. */
+    uint8_t step = (frames != 0);                      /* [bp-2] */
+    int16_t si   = frames + 1;                         /* 0x0b547 */
+    int16_t plane;
 
     fade_direction = 1;  fade_start_colour = 0;
     palette_build();                                   /* 0x0b0c5 */
@@ -385,7 +392,7 @@ void far show_resource_loop(desc_t far *desc, int16_t frames)
         input_poll(320, 200);
         if (si == 0 || last_key || g_18e5)
             fade_direction = -1;                       /* fade out */
-        si -= (frames > 0);
+        si -= step;
         for (plane = 0; plane < 4; plane++) {
             set_plane(plane);
             blit_rows(desc, viewport_screen, 0);
