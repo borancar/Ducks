@@ -504,6 +504,12 @@ extern particle_t far *particle_array;
 extern table_t sprite_table;
 extern int16_t far *anim_script[112];
 extern uint8_t      type_flags[112];
+extern int16_t far *tool_list;      /* 0x1782 */
+extern int16_t      tool_type;      /* 0x1786 */
+extern uint8_t      tool_at;        /* 0x1788 */
+extern uint8_t      tool_count;     /* 0x178b */
+int16_t far tool_list_has(int16_t type);
+int16_t far tool_list_any_flagged(void);
 extern int16_t      next_type[112];
 extern int16_t      left_handed;
 extern uint8_t      cursor_divider, cursor_phase;
