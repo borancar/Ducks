@@ -64,6 +64,8 @@ extern int16_t    layer_width;       /* 0x0538 via the same geometry */
 extern int16_t    layer_height;      /* 0x053a */
 extern int16_t    dest_row;          /* 0x1727 - the destination row offset */
 extern uint8_t    bg_scroll_x, bg_scroll_y;  /* 0x177e, 0x177f */
+extern uint8_t    bg_step_x, bg_step_y;      /* 0x1780, 0x1781 */
+extern uint8_t    cursor_divider, cursor_phase;  /* 0x179d, 0x179e */
 extern int16_t    wrap_x, wrap_y;    /* 0x1729, 0x172b - background wrap masks */
 extern int16_t    background_warp;   /* 0x2022 - first seen set on level 80 */
 extern uint8_t    warp_table[32];    /* 0x179f */
@@ -350,15 +352,22 @@ void far plot_pixel(int16_t x, int16_t y, uint8_t colour)
 
 /* ---------------------------------------------------------- video: the fade */
 
-/* 0x0b10b. The fade state machine, stepped once per frame by whoever is showing a
- * screen. fade_direction of 0 means "not fading"; +1 in, -1 out.
+/* 0x0b10f-0x0b22f. The fade state machine, stepped once per frame by whoever is
+ * showing a screen. fade_direction of 0 means "not fading"; +1 in, -1 out.
+ *
+ * Split out of palette_fade_step because in the original every one of the exits
+ * below is a jmp to the tail at 0x0b230 rather than a ret.
  */
-void far palette_fade_step(int16_t arg)
+static void fade_frame(int16_t arg)
 {
     int16_t i, si;
 
-    if (!fade_direction)                   /* nothing armed */
+    if (!fade_direction) {                 /* nothing armed */
+        if (arg)                           /* 0x0b226 - hand the built palette
+                                            * over as it stands */
+            palette_upload();
         return;
+    }
     if (fade_level == 0 && fade_direction == -1) {
         fade_direction = 0;                /* faded out: disarm and stop */
         return;
@@ -420,6 +429,29 @@ void far palette_fade_step(int16_t arg)
      * terrain ramp and 0x0b1c9 a washed copy of it, so the whole scene lifts to a
      * grey floor and back rather than one thing flashing. Nothing in this build
      * reaches it either way. */
+}
+
+/* 0x0b10b. The fade, and then - always - the frame tick. One function in the
+ * original, and every exit in the half above is a jmp to 0x0b230 rather than a
+ * ret, so the tick runs whether anything faded or not.
+ *
+ * It is the only thing a screen calls once a frame that moves anything of its
+ * own: the cursor's animation phase steps every other frame, the background
+ * scroll advances by its step and wraps against the tile's own size, and the
+ * warp phase advances with it. Without it a menu's background stands still. */
+void far palette_fade_step(int16_t arg)
+{
+    fade_frame(arg);
+
+    if (++cursor_divider == 2) {                       /* 0x0b230 */
+        cursor_phase = (uint8_t) ((cursor_phase + 1) & 3);
+        cursor_divider = 0;
+    }
+    bg_scroll_y = (uint8_t) ((bg_scroll_y + bg_step_y) & wrap_y);
+    bg_scroll_x = (uint8_t) ((bg_scroll_x + bg_step_x) & wrap_x);
+
+    warp_phase++;                                      /* 0x0b266 */
+    warp_phase = (uint8_t) (warp_phase + bg_step_y * warp_step);
 }
 
 /* ------------------------------------------------------------ video: drawing

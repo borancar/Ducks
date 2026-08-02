@@ -161,6 +161,10 @@ extern int16_t    screen_height;     /* 240 or 200 */
 extern int16_t    screen_x0;         /* centring offset, 20 or 0 */
 extern void far (*plot)(int16_t x, int16_t y, uint8_t colour);
 extern uint8_t    current_plane;
+extern int16_t    wrap_x, wrap_y;               /* 0x1729, 0x172b */
+extern uint8_t    bg_scroll_x, bg_scroll_y;     /* 0x177e, 0x177f */
+extern uint8_t    bg_step_x, bg_step_y;         /* 0x1780, 0x1781 */
+extern uint8_t    warp_phase, warp_step;        /* 0x17bf, 0x17c0 */
 extern uint16_t   page_front, page_back;
 extern int16_t    flip_phase;
 
@@ -426,7 +430,7 @@ extern int16_t far *anim_script[112];
 extern uint8_t      type_flags[112];
 extern int16_t      next_type[112];
 extern int16_t      left_handed;
-extern uint8_t      tool_shown;
+extern uint8_t      cursor_divider, cursor_phase;
 void far load_animations(void);
 extern viewport_t hud_clip;
 extern void far *egg_stream, *current_buffer;
