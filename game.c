@@ -2215,10 +2215,14 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                   menu = &main_menu;                       break;
 
         case 20:                                   /* 0x136fe: MOUSE BUTTONS */
+            /* DONE! on the MOUSE BUTTONS screen. It is the only way off that
+             * screen - the menu has no submenu item at all - so refusing here
+             * is what keeps the user on it until the three are distinct. */
             if (button_map[0] == button_map[1] || button_map[0] == button_map[2]
-                || button_map[1] == button_map[2]) {
-                /* the duplicate-assignment case; body not read */
-            }
+                || button_map[1] == button_map[2])
+                show_splash(extra_text[9], 200);   /* "INVALID SETTINGS!" */
+            else
+                menu = &menu_mouse;                /* 0x13737 */
             break;
 
         case 12:                                   /* 0x136cb: RESOLUTION */
