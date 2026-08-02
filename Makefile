@@ -12,7 +12,7 @@ CC      ?= cc
 CFLAGS  ?= -std=c99 -Wall -Wextra -O1 $(shell pkg-config --cflags sdl3)
 LDLIBS  ?= $(shell pkg-config --libs sdl3)
 
-OBJS = game.o sdl_io.o stubs.o egg.o
+OBJS = game.o sdl_io.o stubs.o egg.o sound.o
 
 ducks: $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) $(LDLIBS) -o $@

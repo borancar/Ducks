@@ -73,6 +73,7 @@ void far delay(int16_t ms)             { SDL_Delay((Uint32) ms); }
  * where the 255 a clean QUIT DUCKS was reporting came from. */
 void far crt_exit(void)
 {
+    audio_close();
     SDL_Quit();
     exit(0);
 }
@@ -494,6 +495,66 @@ void far compose_layer(void)
 void far compose_scroll(int16_t scroll_x, int16_t scroll_y)
 {
     (void) scroll_x; (void) scroll_y;
+}
+
+/* ------------------------------------------------------------------- audio
+ *
+ * What is left of the card. The original resets the DSP, pulls the IRQ and the
+ * DMA channel out of BLASTER, installs a handler and starts an auto-init
+ * transfer; every time the DMA reaches half way, the handler mixes the next
+ * block. Here the device asks and sound_mix answers, which is the same
+ * arrangement with the hardware taken out.
+ *
+ * The format is the samples' own: signed 8-bit, one channel, 11111 Hz. SDL
+ * resamples to whatever the device wants, so the game's rate is kept rather
+ * than the machine's.
+ */
+static SDL_AudioStream *audio;
+
+static void SDLCALL audio_feed(void *userdata, SDL_AudioStream *stream,
+                               int additional, int total)
+{
+    int8_t block[1024];
+
+    (void) userdata; (void) total;
+    while (additional > 0) {
+        int n = additional > (int) sizeof block ? (int) sizeof block : additional;
+
+        sound_mix(block, (int16_t) n);
+        SDL_PutAudioStreamData(stream, block, n);
+        additional -= n;
+    }
+}
+
+int16_t far audio_open(int16_t rate)
+{
+    SDL_AudioSpec spec;
+
+    if (audio)
+        return 1;
+    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+        SDL_Log("SDL_InitSubSystem(AUDIO): %s", SDL_GetError());
+        return 0;
+    }
+    spec.format   = SDL_AUDIO_S8;
+    spec.channels = 1;
+    spec.freq     = rate;
+    audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec,
+                                      audio_feed, NULL);
+    if (!audio) {
+        SDL_Log("SDL_OpenAudioDeviceStream: %s", SDL_GetError());
+        return 0;
+    }
+    SDL_ResumeAudioStreamDevice(audio);
+    return 1;
+}
+
+void far audio_close(void)
+{
+    if (!audio)
+        return;
+    SDL_DestroyAudioStream(audio);
+    audio = NULL;
 }
 
 /* ------------------------------------------------------------------- mouse

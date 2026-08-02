@@ -270,7 +270,13 @@ extern uint8_t bg_step_x, bg_step_y;    /* 0x1780, 0x1781 */
 
 /* used but not identified */
 int16_t  g_509, g_50b, g_1ffa, g_1ffc, g_1ffe, g_18e1, g_18e3;
-uint8_t  g_18f5, g_1fd3;        /* both byte-sized on every access */
+uint8_t  g_18f5;                /* byte-sized on every access */
+/* 0x1fd3. The scale sound_load multiplies every sample byte by, out of 32, and
+ * the only thing the ambience is ever loaded with - so this is AMBIENCE VOLUME.
+ * That is what it is used as and where it is kept, beside game_speed and gamma
+ * in the three bytes settings.dat carries; the slider that writes it is the
+ * screen at 0x0c4f0, which is not read, so nothing here has watched it change. */
+uint8_t  ambience_volume;
 int16_t  g_201c;                /* compared with jle, so signed */
 uint16_t g_2036;                /* compared with jb, so unsigned */
 int16_t  g_21a3;
@@ -293,6 +299,14 @@ uint8_t charmap[256];            /* 0x17c1 - character -> sprite index */
 /* d+0x21f8. The order the sprites are in. 27 is '?', which is what an unlisted
  * character maps to, and there is no '0' in it - see below. */
 static const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ/?:-_ !'123,987465`.x";
+
+/* 0x04ca0. Every sound the game asks for goes through here, and the SOUNDS
+ * setting is the only thing it does: with it off nothing is even loaded. */
+void far sound_play_guarded(int16_t id, int16_t voice)
+{
+    if (settings[0])                               /* [0x4f4] */
+        sound_play(id, voice);                     /* far 0x1462:0x130 */
+}
 
 /* 0x04cba */
 void far build_charmap(void)
@@ -2373,13 +2387,13 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                     && episode_egg_index == 0) {                /* 0x1390d */
                     set_buffer(&buf[0]);
                     cutscene_rocket_space();                    /* id 0x32 */
-                    f_147c5(0x4a, g_1fd3, 0xff);
+                    sound_play_loop(0x4a, ambience_volume, 0xff);
                     cutscene_rocket_landing();                  /* ids 0x33/0x34 */
                     cutscene_doorstep();                        /* ids 0x37/0x38 */
                     cutscene_welcome_home();                    /* id 0x36 */
                     release_sounds();
                     cutscene_photos();                          /* ids 0x3a-0x3c */
-                    f_147c5(0x4a, g_1fd3, 0xff);
+                    sound_play_loop(0x4a, ambience_volume, 0xff);
                     cutscene_night_monster();                   /* the animation */
                     release_sounds();
                     dac_set_black(0, 0);
@@ -3053,7 +3067,7 @@ void far high_score_screen(void)
     for (i = here; i > at; i--)
         score_table[i] = score_table[i - 1];
 
-    f_147c5(0x27, g_1fd3, 0xff);
+    sound_play_loop(0x27, ambience_volume, 0xff);
     high_score_name(line);
     score_set((int16_t) g_2036, line, at);
     release_sounds();
@@ -3302,7 +3316,7 @@ int16_t far load_settings(void)
      * variables and taking the address of the first does not reach the others -
      * it writes two bytes past a one-byte object, which is what a zero-length
      * settings.dat turned into a heap assertion. */
-    g_1fd3     = (uint8_t) fgetc(fp);              /* 0x1fd3 */
+    ambience_volume = (uint8_t) fgetc(fp);         /* 0x1fd3 */
     game_speed = (uint8_t) fgetc(fp);              /* 0x1fd4 */
     if (!old)
         gamma_level = (uint8_t) fgetc(fp);         /* 0x1fd5 */
@@ -3352,7 +3366,7 @@ void far save_settings(void)
                                                             * original writes as
                                                             * one run */
     for (i = 0; i < 3; i++)  fputc(button_map[i], fp);     /* 0x20e4 */
-    fputc(g_1fd3, fp);                             /* 0x1fd3, 0x1fd4, 0x1fd5 -
+    fputc(ambience_volume, fp);                    /* 0x1fd3, 0x1fd4, 0x1fd5 -
                                                     * one run in the original,
                                                     * three variables here */
     fputc(game_speed, fp);

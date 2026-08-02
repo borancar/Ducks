@@ -155,6 +155,28 @@ typedef struct {
     uint8_t colour;
 } particle_t;
 
+/* ------------------------------------------------------------------ sound
+ *
+ * A sample is an XMS handle, an offset into it and a length in the original -
+ * ten bytes, because extended memory was the only place 87 sounds would fit.
+ * Here it is the bytes themselves. Signed 8-bit at 11111 Hz.
+ */
+typedef struct {
+    uint8_t *pcm;               /* the original's handle and offset */
+    int32_t  length;            /* +0x06 */
+} sample_t;
+
+/* A voice, twelve bytes at d+0x3c78. `id` is the caller's label, not the
+ * sound's - it is what stop_sound_by_id and is_sound_playing match on. */
+typedef struct {
+    sample_t *desc;             /* +0x00 */
+    int16_t   id;               /* +0x04 - 0xffff when free */
+    int32_t   cursor;           /* +0x06 */
+    int16_t   loop;             /* +0x0a */
+} voice_t;
+
+#define SOUND_VOICES 8
+
 /* An egg file entry, stride 0x17. Everything from +0x10 on is filled in by
  * load_animations' tail and build_episode_index, out of the egg's own 'Z' and
  * information blocks. */
@@ -434,9 +456,23 @@ void far resource_release(void far *d);
 void far set_buffer(void far *p);
 void far buffer_init(void);
 extern uint8_t default_buffer[768];
-void far sound_play_guarded(int16_t id, int16_t mode);
+/* sound.c - the game's own sound module */
+void far sound_play_guarded(int16_t id, int16_t voice);
+void far sound_play(int16_t id, int16_t voice);
+void far sound_play_loop(int16_t id, int16_t scale, int16_t egg);
+int16_t far sound_load(uint8_t id, int16_t scale, int16_t egg);
+int16_t far play_sample(sample_t *desc, int16_t id, int16_t loop);
+void far stop_voice(int16_t slot);
+void far stop_sound_by_id(int16_t id);
+int16_t far is_sound_playing(int16_t id);
 void far release_sounds(void);
 void far sound_init(int16_t rate);
+void far sound_mix(int8_t *dst, int16_t frames);
+extern uint8_t sound_state;
+
+/* the backend's, like set_plane and page_flip: what is left of the DSP */
+int16_t far audio_open(int16_t rate);
+void far audio_close(void);
 void far install_int23(void far *h);
 void far ctrl_break_handler(void);
 void far crt_exit(void);       /* 0:0x1e6b - Borland's exit; the backend's */
@@ -456,7 +492,6 @@ void far f_09329(void);
 void far f_0becb(void);
 void far f_0f8bd(void);
 void far f_11bee(void far *name, int16_t egg);
-void far f_147c5(int16_t a, int16_t b, int16_t c);
 void far f_15388(void far *o);
 void far f_12edf(char far *name, char far *key, int16_t arg);
 extern char far *owner_name;
