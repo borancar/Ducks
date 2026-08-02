@@ -299,7 +299,6 @@ void far egg_block_end(void);
 int egg_open(const char *path);
 void egg_bringup_open(void);
 void far f_04dcd(int16_t n);
-void far f_056f7(int16_t n);
 void far f_0615a(int16_t a, int16_t b, void far *c, int16_t d);
 void far f_088fa(void);
 void far f_09329(void);
@@ -320,5 +319,7 @@ extern void far *egg_stream, *current_buffer;
 void far make_rect(viewport_t far *r, int16_t top, int16_t bottom,
                    int16_t left, int16_t right);
 void far palette_build(void);
+void far palette_set_black(uint8_t index);
+extern uint8_t gamma_level;
 
 #endif /* DUCKS_DOS_H */

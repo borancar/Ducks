@@ -62,6 +62,10 @@ menu_t         menu_1c3b;               /* after a resolution change */
 /* video and the flip */
 uint8_t    game_speed;           /* 0x1fd4 - 0..0x1f, higher is faster; read
                                   * as `mov al / mov ah, 0`, so unsigned */
+uint8_t    gamma_level = 16;     /* 0x1fd5 - what GAMMA CORRECT sets, and 16 is
+                                  * what the image initialises it to. Every
+                                  * palette component is scaled by (this + 6)/19,
+                                  * so 13 would be no correction at all */
 int16_t    fade_level;           /* 0x1798 - 0..15, scales the palette. A word,
                                   * but also read a byte at a time in places */
 int8_t     fade_direction;       /* 0x179a - +1 or -1; palette_fade_step reads it
@@ -277,6 +281,22 @@ int16_t far resource_load(desc_t far *desc, uint8_t type, uint8_t index,
                           int16_t arg18, int16_t arg1a)
 {
     return resource_load_full(desc, 1, type, index, pal_at, arg18, arg1a);
+}
+
+/* 0x056f7. Forces one entry of the current palette buffer to black.
+ *
+ * show_splash calls it for entry 0 the moment the banner sprite set has loaded,
+ * and it has to: that set's own first colour is a purple, and entry 0 is what
+ * draw_banner clears its image to, so without this the purple becomes the
+ * background the letters sit on and floods the screen through the fade. */
+void far palette_set_black(uint8_t index)
+{
+    uint8_t far *p = current_buffer;
+    int16_t      i = index * 3;
+
+    p[i] = 0;
+    p[i + 1] = 0;
+    p[i + 2] = 0;
 }
 
 /* 0x06110. The pixels for one sprite, w*h of them. */
@@ -582,6 +602,26 @@ void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour)
             retire_entity(e);                      /* 0x078d4 */
 
         previous_type = e->type;
+    }
+}
+
+/* ------------------------------------------------------ 0x0b0c5: palette_build
+ *
+ * The palette the DAC loops upload, built from the current buffer a component at
+ * a time: each is scaled by (gamma + 6) / 19 and clamped, so gamma 13 is no
+ * correction, below it darkens and above it brightens. The division is the
+ * runtime's 32-bit signed one, which is why a component can be multiplied up
+ * past 255 before the clamp catches it.
+ */
+void far palette_build(void)
+{
+    int16_t i;
+
+    for (i = 0; i < 0x300; i++) {
+        int32_t v = (int32_t) ((uint8_t far *) current_buffer)[i]
+                  * (gamma_level + 6) / 0x13;
+
+        palette_stored[i] = (uint8_t) (v > 255 ? 255 : v);
     }
 }
 
@@ -1064,7 +1104,7 @@ void far show_splash(const char far *text, int16_t frames)
     make_rect(&a, 80, 104, screen_x0, screen_x0 + 320);   /* centred */
     image_alloc(&b, 320, 24);                      /* 0x08885 */
     sprite_set_load(1, 0x53, &set, 0xff);          /* 0x0615a - the large font */
-    f_056f7(0);
+    palette_set_black(0);                       /* 0x056f7 */
     draw_banner(text, &set, 0x12, &b, 0, 0x1c);    /* 0x0b5cf */
     clear_vram();
     fade_direction = 1;  fade_start_colour = 0;
