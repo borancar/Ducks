@@ -112,7 +112,6 @@ void egg_bringup_open(void)
     strcpy(egg_files[0].name, "MAIN.EGG");
 }
 void far crt_exit(void)                   { }
-void far print_newline(void)              { }
 void far set_text_colour(int16_t c)       { (void) c; }
 
 /* ------------------------------------------------ unnamed, by image offset */

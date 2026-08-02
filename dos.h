@@ -377,6 +377,10 @@ int16_t far detect_hardware(void);
 int16_t far f_1102a(int16_t a);
 int16_t far f_14e88(void far *fp);
 void far show_readme_section(uint8_t n);
+void far console_rule(void);
+void far build_episode_index(void);
+int16_t far read_index(episode_t far *array, int16_t start, int16_t far *total,
+                       int16_t egg, int16_t store);
 void far save_game_screen(void);
 void far load_game_screen(void);
 void far register_screen(void);
@@ -415,7 +419,6 @@ void far sound_init(int16_t rate);
 void far install_int23(void far *h);
 void far ctrl_break_handler(void);
 void far crt_exit(void);
-void far print_newline(void);
 void far set_text_colour(int16_t c);
 void far retire_entity(void far *e);
 void far f_0580b(void);

@@ -2400,6 +2400,179 @@ void far load_animations(void)
     }
 }
 
+/* ================================================= the indexes, 0x11547 on
+ *
+ * Three of them, all built once at startup out of every open egg's information
+ * block: the episodes, the readme sections, and the rolling demos. The first two
+ * share a record layout and a reader; the third is assembled here.
+ * ======================================================================== */
+
+/* 0x11547. The separator between the startup screen's sections: a newline, then
+ * eighty dashes in grey. */
+void far console_rule(void)
+{
+    int16_t i;
+
+    fputs("\n", stdout);                           /* d+0x2555, 0:0x3b4d */
+    set_text_colour(7);
+    for (i = 0; i < 0x50; i++)
+        printf("-");                               /* d+0x2557, 0:0x2012 */
+}
+
+/* 0x1157a. Reads records out of the open information block until the running
+ * total says to stop, and hands back where it got to.
+ *
+ * `store` is what makes an egg that contributes nothing still cost its records:
+ * with it clear every record is read into one scratch struct and dropped, so the
+ * stream still advances past the names, and the total is wound back by however
+ * many were skipped. With it set the records land in the array.
+ */
+int16_t far read_index(episode_t far *array, int16_t start, int16_t far *total,
+                       int16_t egg, int16_t store)
+{
+    episode_t      scratch;                        /* [bp-0x14] */
+    episode_t far *rec = &scratch;
+    int16_t        i = start, ordinal = 0;
+
+    while (i < *total) {
+        if (store)
+            rec = &array[i];
+
+        rec->name       = egg_read_string(egg_stream);
+        rec->first      = egg_read_byte(egg_stream);
+        rec->last       = egg_read_byte(egg_stream);
+        rec->egg        = egg;
+        rec->ordinal    = ordinal++;
+        rec->terminator = (*total - 1 == i);       /* set on the last one */
+        i++;
+    }
+    if (!store)
+        *total -= i - start;                       /* 0x11639 */
+    return store ? i : start;
+}
+
+/* ------------------------------------------- 0x11657: build_episode_index
+ *
+ * Two passes over every open egg's information block. The first counts, so the
+ * two arrays can be sized; the second reads the records in and prints the egg's
+ * banner - "MAIN.EGG: Full Version" and its credit - which is what made this
+ * routine findable in the first place.
+ *
+ * The strings come out through egg_read_string, so the +1 shift the directory
+ * uses is already off by the time they land in a record.
+ */
+void far build_episode_index(void)
+{
+    int16_t   episodes_seen = 0;                   /* [bp-6]  */
+    int16_t   readmes_seen  = 0;                   /* [bp-8]  */
+    int16_t   episode_at, readme_at;               /* [bp-2], [bp-4] */
+    int16_t   i, j, n;
+    char far *label;
+    char far *credit;
+
+    episode_count = 0;
+    console_rule();
+    set_text_colour(15);
+    printf("Building episode index...");           /* d+0x25b1 */
+    console_rule();
+    fputs("\n", stdout);
+
+    /* Pass one: the header of each egg's information block - version, shareware
+     * limit, how many episodes and how many readme sections. */
+    for (i = 0; i < egg_file_count; i++) {
+        if (!egg_find_block(0x5a, 1, i))
+            fatal("No information block in loaded EGG file", egg_files[i].name);
+
+        egg_files[i].version = egg_read_byte(egg_stream);
+        if (egg_files[i].version < 4 || egg_files[i].version > 6)
+            fatal("Not a data file for this version of Ducks",
+                  egg_files[i].name);
+
+        egg_files[i].limit = egg_read_byte(egg_stream);
+        n = egg_read_byte(egg_stream);
+        if (egg_files[i].contributes)
+            episode_count += n;
+        readme_count += egg_read_byte(egg_stream);
+        egg_block_end();
+    }
+
+    episode_index = malloc((size_t) episode_count * sizeof *episode_index);
+    if (!episode_index)
+        fatal(out_of_memory, 0);
+    readme_index = malloc((size_t) readme_count * sizeof *readme_index);
+    if (!readme_index)
+        fatal(out_of_memory, 0);
+
+    /* Pass two: the records themselves, and the banner. */
+    episode_at = 0;
+    readme_at  = 0;
+    for (i = 0; i < egg_file_count; i++) {
+        egg_find_block(0x5a, 1, i);
+        egg_read_byte(egg_stream);                 /* the version again */
+        egg_read_byte(egg_stream);                 /* and the limit */
+        episodes_seen += egg_read_byte(egg_stream);
+        readmes_seen  += egg_read_byte(egg_stream);
+
+        episode_at = read_index(episode_index, episode_at, &episodes_seen, i,
+                                egg_files[i].contributes);
+
+        label  = egg_read_string(egg_stream);
+        credit = egg_read_string(egg_stream);
+        set_text_colour(14);  printf("%s: ", egg_files[i].name);
+        set_text_colour(15);  printf("%s", label);
+        set_text_colour(7);   printf("\r\n%s\r\n", credit);
+        free(label);
+        free(credit);
+
+        /* One byte says whether this egg is a complete set. The first egg has
+         * to be one and the rest must not be, so the test is against whether
+         * this is the first - and the two refusals are a two-entry table of
+         * messages at d+0x219b indexed the same way. */
+        n = egg_read_byte(egg_stream);
+        if (n == (i != 0))
+            fatal(i != 0 ? "Attempting to load more than one primary EGG"
+                         : "Primary EGG must be a complete set of data",
+                  egg_files[i].name);
+
+        egg_files[i].id = egg_read_string(egg_stream);
+        for (j = 0; j < i; j++)
+            if (strcmp(egg_files[i].id, egg_files[j].id) == 0)   /* 0:0x4215 */
+                fatal("Same EGG loaded twice", 0);
+
+        readme_at = read_index(readme_index, readme_at, &readmes_seen, i, 1);
+
+        egg_files[i].demos = egg_read_byte(egg_stream);
+        if (egg_files[i].contributes)
+            g_2038 = (uint8_t) (g_2038 + egg_files[i].demos);
+        egg_files[i].demo_base = g_2038;
+        egg_block_end();
+    }
+
+    /* And the demo index, which is not read out of the eggs at all: one record
+     * per demo per contributing egg, its name made up from the egg's. */
+    if (g_2038 == 0)
+        fatal("No valid rolling demos found", 0);
+
+    demo_index = malloc((size_t) g_2038 * sizeof *demo_index);
+    if (!demo_index)
+        fatal(out_of_memory, 0);
+
+    n = 0;
+    for (i = 0; i < egg_file_count; i++) {
+        if (!egg_files[i].contributes)
+            continue;
+        for (j = 0; j < egg_files[i].demos; j++) {
+            demo_index[n].egg   = i;
+            demo_index[n].first = j;
+            demo_index[n].name  = malloc(0x14);
+            if (!demo_index[n].name)
+                fatal(out_of_memory, 0);
+            sprintf(demo_index[n].name, "%s %i", egg_files[i].name, j);
+            n++;
+        }
+    }
+}
+
 /* ------------------------------------------------- 0x13fea: scan_save_slots
  *
  * Takes nothing, returns nothing; its only output is one global. The names are
@@ -2487,6 +2660,7 @@ void far init(void)
      * entity, the mouse pointer included, needs both. */
     sprite_set_load(0, 0x53, &sprite_table, 0xff);
     load_animations();                             /* 0x143ff */
+    build_episode_index();                         /* 0x14403 */
     build_menus();                                 /* 0x14407 - and the menus,
                                                     * which are made of them */
     scene_alloc(&cursor_scene, 1);                 /* 0x14411 - the one entity
@@ -2501,7 +2675,7 @@ void far init(void)
     if (sound_available)
         sound_init(11000);                         /* 0x2af8 = 11000 decimal */
 
-    print_newline();
+    console_rule();                                /* 0x1442f */
     set_text_colour(15);
     // NOT NEEDED
     //puts("Press a key to begin...");               /* DGROUP+0x28e7 */
