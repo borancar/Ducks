@@ -63,6 +63,20 @@ void outpw(uint16_t port, uint16_t v)  { (void) port; (void) v; }
 uint8_t inp(uint16_t port)             { (void) port; return 0; }
 void far delay(int16_t ms)             { SDL_Delay((Uint32) ms); }
 
+/* 0:0x1e6b, and the last thing main calls. Borland's exit: it runs the atexit
+ * chain, flushes the streams and hands control back to DOS, and nothing after it
+ * in main is ever reached - main's own `retf` included.
+ *
+ * It is here rather than in stubs.c because ending the process is the backend's
+ * to do: SDL has a window and an audio device open, and leaving through main's
+ * return left the exit status as whatever main happened to leave in AX, which is
+ * where the 255 a clean QUIT DUCKS was reporting came from. */
+void far crt_exit(void)
+{
+    SDL_Quit();
+    exit(0);
+}
+
 /* ------------------------------------------------------------ private state */
 
 #define SCALE_DEFAULT 3          /* the window is this many times the mode */

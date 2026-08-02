@@ -418,7 +418,7 @@ void far release_sounds(void);
 void far sound_init(int16_t rate);
 void far install_int23(void far *h);
 void far ctrl_break_handler(void);
-void far crt_exit(void);
+void far crt_exit(void);       /* 0:0x1e6b - Borland's exit; the backend's */
 void far set_text_colour(int16_t c);
 void far retire_entity(void far *e);
 void far f_0580b(void);
