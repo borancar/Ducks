@@ -362,7 +362,6 @@ void outp(uint16_t port, uint8_t v);
 void outpw(uint16_t port, uint16_t v);
 uint8_t inp(uint16_t port);
 void far delay(int16_t ms);
-int putw(int w, FILE *f);   /* Borland's; one word out */
 
 /* stubs.c, until each is read out - see that file for what they are */
 int16_t far in_game_frame(int16_t arg);
