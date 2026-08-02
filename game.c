@@ -191,7 +191,8 @@ uint8_t    g_2038;               /* 0x2038 - how many demos to choose from;
  * 4 before each open. Defined without its contents here, which gave it one byte
  * and made every one of those patches a write past the end of it. */
 char       save_name[] = "GAME-.SG";
-char far  *settings_name;        /* 0x21d2 - "settings.dat" */
+char far  *settings_name = "settings.dat";       /* 0x21d2 - a pointer in the
+                                                  * image, to d+0x27c7 */
 uint8_t    g_28ff[1];            /* 0x28ff - main's first splash source */
 void far  *buf_200f, *buf_203b, *buf_203f, *buf_2043;  /* freed per demo */
 /* The string tables - see dos.h. Two of them are far data at 0x1894:0 and
@@ -3106,20 +3107,20 @@ void far save_settings(void)
     if (!fp)
         return;
 
-    fputs("!", fp);                                /* DGROUP+0x2806, a marker */
-    putw(0, fp);
+    fputs("!", fp);                                /* DGROUP+0x2806, the marker */
+    fputc(0, fp);
 
-    for (i = 0; i < 5; i++)  putw(settings[i], fp);        /* 0x04f4 */
-    putw(video_mode, fp);                                 /* 0x04fe - the sixth
-                                                           * of the six words the
-                                                           * original writes as
-                                                           * one run */
-    for (i = 0; i < 3; i++)  putw(button_map[i], fp); /* 0x20e4, the mapping */
-    for (i = 0; i < 3; i++)  putw(((uint8_t *) &g_1fd3)[i], fp);
+    for (i = 0; i < 5; i++)  fputc(settings[i], fp);       /* 0x04f4 */
+    fputc(video_mode, fp);                                 /* 0x04fe - the sixth
+                                                            * of the six the
+                                                            * original writes as
+                                                            * one run */
+    for (i = 0; i < 3; i++)  fputc(button_map[i], fp);     /* 0x20e4 */
+    for (i = 0; i < 3; i++)  fputc(((uint8_t *) &g_1fd3)[i], fp);
                                                    /* 0x1fd3, 0x1fd4, 0x1fd5:
                                                     * three bytes - the middle one
-                                                    * is game_speed and the last is
-                                                    * gamma - widened to words */
+                                                    * is game_speed and the last
+                                                    * is gamma */
     /* TODO 0x1415e-: more writes follow, not read. */
     fclose(fp);
 }
