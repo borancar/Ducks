@@ -45,11 +45,15 @@ uint8_t    current_plane;
 uint16_t   page_front, page_back;
 int16_t    flip_phase;
 
-/* The compositor's state, the same four variables dos_io.c has: the tile's wrap
- * masks and the scroll into it. load_background sets the masks; a menu holds the
- * scroll at zero. */
+/* The compositor's state: the tile's wrap masks, the scroll into it, and how far
+ * that scroll moves each frame. load_background sets the masks from the tile's
+ * own size; a screen sets the step and palette_fade_step's tail does the moving. */
 int16_t    wrap_x, wrap_y;              /* 0x1729, 0x172b */
 uint8_t    bg_scroll_x, bg_scroll_y;    /* 0x177e, 0x177f */
+uint8_t    bg_step_x, bg_step_y;        /* 0x1780, 0x1781 - added to the scroll
+                                         * once a frame, so a menu's background
+                                         * creeps upward at one row a frame */
+uint8_t    warp_phase, warp_step;       /* 0x17bf, 0x17c0 - compose_scroll's */
 
 /* There are no ports here. The game still writes the DAC directly in one place -
  * cutscene_photos flashes the screen white - so these exist to let that link, and
@@ -203,13 +207,18 @@ void far palette_upload(void)
 /* The same state machine as the original, with the 768 port writes replaced by
  * scaling into the palette array. fade_level is 0..15 and the original computes
  * (component * level) >> 6. */
-void far palette_fade_step(int16_t arg)
+/* 0x0b10f-0x0b22f. Split out because in the original every one of the exits
+ * below is a jmp to the tail rather than a ret - see palette_fade_step. */
+static void fade_frame(int16_t arg)
 {
     int i;
 
-    (void) arg;
-    if (!fade_direction)
+    if (!fade_direction) {
+        if (arg)                           /* 0x0b226 - not fading, so hand the
+                                            * built palette straight over */
+            palette_upload();
         return;
+    }
     if (fade_level == 0 && fade_direction == -1) {
         fade_direction = 0;
         return;
@@ -232,6 +241,29 @@ void far palette_fade_step(int16_t arg)
         palette[i] = dac_to_rgb((palette_stored[i * 3 + 0] * fade_level) >> 6,
                                 (palette_stored[i * 3 + 1] * fade_level) >> 6,
                                 (palette_stored[i * 3 + 2] * fade_level) >> 6);
+}
+
+void far palette_fade_step(int16_t arg)
+{
+    fade_frame(arg);
+
+    /* 0x0b230. One function in the original, and this half of it always runs -
+     * every exit above is a jmp here. It is the frame tick the screens do not
+     * have of their own: the cursor's animation phase, the background scroll,
+     * and the warp. A menu never calls anything else once a frame, so without
+     * it the background stands still and the cursor's tool never turns.
+     *
+     * The scroll wraps against the tile's own size, which is why load_background
+     * leaves those masks one less than the width and the height. */
+    if (++cursor_divider == 2) {
+        cursor_phase = (uint8_t) ((cursor_phase + 1) & 3);
+        cursor_divider = 0;
+    }
+    bg_scroll_y = (uint8_t) ((bg_scroll_y + bg_step_y) & wrap_y);
+    bg_scroll_x = (uint8_t) ((bg_scroll_x + bg_step_x) & wrap_x);
+
+    warp_phase++;
+    warp_phase = (uint8_t) (warp_phase + bg_step_y * warp_step);
 }
 
 /* --------------------------------------------------------- video: page flip */

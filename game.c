@@ -199,8 +199,11 @@ uint8_t    cheat_text_count;     /* 0x0504 */
 int16_t    cheat_state[10];
 int16_t    left_handed;          /* 0x0511 - LEFT HANDED, which swaps the side of
                                   * the pen the cursor's tool is drawn on */
-uint8_t    tool_shown;           /* 0x179e - which tool the cursor holds; a byte,
-                                  * and nothing that sets it has been read */
+/* 0x179d, 0x179e. The cursor's animation: a two-frame divider and a phase that
+ * runs 0..3, both stepped by palette_fade_step's tail, and the phase is added to
+ * the sprite index the two cursor types compute. */
+uint8_t    cursor_divider;       /* 0x179d */
+uint8_t    cursor_phase;         /* 0x179e */
 table_t    sprite_table;         /* 0x18e9 - the set, not a pointer to it: every
                                   * draw_sprite call pushes ds and this offset */
 char far **tool_names;           /* 0x2106 */
@@ -244,12 +247,11 @@ uint8_t    bounce_table[16] = { 16, 16, 17, 19, 23, 27, 29, 30,
                                 30, 30, 29, 27, 23, 19, 17, 16 };
 
 /* The compositor's, defined by the video layer and set here: the wrap masks are
- * one less than the background tile's size, and the two scroll bytes are what a
- * menu holds still. 0x1780 and 0x1781 are written only here and by 0x0d6e9, and
- * read only at 0x0b24a and 0x0b258, so they are ours until that is read. */
+ * one less than the background tile's size, and the scroll is what a menu starts
+ * at zero and then leaves to palette_fade_step's tail to advance. */
 extern int16_t wrap_x, wrap_y;          /* 0x1729, 0x172b */
 extern uint8_t bg_scroll_x, bg_scroll_y;/* 0x177e, 0x177f */
-uint8_t    g_1780, g_1781;              /* 0x1780, 0x1781 */
+extern uint8_t bg_step_x, bg_step_y;    /* 0x1780, 0x1781 */
 
 /* used but not identified */
 int16_t  g_509, g_50b, g_1ffa, g_1ffc, g_1ffe, g_18e1, g_18e3;
@@ -888,9 +890,9 @@ void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour)
             /* Left-handed swaps which side of the pen the tool sits on, which is
              * the whole difference between the two arms. */
             if (left_handed)
-                index = (2 - e->type) * 12 + e->f14 * 4 + tool_shown + 6;
+                index = (2 - e->type) * 12 + e->f14 * 4 + cursor_phase + 6;
             else
-                index = (2 - e->type) * 12 + 6 - e->f14 * 4 + tool_shown;
+                index = (2 - e->type) * 12 + 6 - e->f14 * 4 + cursor_phase;
             break;
 
         case 4:                                    /* 0x0ad4c */
@@ -1519,7 +1521,10 @@ item_t far *far run_screen(menu_t far *menu, void far *chosen, int16_t owns)
     palette_set_black(0);                          /* 0x0c800 */
     load_background(menu->background, 0xff);       /* 0x0c815 */
 
-    g_1781 = 1;  bg_scroll_y = 0;  g_1780 = 0;  bg_scroll_x = 0;
+    /* 0x0c81b. Not "hold it still": the y step is 1, so the tile creeps upward
+     * a row a frame for as long as the menu is up, and only the starting offset
+     * is zeroed. Every menu snapshot has a different scroll in it. */
+    bg_step_y = 1;  bg_scroll_y = 0;  bg_step_x = 0;  bg_scroll_x = 0;
     image_alloc(&backdrop, screen_width, screen_height);
     image_clear(&backdrop, 0);
     clear_vram();
