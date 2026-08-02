@@ -147,6 +147,8 @@ int16_t         episode_count;   /* 0x20c2 */
 episode_t  far *readme_index;    /* 0x20be */
 int16_t         readme_count;    /* 0x20c4 */
 episode_t  far *demo_index;      /* 0x20ca */
+uint8_t         current_egg;     /* 0x20b8 - which egg the episodes come from */
+uint8_t         g_210b;          /* 0x210b - the chosen egg's format version */
 
 /* progress and the shareware gate */
 int16_t    level_attempted;      /* 0x2032 - the level about to be played. A
@@ -296,7 +298,9 @@ void far close_egg_files(void)
 {
     while (egg_file_count--) {             /* walked backwards, stride 0x17 */
         fclose(egg_files[egg_file_count].fp);
-        free(egg_files[egg_file_count].block);      /* the pointer at +8 */
+        free(egg_files[egg_file_count].id);         /* the name at +8, which
+                                                     * build_episode_index read
+                                                     * out of the egg */
     }
 }
 
@@ -2338,10 +2342,11 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
  * rather than being in the file, so the reader and animate_scene agree without
  * either of them carrying a count.
  *
- * TODO 0x13bcf-0x13cd?: the rest of this routine has nothing to do with
- * animation. It walks the open eggs looking for a 'Z' block in each, and stores
- * what it finds at +0x12 of that egg's record - the per-egg shareware limit,
- * which belongs with build_episode_index rather than here.
+ * The second half has nothing to do with animation: it asks each open egg what
+ * kind it is, and settles which of them the episodes come from. That has to
+ * happen before build_episode_index, and it does - init calls them in that
+ * order - because `contributes` is what decides whether an egg's records go
+ * into the arrays or are read past and dropped.
  */
 void far load_animations(void)
 {
@@ -2368,6 +2373,31 @@ void far load_animations(void)
         next_type[i]  = egg_read_word(egg_stream);
     }
     egg_block_end();
+
+    /* 0x13bcf. The chosen egg's format version, kept where the register screen
+     * can find it. */
+    g_210b = egg_files[current_egg].version;
+
+    /* Each egg's kind, out of its 'Z' block. An egg without one is kind 1. */
+    for (i = 0; i < egg_file_count; i++) {
+        if (egg_find_block(0x5a, 0xff, i)) {
+            egg_files[i].kind = (uint8_t) (egg_read_byte(egg_stream) + 0xd0);
+            egg_block_end();
+        } else {
+            egg_files[i].kind = 1;
+        }
+    }
+
+    /* And which of them contributes episodes. Kind 2 - a complete set - counts
+     * only if it is the chosen one; anything else counts if it is kind 0, which
+     * is an add-on, or if it is the chosen one. */
+    for (i = 0; i < egg_file_count; i++) {
+        if (egg_files[i].kind == 2)
+            egg_files[i].contributes = (current_egg == i);
+        else
+            egg_files[i].contributes = (egg_files[i].kind == 0
+                                        || current_egg == i);
+    }
 }
 
 /* ------------------------------------------------- 0x13fea: scan_save_slots
