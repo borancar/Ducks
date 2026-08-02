@@ -201,6 +201,16 @@ FUNCTIONS = {
     0x0EB04: "menu_add_list",           # a list cut into pages of three, each
                                         # with a MORE_ to a malloc'd next page
     0x0EC46: "build_menus",             # all fifteen of them, once, from init
+    0x12281: "add_save_slots",         # one menu entry per GAMEn.SG
+    0x1239E: "find_egg_by_id",         # which open egg a save belongs to
+    0x12951: "load_game_screen",
+    0x12B6A: "name_entry",             # typing a save's name, drawn as one
+                                        # more line of the menu behind it
+    0x13298: "save_game_screen",
+    0x128A5: "menus_resume",           # relabels two items for a game in
+                                        # progress, and changes one action
+    0x04EBB: "write_word",             # high byte first
+    0x04FBD: "write_string",           # a length, then the +1 shift put back
     0x1271B: "menu_screen_driver",      # game_main's first call, and the whole
                                         # attract cycle: the menu, a demo level
                                         # it plays by itself, and DUCKS HALL OF
