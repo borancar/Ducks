@@ -34,10 +34,6 @@ int16_t far in_game_frame(int16_t arg)
     return 0;
 }
 
-/* 0x078d4. Retires an entity - a state change, not drawing, which is why the
- * native declines rather than reimplementing it. */
-void far retire_entity(void far *e)     { (void) e; }
-
 /* Reads a sprite index out of an entity record. Types 1, 2 and 4 compute it
  * arithmetically instead; 0x26 and 0x36 adjust y first. */
 int16_t far sprite_index_for(void far *e)  { (void) e; return 0; }
@@ -57,21 +53,11 @@ void far cutscene_night_monster(void)     { }
 
 /* ------------------------------------------------------------ the screens */
 
-/* 0x0c716. The one that matters next: it draws a menu from its descriptor, takes
- * input, and returns a record whose action code game_main switches on. Every
- * menu, submenu, confirmation and episode list is this function on different
- * data - which is why the four submenu captures all had the same two stack
- * frames.
- *
- * Stubbed to "the user chose QUIT" (action 4), so a run reaches the menu, exits
- * cleanly and proves the loop around it works. */
-static record_t stub_record;
-record_t far *far run_screen(menu_t far *menu, void far *a, int16_t b)
-{
-    (void) menu; (void) a; (void) b;
-    stub_record.action = 4;
-    return &stub_record;
-}
+/* Every menu is real - run_screen and build_menus are in game.c - but the mouse
+ * pointer a menu draws is not. It is one entity of type 0x14 in cursor_scene,
+ * and it needs both of these: sprite_index_for above to say which sprite, and
+ * sprite_table to hold it. Until then a menu is keyboard and mouse-position
+ * only, with nothing under the cursor to see. */
 
 void far show_readme_section(uint8_t n)   { (void) n; }
 void far save_game_screen(void)           { }

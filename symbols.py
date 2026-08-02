@@ -157,9 +157,46 @@ FUNCTIONS = {
                                         # return that record's terminator flag -
                                         # so it says "the FINAL episode ended",
                                         # which is what gates the homecoming
-    0x0C716: "run_screen?",             # draws a screen, takes input, returns a
-                                        # record: +8 action code, +0xb a
-                                        # parameter. Holds plane_loop_layer
+    0x0C716: "run_screen",              # draws a screen, takes input, returns a
+                                        # pointer to the item chosen: +8 action
+                                        # code, +0xb a parameter. Holds
+                                        # plane_loop_layer
+    0x0C20E: "cursor_to_centre",        # (desc) puts the pointer in the middle
+    0x0C237: "draw_menu_item",          # (index, style, bounce): draw_banner into
+                                        # the backdrop. style 0/1/2 picks one of
+                                        # the three palette banks, bounce indexes
+                                        # the spacing table at d+0x1904
+    0x0C299: "item_label",              # writes ON/OFF or LEFT/RIGHT over the
+                                        # tail of an item's own text
+    0x0C3DE: "typed_clear",             # 32 spaces and a NUL
+    0x0C3FE: "typed_push",              # slides one character in and looks for a
+                                        # cheat word; flashes the border
+    0x0C4F0: "slider_screen",           # action 0x11: GAME SPEED, AMBIENCE
+                                        # VOLUME, GAMMA CORRECT
+    0x06DBC: "scene_add",               # (scene, x, y, type, param)
+    0x06EE9: "scene_alloc",             # (scene, capacity): capacity * 0x29
+    0x078D4: "entity_set_type",         # (e, type): zeroes the frame counter
+                                        # only when the type actually changes
+    0x06A49: "image_clear",             # (desc, value), a row at a time
+    0x087BC: "load_background",         # (index, egg): the tile behind a menu,
+                                        # palette at entry 64, then the wrap masks
+    0x05A95: "resource_load_at",        # resource_load_full with nothing
+                                        # allocated and a destination row
+    0x0A52A: "animate_scene",           # steps every entity's animation
+    0x0E8AD: "menu_reset",              # count = 0, background = 3
+    0x0E8C3: "menu_set_text",           # free and replace an item's text
+    0x0E8ED: "menu_add",                # the one that adds an item; everything
+                                        # below is a forwarder over it
+    0x0E9E9: "menu_add_action",
+    0x0EA12: "menu_add_title",          # action 0, and menu_never for its flag
+    0x0EA36: "menu_add_toggle",         # action 0x10
+    0x0EA5E: "menu_add_cycle",          # action 0x13
+    0x0EA86: "menu_add_entry",          # action 0x11
+    0x0EAAE: "menu_add_submenu",        # action 0x12
+    0x0EAD6: "menu_free",
+    0x0EB04: "menu_add_list",           # a list cut into pages of three, each
+                                        # with a MORE_ to a malloc'd next page
+    0x0EC46: "build_menus",             # all fifteen of them, once, from init
     0x1271B: "menu_screen_driver",      # game_main's first call, and the whole
                                         # attract cycle: the menu, a demo level
                                         # it plays by itself, and DUCKS HALL OF

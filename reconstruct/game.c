@@ -23,13 +23,29 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>       /* strcasecmp, which is Borland's stricmp */
 
 #include "dos.h"
 
 
-menu_t         main_menu;               /* ds:0x1916, what main passes in */
-menu_t         menu_1989;               /* after starting, saving or loading */
-menu_t         menu_1c3b;               /* after a resolution change */
+/* The fifteen menu descriptors, consecutive in DGROUP from 0x1916 to 0x1fd2 and
+ * built once by build_menus. Nothing in the image initialises them; the whole
+ * menu system is data assembled at startup out of the string tables. */
+menu_t         main_menu;               /* 0x1916 - what main passes in */
+menu_t         menu_play;               /* 0x1989 */
+menu_t         menu_options;            /* 0x19fc */
+menu_t         menu_quit;               /* 0x1a6f */
+menu_t         menu_resolution;         /* 0x1ae2 */
+menu_t         menu_episodes;           /* 0x1b55 */
+menu_t         menu_audio;              /* 0x1bc8 */
+menu_t         menu_video;              /* 0x1c3b */
+menu_t         menu_mouse;              /* 0x1cae */
+menu_t         menu_load_save;          /* 0x1d21 */
+menu_t         menu_idle;               /* 0x1d94 */
+menu_t         menu_readme;             /* 0x1e07 */
+menu_t         menu_buttons;            /* 0x1e7a */
+menu_t         menu_end_game;           /* 0x1eed */
+menu_t         menu_demos;              /* 0x1f60 */
 
 /* ---------------------------------------------------------------- globals
  *
@@ -105,9 +121,11 @@ int32_t    mouse_x, mouse_y;     /* 0x18d3, 0x18d7 - 32-bit from the add/adc
                                   * calls this unsigned, and did */
 int16_t    mouse_dx, mouse_dy;   /* 0x18db, 0x18dd - one poll's motion, signed:
                                   * each is `mov ax / cwd` before the add */
-int16_t    button_map_a;         /* 0x20e4 - which INT 33h button is which */
-int16_t    button_map_b;         /* 0x20e6 */
-int16_t    button_map_c;         /* 0x20e8 */
+/* 0x20e4. Which INT 33h button walks, cycles tools and uses one: three words,
+ * and MOUSE BUTTONS indexes them by its items' params, which is what makes them
+ * one array rather than three variables. Each holds 0, 1 or 2 - LEFT, RIGHT,
+ * MIDDLE - and the cycle steps it modulo three. */
+int16_t    button_map[3];        /* 0x20e4, 0x20e6, 0x20e8 */
 int16_t    button_a_down;        /* 0x18df */
 int16_t    button_b_down;        /* 0x18e7 */
 int16_t    g_18e5;               /* 0x18e5 - any button; escapes the fades */
@@ -119,6 +137,12 @@ egg_file_t far *egg_files;       /* 0x20a9 - stride 0x17 */
 int16_t         egg_file_count;  /* 0x20ad */
 episode_t  far *episode_index;   /* 0x20ba - four 14-byte records */
 int16_t         episode_count;   /* 0x20c2 */
+/* The readme sections and the demos, indexed the same way: 14-byte records
+ * whose first field is a far pointer to the name, which is all menu_add_list
+ * reads out of any of the three. */
+episode_t  far *readme_index;    /* 0x20be */
+int16_t         readme_count;    /* 0x20c4 */
+episode_t  far *demo_index;      /* 0x20ca */
 
 /* progress and the shareware gate */
 int16_t    level_attempted;      /* 0x2032 - the level about to be played. A
@@ -150,14 +174,57 @@ char far **extra_text;           /* 0x1894:0004 */
 uint8_t    extra_text_count;     /* 0x0098 */
 char far **cheat_text;           /* 0x0519 */
 uint8_t    cheat_text_count;     /* 0x0504 */
+/* 0x0505. One flag per cheat word, toggled by typing it. Ten words, twenty
+ * bytes, and the array ends exactly where cheat_text begins. What run_screen
+ * reads as "[0x515]" is element 8 of this, not a variable of its own. */
+int16_t    cheat_state[10];
 char far **tool_names;           /* 0x2106 */
 uint8_t    tool_names_count;     /* 0x210a */
 
 /* startup and settings */
 int16_t    sound_available;      /* 0x2104 - detect_hardware's result */
 void far  *init_objects[3];      /* 0x210c - three 22-byte objects, stride 4 */
-int16_t    settings[];           /* 0x04f4 - the word array save_settings
-                                         * writes; settings[0] gates sound */
+/* 0x04f4. The word array save_settings writes and every menu toggle indexes by
+ * its item's param. The image initialises it to these five values, and the
+ * sixth word is video_mode - adjacent in DGROUP and reached as [0x4fe], never
+ * as settings[5], which is why it is a variable of its own in dos_io.c. */
+int16_t    settings[5] = { 1, 1, 0, 1, 1 };
+                                 /* [0] SOUNDS        [1] FLYING BLOOD
+                                  * [2] unused        [3] SMOOTH SCROLL
+                                  * [4] MENU BOUNCE - read by run_screen */
+
+/* ------------------------------------------------------------ the menu state
+ *
+ * All of it DGROUP, all of it written only by run_screen and its helpers.
+ */
+menu_t far *current_menu;        /* 0x1900 - the far pointer every helper reads
+                                  * rather than taking the menu as an argument */
+int16_t    menu_top;             /* 0x18fe - the y the first item is drawn at */
+int16_t    colour_cycle;         /* 0x1914 - 0..15, stepped once a frame */
+desc_t     backdrop;             /* 0x16f5 - screen-sized, the items are drawn
+                                  * into it once and composed every frame */
+desc_t     background;           /* 0x170b - the 64x64 tile behind them */
+table_t    menu_sprites;         /* 0x18f8 - 'S' block 1, the large font */
+scene_t    cursor_scene;         /* 0x0d93 - one entity: the mouse pointer */
+int16_t    menu_always = 1;      /* 0x217f */
+int16_t    menu_never;           /* 0x2181 */
+uint8_t    on_off_width;         /* 0x0097 - max strlen of "N" and "FF" */
+uint8_t    cycle_width;          /* 0x0099 - of LEFT / RIGHT / MIDDLE */
+
+/* 0x1904. Sixteen bytes, and they are a letter spacing rather than a colour:
+ * draw_banner's last argument. The selected item's spacing walks this table one
+ * step a frame, so its letters breathe in and out - which is what the MENU
+ * BOUNCE setting turns off, and why turning it off pins the spacing at 17. */
+uint8_t    bounce_table[16] = { 16, 16, 17, 19, 23, 27, 29, 30,
+                                30, 30, 29, 27, 23, 19, 17, 16 };
+
+/* The compositor's, defined by the video layer and set here: the wrap masks are
+ * one less than the background tile's size, and the two scroll bytes are what a
+ * menu holds still. 0x1780 and 0x1781 are written only here and by 0x0d6e9, and
+ * read only at 0x0b24a and 0x0b258, so they are ours until that is read. */
+extern int16_t wrap_x, wrap_y;          /* 0x1729, 0x172b */
+extern uint8_t bg_scroll_x, bg_scroll_y;/* 0x177e, 0x177f */
+uint8_t    g_1780, g_1781;              /* 0x1780, 0x1781 */
 
 /* used but not identified */
 int16_t  g_509, g_50b, g_1ffa, g_1ffc, g_1ffe, g_18e1, g_18e3;
@@ -388,6 +455,43 @@ void far sprite_set_load(uint8_t index, uint8_t type, table_t far *table,
     egg_block_end();
 }
 
+/* 0x06ee9. Makes room for a scene's entities: capacity records of 0x29 bytes.
+ * Everything else in the header is cleared, except the byte at +4, which comes
+ * out 0xff. */
+void far scene_alloc(scene_t far *s, int16_t capacity)
+{
+    s->capacity = capacity;
+    s->count    = 0;
+    s->unread6  = 0;
+    s->entities = malloc((size_t) capacity * sizeof *s->entities);
+                                               /* 0x29 in the original */
+    s->flag     = 0xff;
+    if (!s->entities)
+        fatal(out_of_memory, 0);
+}
+
+/* 0x06dbc. Puts one entity into a scene, or refuses if it is full. Every field
+ * is zeroed by name rather than by a block clear, which is what says which
+ * fields the record actually has. */
+int16_t far scene_add(scene_t far *s, int16_t x, int16_t y, int16_t type,
+                      int16_t param)
+{
+    entity_t far *e;
+
+    if (s->capacity <= s->count)
+        return 0;
+
+    e = &s->entities[s->count];
+    e->x = x;  e->y = y;                       /* both 32-bit, high half zeroed */
+    e->f14 = 0;  e->f15 = 0;  e->f16 = 0;
+    e->frame = 0;
+    e->f21 = 0;  e->f23 = 0;  e->f27 = 0;
+    e->type  = type;
+    e->param = param;
+    s->count++;
+    return 1;
+}
+
 /* ------------------------------------------------------ 0x06869: input_poll
  *
  * Takes the resolution because the game keeps the cursor position itself: INT 33h
@@ -416,10 +520,10 @@ void far input_poll(int16_t w, int16_t h)
     p = (counts_t) { mouse_presses(0),  mouse_presses(1),  mouse_presses(2)  };
     r = (counts_t) { mouse_releases(0), mouse_releases(1), mouse_releases(2) };
 
-    if (p.n[button_map_a])  button_a_down = 1;   /* 0x18df */
-    if (r.n[button_map_a])  button_a_down = 0;
-    g_18e3 = p.n[button_map_b];            /* 0x18e3 - unnamed */
-    g_18e1 = p.n[button_map_c];            /* 0x18e1 - unnamed */
+    if (p.n[button_map[0]]) button_a_down = 1;   /* 0x18df */
+    if (r.n[button_map[0]]) button_a_down = 0;
+    g_18e3 = p.n[button_map[1]];            /* 0x18e3 - unnamed */
+    g_18e1 = p.n[button_map[2]];            /* 0x18e1 - unnamed */
     g_18e5 = (p.n[0] || p.n[1] || p.n[2]); /* 0x18e5 - any button at all, which
                                             * is what the fades test to cut a
                                             * splash short */
@@ -452,6 +556,16 @@ void far input_poll(int16_t w, int16_t h)
     } else {
         last_key = 0;
     }
+}
+
+/* 0x06a49. Fills a descriptor with one value, a row at a time through the
+ * runtime's memset. The height is compared unsigned, the width is the count. */
+void far image_clear(desc_t far *desc, uint8_t value)
+{
+    int16_t i;
+
+    for (i = 0; i < desc->h; i++)                  /* +0x0e, `ja` */
+        memset(desc->rows[i], value, (size_t) desc->w);
 }
 
 /* -------------------------------------------------- 0x0713e: sprite_to_image
@@ -502,6 +616,19 @@ void far sprite_to_image(int16_t x, int16_t y, sprite_t far *s,
     }
 }
 
+/* 0x078d4. Gives an entity a type, and only restarts its animation if the type
+ * actually changed - which is why calling it every frame, as run_screen does for
+ * the mouse pointer, does not freeze the pointer on its first frame.
+ *
+ * draw_entities calls it with type 0, which is what retiring an entity is. */
+void far entity_set_type(entity_t far *e, int16_t type)
+{
+    if (e->type != type) {                         /* +0x25, a word */
+        e->type  = type;
+        e->frame = 0;                              /* +0x1f */
+    }
+}
+
 /* ------------------------------------------------------- 0x0881d: make_rect
  *
  * Fill a viewport from its four edges. The width and height are derived rather
@@ -540,6 +667,46 @@ void far sprite_set_free(table_t far *table)
     for (i = 0; i < table->count; i++)
         free(table->base[i].pixels);
     free(table->base);
+}
+
+/* 0x0876a. The washed palette the blink alternates with: three quarters of the
+ * background's own sixteen colours, lifted by 64 so the darkest of them is still
+ * visible, and then through the same gamma scaling palette_build uses.
+ *
+ * It reads d+0x14b1 rather than the current buffer - that is default_buffer at
+ * entry 64 * 3, which is exactly where load_background puts the tile's colours.
+ */
+void far build_washed_ramp(void)
+{
+    int16_t i;
+
+    for (i = 0; i < 0x30; i++) {
+        int32_t v = (default_buffer[0xc0 + i] >> 1)
+                  + (default_buffer[0xc0 + i] >> 2) + 0x40;
+
+        v = v * (gamma_level + 6) / 0x13;
+        palette_washed[i] = (uint8_t) (v > 255 ? 255 : v);
+    }
+}
+
+/* 0x087bc. The tile behind a menu: a 'B' resource, its sixteen colours loaded at
+ * palette entry 64 and its pixels biased to match. The menu descriptor's last
+ * byte says which one.
+ *
+ * Asked for it in the egg the caller named and then in egg 0, and if neither has
+ * it the game stops - this is the one resource nothing can carry on without.
+ * The wrap masks are the tile's size less one, so compose_layer can repeat it
+ * with an AND; that only works because every one of these is a power of two.
+ */
+void far load_background(uint8_t index, int16_t egg)
+{
+    if (!resource_load(&background, 0x42, index, 0x40, 1, egg, 1)
+        && !resource_load(&background, 0x42, index, 0x40, 1, 0, 1))
+        fatal("Can't load background image", 0);   /* d+0x22fa */
+
+    wrap_x = background.w - 1;                     /* 0x1729 */
+    wrap_y = background.h - 1;                     /* 0x172b */
+    build_washed_ramp();
 }
 
 /* -------------------------------------------------- 0x093fb: load_string_table
@@ -623,6 +790,24 @@ void far particles(void)
     }
 }
 
+/* 0x0a52a. Steps every entity in a scene one frame.
+ *
+ * The part that is read: each entity's frame counter is incremented, and the
+ * script for its type - a far pointer out of the table at d+0x009a - is indexed
+ * by the counter rounded down to an even step. A script entry of 999 means the
+ * script has run out, and only then does the rest of the routine run.
+ *
+ * TODO 0x0a52a-0x0a83c: that rest is a switch on the entity type with a jump
+ * table at 0x0a5ba9's segment offset, arms for types 0x1a-0x24, 0x2f, 0x46,
+ * 0x47, 0x4e and 0x54, and a default. It is the game's animation system rather
+ * than the menu's, and the menu's one entity - the mouse pointer, type 0x14 -
+ * takes the default arm. Left as a no-op until the animation tables are read.
+ */
+void far animate_scene(scene_t far *scene)
+{
+    (void) scene;
+}
+
 /* -------------------------------------------------- 0x0aba5: draw_entities
  *
  * One level above draw_sprite: walk a scene's entity array, work out which sprite
@@ -661,7 +846,8 @@ void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour)
          * too. Verified by driving the guest's own code on synthetic input, since
          * a balloon floating off the top is not a state you can ask for. */
         if (e->type == 5 && y <= 0)
-            retire_entity(e);                      /* 0x078d4 */
+            entity_set_type(e, 0);                 /* 0x078d4 - type 0 is what
+                                                    * retiring an entity is */
 
         previous_type = e->type;
     }
@@ -1065,6 +1251,384 @@ void far show_resource(uint8_t type /* 0x4d */, uint8_t index,
     set_buffer(default_buffer);
 }
 
+/* ==========================================================================
+ * The menu screen: 0x0c20e to 0x0ce2d.
+ *
+ * Every screen in the game is run_screen on a different menu_t. It owns the
+ * whole frame - the tiled background, the items, the mouse pointer, the fade -
+ * and it returns the item the user chose, which is what game_main switches on.
+ *
+ * The items are drawn once, into `backdrop`, with the large sprite font; after
+ * that a frame is compose_layer over four planes and nothing else. Only the item
+ * under the cursor is redrawn, and only because its letter spacing walks a table
+ * to make it breathe.
+ * ========================================================================== */
+
+/* 0x0c20e. Puts the pointer in the middle of an image. The stores are 32-bit,
+ * with the high half explicitly zeroed, and the shift is unsigned. */
+void far cursor_to_centre(desc_t far *desc)
+{
+    mouse_x = (uint16_t) desc->w >> 1;             /* 0x18d3 */
+    mouse_y = (uint16_t) desc->h >> 1;             /* 0x18d7 */
+}
+
+/* 0x0c237. One item into the backdrop.
+ *
+ *   style   draw_banner's colour: 0 selected, 1 an ordinary item, 2 a title.
+ *           It becomes the high nibble of every pixel, which picks one of the
+ *           three sixteen-colour banks run_screen builds.
+ *   bounce  an index into bounce_table, and what comes out is a letter spacing.
+ *
+ * The rows an item owns are 24 apart, which is written as i*8 + i*16 because
+ * that is what the compiler emitted and there is no multiply here.
+ */
+void far draw_menu_item(uint8_t index, uint8_t style, int16_t bounce)
+{
+    if (index >= current_menu->count)              /* +0x70 */
+        return;
+
+    draw_banner(current_menu->item[index].text, &menu_sprites,
+                menu_top + index * 8 + index * 16 + 0x2a,
+                &backdrop, style, bounce_table[bounce]);
+}
+
+/* 0x0c299. Writes an item's current value over the tail of its own label.
+ *
+ * There is no separate value field and nothing is reformatted: menu_add worked
+ * out, once, the column at which the widest value would end flush with the end
+ * of the text, and this drops the value in at that column. "SOUNDS: O--" with
+ * "N" over column 9 reads SOUNDS: ON-, and with "FF" it reads SOUNDS: OFF.
+ *
+ * Anything that is not a toggle or a cycle has no value and falls straight out.
+ */
+void far item_label(item_t far *it)
+{
+    const char far *src;
+    uint8_t         j;
+
+    switch (it->action) {
+    case 0x10:                                     /* a toggle */
+        src = settings[it->param] ? menu_text[81]  /* "N"  */
+                                  : menu_text[82]; /* "FF" */
+        break;
+    case 0x13:                                     /* a three-way cycle */
+        src = extra_text[6 + button_map[it->param]];  /* LEFT/RIGHT/MIDDLE */
+        break;
+    default:
+        return;
+    }
+    for (j = 0; j < strlen(src); j++)              /* 0x0c338: strlen each time */
+        it->text[it->value_at + j] = src[j];
+}
+
+/* 0x0c3de. The typed-character window: 32 spaces and a terminator. */
+void far typed_clear(char far *buf)
+{
+    int16_t i;
+
+    for (i = 0; i < 0x20; i++)
+        buf[i] = ' ';
+    buf[0x20] = 0;
+}
+
+/* 0x0c3fe. Pushes one typed character into that window and looks for a cheat.
+ *
+ * The window slides - every character moves down one and the new one goes on the
+ * end - so a cheat word is recognised by comparing the last strlen(word)
+ * characters, whatever was typed before them. Each of the ten words toggles its
+ * own flag, and the border flashes green if the flag just came on and red if it
+ * just went off. Returns non-zero when a word matched, which is how run_screen
+ * knows to hold that flash for five frames.
+ *
+ * The flash is four OUTs straight at the DAC. The SDL backend cannot see them,
+ * so a cheat there toggles silently.
+ */
+int16_t far typed_push(char far *buf, uint8_t ch)
+{
+    int16_t i, matched = 0;
+
+    for (i = 0; i < 0x1f; i++)
+        buf[i] = buf[i + 1];
+    buf[0x1f] = (char) ch;
+
+    for (i = 0; i < cheat_text_count; i++) {
+        int16_t n = (int16_t) strlen(cheat_text[i]);
+
+        if (strcasecmp(cheat_text[i], buf + 0x20 - n) == 0) {   /* 0:0x4c28 */
+            cheat_state[i] = !cheat_state[i];      /* 0x0505 + i*2 */
+            sound_play_guarded(0xd, 1);
+
+            outp(0x3c8, 0);
+            outp(0x3c9, (uint8_t) (!cheat_state[i] << 5));      /* red: off */
+            outp(0x3c9, (uint8_t) (cheat_state[i] << 5));       /* green: on */
+            outp(0x3c9, 0);
+
+            matched = 1;
+            typed_clear(buf);
+        }
+    }
+    return matched;
+}
+
+/* 0x0c4f0. The slider an item with action 0x11 opens: GAME SPEED, AMBIENCE
+ * VOLUME, GAMMA CORRECT.
+ *
+ * TODO 0x0c4f0-0x0c715: a screen of its own, with its own frame loop. It clears
+ * a 32-byte bar, draws 38 tiles of it through 0x0739c, writes the label with
+ * 0x06dbc, and then reads the mouse against the item's setting. Left out so the
+ * menu itself can be exercised; choosing one of the three does nothing.
+ */
+void far slider_screen(item_t far *it, int16_t y)
+{
+    (void) it; (void) y;
+}
+
+/* ------------------------------------------------------- 0x0c716: run_screen
+ *
+ *   menu    the descriptor to run
+ *   chosen  a far int16_t the index of the chosen item is written back through
+ *   owns    non-zero when this screen owns its images and its fade. game_main
+ *           passes 1, so choosing an item fades out before returning; the same
+ *           variable is then reused to mean "leave".
+ *
+ * Returns a pointer into the menu, at the item chosen - except when the screen
+ * gave up waiting, and then it returns one of menu_idle's two items, which is
+ * how the attract cycle and the demo picker are reached without either of them
+ * being anything the user can point at.
+ */
+item_t far *far run_screen(menu_t far *menu, void far *chosen, int16_t owns)
+{
+    char         typed[0x21];      /* [bp-0x42] */
+    uint8_t far *pal = current_buffer;
+    int16_t      running   = 1;    /* [bp-6]    */
+    int16_t      timed_out = 0;    /* [bp-8]    */
+    int16_t      i;                /* [bp-0xe]  */
+    uint8_t      sel       = 0;    /* [bp-0xf]  - the item this frame acts on */
+    uint8_t      drawn     = 0;    /* [bp-0x10] - the one currently highlighted */
+    uint8_t      hover     = 0;    /* [bp-0x11] - where the keys or mouse point */
+    uint8_t      flash     = 0;    /* [bp-0x12] - a cheat's border flash */
+    uint8_t      escaped   = 0;    /* [bp-0x13] */
+    int16_t      idle      = 0;    /* si */
+    int16_t      leave     = owns; /* di */
+
+    colour_cycle = 6;
+    do {                                           /* 0x0c73f: drain the key */
+        input_poll(0x140, 0xc8);
+    } while (last_key);
+    typed_clear(typed);
+
+    current_menu = menu;                           /* 0x1900 */
+    sprite_set_load(1, 0x53, &menu_sprites, 0xff); /* the large font */
+
+    /* 0x0c785. Three banks out of the sprite set's own sixteen colours, because
+     * draw_banner's `colour` is a bank number shifted into the high nibble:
+     * entries 0-15 as loaded for the selected item, 16-31 at half brightness for
+     * an ordinary one, and 32-47 red only and a third brighter for a title. The
+     * red is the i % 3 test - component 0 of each entry survives and the other
+     * two are multiplied by zero.
+     *
+     * Genuine floating point in the original, through the 8087 emulator. */
+    for (i = 0; i < 0x30; i++) {
+        pal[i + 0x30] = (uint8_t) (pal[i] >> 1);
+        pal[i + 0x60] = (uint8_t) (int32_t)
+                        ((i % 3 == 0 ? 1 : 0) * (pal[i] * 1.3));
+    }
+    palette_set_black(0);                          /* 0x0c800 */
+    load_background(menu->background, 0xff);       /* 0x0c815 */
+
+    g_1781 = 1;  bg_scroll_y = 0;  g_1780 = 0;  bg_scroll_x = 0;
+    image_alloc(&backdrop, screen_width, screen_height);
+    image_clear(&backdrop, 0);
+    clear_vram();
+
+    /* 0x0c853. The block of items is centred, 24 rows each, and then shifted for
+     * whichever piece of furniture the screen has room for: the strip along the
+     * bottom, and the big logo at the top when the menu is short enough. */
+    menu_top = screen_height / 2 - menu->count * 0x18 / 2;
+    if (menu->count < 8 || video_mode)
+        resource_load_at(&backdrop, 0x4d, 0x2c, 0x70, screen_height - 15, 0xff);
+    else
+        menu_top += 8;
+    if (menu->count < video_mode * 2 + 5)
+        resource_load_at(&backdrop, 0x4d, 0, 0x80, 2, 0xff);
+    else
+        menu_top -= 0x21;
+
+    for (i = 0; i < menu->count; i++)              /* 0x0c8da */
+        draw_menu_item((uint8_t) i,
+                       (uint8_t) ((menu->item[i].action == 0) + 1), 8);
+
+    viewport_game.scroll_x = 0;                    /* 0x0c913 */
+    viewport_game.scroll_y = 0;
+    entity_set_type(&cursor_scene.entities[0], 0x14);   /* the mouse pointer */
+    cursor_to_centre(&backdrop);
+    mouse_y = drawn * 0x18 + menu_top + 0x23;
+    if (*menu->item[drawn].visible == 0)           /* a title cannot be chosen */
+        drawn = 0xff;
+
+    fade_direction = 1;                            /* 0x0c97c: fade in */
+    fade_level = 0;
+
+    do {
+        colour_cycle = (colour_cycle + 1) & 0xf;
+        input_poll(screen_width, screen_height);
+
+        if (flash && --flash == 0) {               /* 0x0c99f */
+            outp(0x3c8, 0);                        /* the cheat flash, off */
+            outp(0x3c9, 0);
+            outp(0x3c9, 0);
+            outp(0x3c9, 0);
+        }
+
+        /* 0x0c9c9. Once the fade out has started nothing is read any more: the
+         * frame below still runs, but every branch that could change the choice
+         * is skipped. */
+        if (fade_direction != -1) {
+
+            if (idle++ > 0x1f4 && !menu_idle_suppress) {
+                timed_out = 1;                     /* 0x0c9e2 */
+                fade_direction = -1;
+            }
+
+            switch (last_key) {
+            case 0x1b:                             /* ESC: the last item, which
+                                                    * is always the way out */
+                hover = (uint8_t) (menu->count - 1);
+                /* FALL THROUGH */
+            case 0x0d:                             /* ENTER */
+            case 0x20:                             /* SPACE */
+                g_18e5 = 1;                        /* stand in for a click */
+                idle = 0;
+                break;
+
+            case 0x148:                            /* up */
+                hover--;
+                if (hover >= menu->count)          /* wrapped past zero */
+                    hover = (uint8_t) (menu->count - 1);
+                mouse_y = hover * 0x18 + menu_top + 0x23;
+                idle = 0;
+                break;
+
+            case 0x150:                            /* down */
+                hover++;
+                if (hover >= menu->count)
+                    hover = 0;
+                mouse_y = hover * 0x18 + menu_top + 0x23;
+                idle = 0;
+                break;
+
+            default:
+                /* 0x0ca98. Which item the pointer is over: a 32-bit divide, and
+                 * the -1 is for the strip of screen above the first item. */
+                hover = (uint8_t) ((mouse_y - menu_top) / 0x18 - 1);
+
+                if (last_key > 0 && last_key < 0x100) {
+                    if (typed_push(typed, (uint8_t) last_key))
+                        flash = 5;
+                    /* 0x0cadf. Cheat 8 is the one that opens the demo picker,
+                     * and only from the main menu with no game in progress. */
+                    if (cheat_state[8]) {
+                        cheat_state[8] = 0;
+                        if (menu == &main_menu && !menu_idle_suppress) {
+                            timed_out = 1;
+                            fade_direction = -1;
+                            escaped = 1;
+                        }
+                    }
+                    idle = 0;
+                }
+                break;
+            }
+
+            sel = hover;                           /* 0x0cb11 */
+            if (sel < menu->count) {
+                if (*menu->item[sel].visible == 0) {
+                    sel = 0xff;                    /* a title: nothing to choose */
+                } else if (g_18e5) {               /* something was pressed */
+                    item_t far *it = &menu->item[sel];
+
+                    switch (it->action) {
+                    case 0x10:                     /* 0x0cb79: a toggle */
+                        settings[it->param] = !settings[it->param];
+                        item_label(it);
+                        sound_play_guarded(0xd, 1);
+                        idle = 0;
+                        break;
+
+                    case 0x13:                     /* 0x0cbd3: a cycle of three */
+                        button_map[it->param] =
+                            (button_map[it->param] + 1) % 3;
+                        item_label(it);
+                        sound_play_guarded(0xd, 1);
+                        idle = 0;
+                        break;
+
+                    case 0x11:                     /* 0x0cc34: a slider */
+                        slider_screen(it, menu_top + sel * 8 + sel * 16 + 0x18);
+                        cursor_to_centre(&backdrop);
+                        mouse_y = drawn * 0x18 + menu_top + 0x23;
+                        idle = 0;
+                        break;
+
+                    default:                       /* 0x0cc92: hand it back */
+                        if (it->action == 0xf)
+                            leave = 1;
+                        if (leave)
+                            fade_direction = -1;   /* fade, then return it */
+                        else
+                            running = 0;           /* return it now */
+                        sound_play_guarded(3, 1);
+                        break;
+                    }
+                }
+            }
+        }
+
+        /* 0x0ccc5. Only two items are ever redrawn: the one the cursor left, in
+         * the ordinary bank, and the one it is on, whose spacing walks the
+         * bounce table. With MENU BOUNCE off the spacing is pinned. */
+        if (sel != drawn) {
+            draw_menu_item(drawn, 1, 8);
+            colour_cycle = 8;
+            drawn = sel;
+            idle = 0;
+            if (sel < menu->count)
+                sound_play_guarded(0, 1);
+        } else if (settings[4]) {
+            draw_menu_item(sel, 0, colour_cycle);
+        } else {
+            draw_menu_item(sel, 0, 2);
+        }
+
+        cursor_scene.entities[0].x = mouse_x;      /* 0x0cd2f */
+        cursor_scene.entities[0].y = mouse_y;
+        animate_scene(&cursor_scene);
+
+        for (i = 0; i < 4; i++) {
+            set_plane((uint8_t) i);
+            compose_layer();                       /* tile, then the backdrop */
+            draw_entities(&cursor_scene, viewport_full, 0);
+        }
+        page_flip();
+        palette_fade_step(0);
+
+        if (leave)                                 /* 0x0cda5 */
+            running = (fade_level != 0);
+    } while (running);
+
+    if (leave) {                                   /* 0x0cdc3 */
+        resource_release(&background);
+        resource_release(&backdrop);
+        sprite_set_free(&menu_sprites);
+    }
+    set_buffer(default_buffer);
+
+    *(int16_t far *) chosen = sel;                 /* 0x0cdf3 */
+    if (timed_out)                                 /* 0x0cdfe */
+        return &menu_idle.item[escaped];
+    return &menu->item[sel];                       /* 0x0ce15 */
+}
+
 /* 0x0d757. The HUD's number drawer. Same digit layout as draw_number - glyph
  * 0x71 plus the digit, 12 pixels apart, least significant first, no leading-zero
  * suppression - but with the clip, sprite table and colour fixed, and glyph 0x70
@@ -1085,6 +1649,282 @@ void far draw_number2(int16_t value, int16_t digits, int16_t x, int16_t y)
         draw_sprite(&glyph, x + i * 12, y, sprite_table, &hud_clip, 0); /* over it */
         value /= 10;
     }
+}
+
+/* ==========================================================================
+ * Building the menus: 0x0e8ad to 0x0f55b.
+ *
+ * Fifteen descriptors, assembled once at startup out of the string tables and
+ * then only read. Nothing in the executable holds a menu: the words come from
+ * the eggs, the structure from build_menus below, and a submenu is a pointer to
+ * another descriptor rather than any kind of code.
+ * ========================================================================== */
+
+/* 0x0e8ad. Empties a menu. Background 3 is the default; the screens that want
+ * another one overwrite it after they have added their items. */
+void far menu_reset(menu_t far *m)
+{
+    m->count = 0;
+    m->background = 3;
+}
+
+/* 0x0e8c3. Replaces an item's text, freeing what was there. */
+void far menu_set_text(item_t far *it, const char far *text)
+{
+    free(it->text);
+    str_copy(text, &it->text);
+}
+
+/* 0x0e8ed. The one that adds an item; everything below is a forwarder that
+ * fixes some of these arguments.
+ *
+ * The interesting line is the last one. value_at is where item_label will write
+ * the item's value, and it is the length of the label less the length of the
+ * widest value the item could take - so the value ends flush with the end of
+ * the text, and "SOUNDS: O--" reserves exactly the room that "OFF" needs.
+ */
+void far menu_add(menu_t far *m, const char far *text, menu_t far *link,
+                  int16_t action, int16_t far *visible, uint8_t param)
+{
+    item_t far *it;
+    int16_t     n;
+
+    if (m->count >= 7)                             /* seven slots, no more */
+        return;
+
+    it = &m->item[m->count];
+    str_copy(text, &it->text);                     /* 0x04eed: its own copy */
+    it->link    = link;
+    it->action  = action;
+    it->visible = visible;
+    it->param   = param;
+
+    for (n = 0; text[n]; n++)
+        ;
+    it->value_at = (uint8_t) (n - (action == 0x10 ? on_off_width
+                                                  : cycle_width));
+    item_label(it);
+    m->count++;
+}
+
+/* 0x0e9e9 */
+void far menu_add_action(menu_t far *m, const char far *text, int16_t action,
+                         int16_t far *visible, uint8_t param)
+{
+    menu_add(m, text, 0, action, visible, param);
+}
+
+/* 0x0ea12. A heading: action 0, and menu_never for its flag, which is what
+ * makes run_screen refuse to select it. */
+void far menu_add_title(menu_t far *m, const char far *text)
+{
+    menu_add(m, text, 0, 0, &menu_never, 0);
+}
+
+/* 0x0ea36 */
+void far menu_add_toggle(menu_t far *m, const char far *text, uint8_t param,
+                         int16_t far *visible)
+{
+    menu_add(m, text, 0, 0x10, visible, param);
+}
+
+/* 0x0ea5e */
+void far menu_add_cycle(menu_t far *m, const char far *text, uint8_t param,
+                        int16_t far *visible)
+{
+    menu_add(m, text, 0, 0x13, visible, param);
+}
+
+/* 0x0ea86 */
+void far menu_add_entry(menu_t far *m, const char far *text, uint8_t param,
+                        int16_t far *visible)
+{
+    menu_add(m, text, 0, 0x11, visible, param);
+}
+
+/* 0x0eaae */
+void far menu_add_submenu(menu_t far *m, const char far *text,
+                          menu_t far *link, int16_t far *visible)
+{
+    menu_add(m, text, link, 0x12, visible, 0);
+}
+
+/* 0x0ead6. Frees every item's text. */
+void far menu_free(menu_t far *m)
+{
+    int16_t i;
+
+    for (i = 0; i < m->count; i++)
+        free(m->item[i].text);
+}
+
+/* 0x0eb04. A list too long for one screen, cut into pages.
+ *
+ * Each page is the title, up to three entries, a MORE_ that points at the next
+ * page, and a CANCEL that points back where the caller came from. The pages
+ * after the first are malloc'd, which is why the episode list, the readme
+ * sections and the demo picker are the only menus not in DGROUP.
+ *
+ * The loop runs one past the end: that last turn adds no entry and exists only
+ * to put CANCEL on the final page.
+ */
+void far menu_add_list(menu_t far *m, int16_t count, episode_t far *records,
+                       int16_t action, const char far *title, menu_t far *back)
+{
+    menu_t far *next = 0;
+    int16_t     i, open = 1, last;
+
+    for (i = 0; i <= count; i++) {
+        if (open) {                                /* start a page */
+            menu_reset(m);
+            menu_add_title(m, title);
+        }
+        open = 0;
+        last = (i == count);
+
+        /* 0x0eb4f. Four items on the page and more than one entry still to
+         * come: this page is full, so it gets both a MORE_ and a CANCEL. */
+        if (count - 2 > i && m->count == 4) {
+            last = 1;
+            open = 1;
+        }
+        if (i != count)
+            menu_add_action(m, records[i].name, action, &menu_always,
+                            (uint8_t) i);
+        if (open) {
+            next = malloc(sizeof *next);           /* 0x73 bytes */
+            if (!next)
+                fatal(out_of_memory, 0);
+            menu_add_submenu(m, menu_text[32], next, &menu_always);  /* MORE_ */
+        }
+        if (last)
+            menu_add_submenu(m, menu_text[33], back, &menu_always);  /* CANCEL */
+        if (open)
+            m = next;
+    }
+}
+
+/* ------------------------------------------------------ 0x0ec46: build_menus
+ *
+ * Called once, from init. The two widths at the top are what menu_add needs to
+ * right-align a value against the end of its label: the wider of "N" and "FF"
+ * for a toggle, and the widest of LEFT, RIGHT and MIDDLE for a cycle.
+ *
+ * Nine of the menus set a background of their own after their last item, as a
+ * plain byte store rather than through any of the calls above; the other six
+ * keep the 3 that menu_reset left.
+ */
+void far build_menus(void)
+{
+    on_off_width = (uint8_t) strlen(menu_text[81]);
+    if (on_off_width < strlen(menu_text[82]))
+        on_off_width = (uint8_t) strlen(menu_text[82]);
+
+    cycle_width = (uint8_t) strlen(extra_text[6]);
+    if (cycle_width < strlen(extra_text[7]))
+        cycle_width = (uint8_t) strlen(extra_text[7]);
+    if (cycle_width < strlen(extra_text[8]))
+        cycle_width = (uint8_t) strlen(extra_text[8]);
+
+    /* the three paged lists */
+    menu_add_list(&menu_episodes, episode_count, episode_index, 1,
+                  menu_text[31], &menu_play);         /* SELECT AN EPISODE: */
+    menu_add_list(&menu_readme, readme_count, readme_index, 7,
+                  menu_text[9], &main_menu);          /* READ ME! */
+    menu_add_list(&menu_demos, g_2038, demo_index, 0x15,
+                  extra_text[13], &main_menu);        /* PICK A DEMO */
+
+    /* 0x0edde. Never drawn. run_screen returns item 0 when it gives up waiting
+     * and item 1 when the demo-picker cheat is typed, so these two exist only to
+     * carry an action code back to game_main. Both labels are empty strings. */
+    menu_reset(&menu_idle);
+    menu_add_action(&menu_idle, "", 0x0a, &menu_always, 0);   /* d+0x24b8 */
+    menu_add_submenu(&menu_idle, "", &menu_demos, &menu_always);
+
+    menu_reset(&main_menu);
+    menu_add_submenu(&main_menu, menu_text[2],  &menu_play,    &menu_always);
+    menu_add_submenu(&main_menu, menu_text[8],  &menu_options, &menu_always);
+    menu_add_submenu(&main_menu, menu_text[9],  &menu_readme,  &menu_always);
+    menu_add_submenu(&main_menu, menu_text[10], &menu_quit,    &menu_always);
+    main_menu.background = 0;                      /* 0x0eeb6 - the brick wall */
+
+    menu_reset(&menu_play);
+    menu_add_submenu(&menu_play, menu_text[4],  &menu_episodes,  &menu_always);
+    menu_add_submenu(&menu_play, menu_text[11], &menu_load_save, &menu_always);
+    /* END CURRENT GAME is there only while a game is in progress, and that is
+     * the whole of what an item's flag pointer is for. */
+    menu_add_submenu(&menu_play, menu_text[17], &menu_end_game,
+                     &menu_idle_suppress);
+    menu_add_submenu(&menu_play, menu_text[12], &main_menu,      &menu_always);
+    menu_play.background = 12;
+
+    menu_reset(&menu_end_game);
+    menu_add_title(&menu_end_game, extra_text[10]);
+    menu_add_action(&menu_end_game, extra_text[11], 3, &menu_idle_suppress, 0);
+    menu_add_submenu(&menu_end_game, extra_text[12], &menu_play, &menu_always);
+    menu_end_game.background = 13;
+
+    menu_reset(&menu_load_save);
+    menu_add_title(&menu_load_save, menu_text[11]);
+    menu_add_action(&menu_load_save, menu_text[35], 5, &menu_idle_suppress, 0);
+    menu_add_action(&menu_load_save, menu_text[34], 6, &menu_always, 0);
+    menu_add_submenu(&menu_load_save, menu_text[33], &menu_play, &menu_always);
+    menu_load_save.background = 15;
+
+    menu_reset(&menu_options);
+    menu_add_title(&menu_options, menu_text[8]);
+    menu_add_submenu(&menu_options, menu_text[13], &menu_audio, &menu_always);
+    menu_add_submenu(&menu_options, menu_text[14], &menu_video, &menu_always);
+    menu_add_submenu(&menu_options, menu_text[15], &menu_mouse, &menu_always);
+    menu_add_entry(&menu_options, menu_text[23], 1, &menu_always);
+    menu_add_action(&menu_options, menu_text[56], 0x0e, &menu_always, 0);
+    menu_add_submenu(&menu_options, extra_text[1], &main_menu, &menu_always);
+
+    /* Both audio items are there only if detect_hardware found a card. */
+    menu_reset(&menu_audio);
+    menu_add_title(&menu_audio, menu_text[13]);
+    menu_add_toggle(&menu_audio, menu_text[18], 0, &sound_available);
+    menu_add_entry(&menu_audio, menu_text[19], 0, &sound_available);
+    menu_add_submenu(&menu_audio, extra_text[1], &menu_options, &menu_always);
+    menu_audio.background = 22;
+
+    menu_reset(&menu_video);
+    menu_add_title(&menu_video, menu_text[14]);
+    menu_add_submenu(&menu_video, menu_text[25], &menu_resolution, &menu_always);
+    menu_add_toggle(&menu_video, menu_text[20], 1, &menu_always);
+    menu_add_toggle(&menu_video, menu_text[22], 4, &menu_always);
+    menu_add_entry(&menu_video, extra_text[0], 2, &menu_always);
+    menu_add_submenu(&menu_video, extra_text[1], &menu_options, &menu_always);
+    menu_video.background = 22;
+
+    menu_reset(&menu_resolution);
+    menu_add_title(&menu_resolution, menu_text[25]);
+    menu_add_action(&menu_resolution, menu_text[26], 0x0c, &menu_always, 0);
+    menu_add_action(&menu_resolution, menu_text[27], 0x0d, &menu_always, 0);
+    menu_add_submenu(&menu_resolution, menu_text[33], &menu_video, &menu_always);
+    menu_resolution.background = 15;
+
+    menu_reset(&menu_mouse);
+    menu_add_title(&menu_mouse, menu_text[15]);
+    menu_add_toggle(&menu_mouse, menu_text[21], 3, &menu_always);
+    menu_add_submenu(&menu_mouse, extra_text[2], &menu_buttons, &menu_always);
+    menu_add_submenu(&menu_mouse, extra_text[1], &menu_options, &menu_always);
+    menu_mouse.background = 22;
+
+    /* 0x0f432. The three cycles are added out of order - USE TOOL first - and
+     * their params are 2, 0, 1, so each still owns the right button. */
+    menu_reset(&menu_buttons);
+    menu_add_title(&menu_buttons, extra_text[2]);
+    menu_add_cycle(&menu_buttons, extra_text[5], 2, &menu_always);
+    menu_add_cycle(&menu_buttons, extra_text[3], 0, &menu_always);
+    menu_add_cycle(&menu_buttons, extra_text[4], 1, &menu_always);
+    menu_add_action(&menu_buttons, extra_text[1], 0x14, &menu_always, 0);
+    menu_buttons.background = 10;
+
+    menu_reset(&menu_quit);
+    menu_add_title(&menu_quit, menu_text[28]);
+    menu_add_action(&menu_quit, menu_text[29], 4, &menu_always, 0);
+    menu_add_submenu(&menu_quit, menu_text[30], &main_menu, &menu_always);
 }
 
 /* ------------------------------------------- 0x0f825: cutscene_welcome_home
@@ -1214,9 +2054,9 @@ int16_t far episode_end_gate(int16_t level, int16_t egg)
  * the idle timeout, and a request to play a demo. Everything else it hands back
  * to game_main. The two branches below are the same code twice in the original.
  */
-record_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
+item_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
 {
-    record_t far *r;
+    item_t far   *r;
     int16_t       leave;                           /* di */
     int16_t       saved;                           /* si, across the demo call */
 
@@ -1273,7 +2113,7 @@ record_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
 void far game_main(menu_t far *menu)               /* main passes &main_menu */
 {
     char          buf[0x326];      /* sprintf's target, so char and not uint8_t */
-    record_t far *r;
+    item_t far   *r;
     int16_t       running = 1;                     /* si, set at 0x1367e */
     int16_t       i;
 
@@ -1282,18 +2122,18 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
 
         switch (r->action) {                       /* 0x1369e, table at 0x13a70 */
 
-        case 18:  menu = r->submenu;      break;   /* a submenu is data, not code */
+        case 18:  menu = r->link;         break;   /* a submenu is data, not code */
         case 4:   running = 0;            break;   /* QUIT */
         case 14:  register_screen();      break;   /* 0x13096 */
         case 7:   show_readme_section(r->param);   break;
-        case 5:   save_game_screen();  menu = &menu_1989;  break;   /* 0x13298 */
-        case 6:   load_game_screen();  menu = &menu_1989;  break;   /* 0x12951 */
+        case 5:   save_game_screen();  menu = &menu_play;  break;   /* 0x13298 */
+        case 6:   load_game_screen();  menu = &menu_play;  break;   /* 0x12951 */
         case 3:   high_score_screen();  f_0f55c();
                   menu = &main_menu;                       break;
 
         case 20:                                   /* 0x136fe: MOUSE BUTTONS */
-            if (button_map_a == button_map_b || button_map_a == button_map_c
-                || button_map_b == button_map_c) {
+            if (button_map[0] == button_map[1] || button_map[0] == button_map[2]
+                || button_map[1] == button_map[2]) {
                 /* the duplicate-assignment case; body not read */
             }
             break;
@@ -1303,12 +2143,12 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
             clear_vram();
             set_mode_x(r->action == 13);
             dac_set_black(0, 0);
-            menu = &menu_1c3b;
+            menu = &menu_video;
             break;
 
         case 1:                                    /* START: unpack the episode */
             g_1ffc = 0;  g_1ffa = 0;           /* 0x1377b */
-            menu = &menu_1989;
+            menu = &menu_play;
             i = r->param;                          /* the episode ordinal */
             level_attempted   = episode_index[i].first;
             episode_egg_index = episode_index[i].egg;
@@ -1430,8 +2270,12 @@ void far save_settings(void)
     fputs("!", fp);                                /* DGROUP+0x2806, a marker */
     putw(0, fp);
 
-    for (i = 0; i < 6; i++)  putw(settings[i], fp);        /* 0x04f4, six words */
-    for (i = 0; i < 3; i++)  putw((&button_map_a)[i], fp); /* 0x20e4, the mapping */
+    for (i = 0; i < 5; i++)  putw(settings[i], fp);        /* 0x04f4 */
+    putw(video_mode, fp);                                 /* 0x04fe - the sixth
+                                                           * of the six words the
+                                                           * original writes as
+                                                           * one run */
+    for (i = 0; i < 3; i++)  putw(button_map[i], fp); /* 0x20e4, the mapping */
     for (i = 0; i < 3; i++)  putw(((uint8_t *) &g_1fd3)[i], fp);
                                                    /* 0x1fd3, 0x1fd4, 0x1fd5:
                                                     * three bytes - the middle one
@@ -1467,6 +2311,12 @@ void far init(void)
                                                     * has any words to draw */
     load_string_tables();                          /* 0x094b7 - and the words
                                                     * themselves */
+    build_menus();                                 /* 0x14407 - and the menus,
+                                                    * which are made of them */
+    scene_alloc(&cursor_scene, 1);                 /* 0x14411 - the one entity
+                                                    * every menu draws: the
+                                                    * mouse pointer */
+    scene_add(&cursor_scene, 0, 0, 0x14, 5);       /* 0x14424 */
     /* the remaining banners */
 
     sound_available = detect_hardware();           /* 0x14974: the sound check,

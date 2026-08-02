@@ -62,21 +62,40 @@ typedef struct {
     sprite_t far *base;         /* +0x02 */
 } table_t;
 
-/* A menu descriptor: game_main's argument, and what action 18 swaps. run_screen
- * is what walks it and run_screen has not been read, so the contents are unknown.
- * Given a size only so the three descriptors can be defined; nothing indexes it
- * yet, and when run_screen is read this becomes the real layout. */
-typedef struct { uint8_t opaque[64]; } menu_t;
+/* A menu item, 0x10 bytes, and a menu is seven of them behind a count. Every
+ * screen in the game is this structure: the main menu, the submenus, the
+ * confirmations, the episode list, the demo picker.
+ *
+ * There is no separate "record" type. run_screen returns a pointer to the item
+ * the user chose, which is why game_main can switch on r->action and follow
+ * r->link without anything converting between the two.
+ */
+typedef struct menu_s menu_t;
 
-/* What run_screen returns. Offsets are the ones the code indexes; the record is
- * longer than this and the rest has not been read. */
 typedef struct {
-    uint8_t       pad0[4];
-    menu_t far   *submenu;      /* +4/+6: where action 18 points the menu */
-    int16_t       action;       /* +8:    the action code, 1..20 */
-    uint8_t       pad1;         /* +0xa */
-    uint8_t       param;        /* +0xb:  episode ordinal, readme section, demo */
-} record_t;
+    char far    *text;          /* +0x00 - str_copy's malloc'd copy, and what
+                                 *         item_label overwrites part of */
+    menu_t far  *link;          /* +0x04 - action 0x12's submenu */
+    int16_t      action;        /* +0x08 - the code game_main switches on */
+    uint8_t      value_at;      /* +0x0a - the column item_label writes the
+                                 *         ON/OFF or LEFT/RIGHT into: the
+                                 *         label's length less the widest
+                                 *         value, so the value is right-aligned
+                                 *         against the end of the text */
+    uint8_t      param;         /* +0x0b - episode ordinal, readme section,
+                                 *         demo, or which setting a toggle or a
+                                 *         cycle owns */
+    int16_t far *visible;       /* +0x0c - the item can be chosen only while
+                                 *         this is non-zero. A title's points at
+                                 *         menu_never, which is always 0 */
+} item_t;
+
+struct menu_s {
+    item_t   item[7];           /* +0x00 - menu_add refuses an eighth */
+    int16_t  count;             /* +0x70 */
+    uint8_t  background;        /* +0x72 - which 'B' resource tiles behind it */
+};                              /* 0x73 bytes; the fifteen of them are
+                                 * consecutive in DGROUP, 0x1916 to 0x1fd2 */
 
 /* Three per-button counters, copied about as a unit. */
 typedef struct {
@@ -95,13 +114,27 @@ typedef struct {
 
 /* An entity and the scene that holds them. Both layouts are from native.py's
  * reading; the fields nothing has needed yet are absent rather than guessed. */
+/* 0x29 bytes. x and y are 32-bit: run_screen assigns the mouse position to the
+ * cursor entity with two word stores each, and entity_set_type reaches past
+ * both of them for the frame counter and the type. */
 typedef struct {
-    int16_t x, y;
-    uint8_t type;
-} entity_t;
+    int32_t x, y;               /* +0x00, +0x04 */
+    uint8_t unread[0x0c];       /* +0x08 - never touched by anything read yet */
+    uint8_t f14, f15, f16;      /* +0x14 - scene_add zeroes all three */
+    int16_t param;              /* +0x17 - scene_add's last argument */
+    uint8_t unread2[6];         /* +0x19 */
+    int16_t frame;              /* +0x1f - animate_scene's step, zeroed when
+                                 *         the type changes */
+    int16_t f21, f23;           /* +0x21 */
+    int16_t type;               /* +0x25 - a word, not a byte */
+    int16_t f27;                /* +0x27 */
+} entity_t;                     /* 0x29 */
 
 typedef struct {
-    int16_t     count;          /* +2 */
+    int16_t       capacity;     /* +0 - how many scene_alloc made room for */
+    int16_t       count;        /* +2 */
+    int16_t       flag;         /* +4 - scene_alloc sets it to 0xff */
+    int16_t       unread6;      /* +6 */
     entity_t far *entities;     /* +8 */
 } scene_t;
 
@@ -236,9 +269,73 @@ int16_t far resource_load_full(desc_t far *desc, int16_t allocate,
                                int16_t bias_zero, int16_t row, int16_t opaque,
                                int16_t egg, int16_t arg1a);
 int16_t far episode_end_gate(int16_t level, int16_t egg);
+item_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b);
+
+/* ------------------------------------------------------------- the menus
+ *
+ * Fifteen descriptors in DGROUP, built once by build_menus and then only read.
+ * The names are ours; the addresses are what identifies them.
+ */
+extern menu_t main_menu;        /* 0x1916 */
+extern menu_t menu_play;        /* 0x1989 - PLAY DUCKS */
+extern menu_t menu_options;     /* 0x19fc */
+extern menu_t menu_quit;        /* 0x1a6f - QUIT? REALLY? */
+extern menu_t menu_resolution;  /* 0x1ae2 */
+extern menu_t menu_episodes;    /* 0x1b55 - the paged episode list */
+extern menu_t menu_audio;       /* 0x1bc8 */
+extern menu_t menu_video;       /* 0x1c3b */
+extern menu_t menu_mouse;       /* 0x1cae */
+extern menu_t menu_load_save;   /* 0x1d21 */
+extern menu_t menu_idle;        /* 0x1d94 - never drawn; run_screen returns one
+                                 * of its two items when it gives up waiting */
+extern menu_t menu_readme;      /* 0x1e07 - the paged section list */
+extern menu_t menu_buttons;     /* 0x1e7a - MOUSE BUTTONS */
+extern menu_t menu_end_game;    /* 0x1eed - REALLY END THE GAME? */
+extern menu_t menu_demos;       /* 0x1f60 - the paged demo list */
+
+extern int16_t menu_always;     /* 0x217f - 1; what most items point at */
+extern int16_t menu_never;      /* 0x2181 - 0; what a title points at */
+extern int16_t cheat_flag;      /* 0x0515 - set when a cheat word is typed */
+extern desc_t  backdrop;        /* 0x16f5 - the screen the items are drawn into */
+extern desc_t  background;      /* 0x170b - the tile compose_layer repeats */
+
+void far menu_reset(menu_t far *m);
+void far menu_set_text(item_t far *it, const char far *text);
+void far menu_add(menu_t far *m, const char far *text, menu_t far *link,
+                  int16_t action, int16_t far *visible, uint8_t param);
+void far menu_add_action(menu_t far *m, const char far *text, int16_t action,
+                         int16_t far *visible, uint8_t param);
+void far menu_add_title(menu_t far *m, const char far *text);
+void far menu_add_toggle(menu_t far *m, const char far *text, uint8_t param,
+                         int16_t far *visible);
+void far menu_add_cycle(menu_t far *m, const char far *text, uint8_t param,
+                        int16_t far *visible);
+void far menu_add_entry(menu_t far *m, const char far *text, uint8_t param,
+                        int16_t far *visible);
+void far menu_add_submenu(menu_t far *m, const char far *text,
+                          menu_t far *link, int16_t far *visible);
+void far menu_free(menu_t far *m);
+void far menu_add_list(menu_t far *m, int16_t count, episode_t far *records,
+                       int16_t action, const char far *title, menu_t far *back);
+void far build_menus(void);
+
+void far item_label(item_t far *it);
+void far draw_menu_item(uint8_t index, uint8_t style, int16_t bounce);
+void far cursor_to_centre(desc_t far *desc);
+void far typed_clear(char far *buf);
+int16_t far typed_push(char far *buf, uint8_t ch);
+void far slider_screen(item_t far *it, int16_t y);
+void far image_clear(desc_t far *desc, uint8_t value);
+void far load_background(uint8_t index, int16_t egg);
 void far resource_load_at(desc_t far *desc, uint8_t type, uint8_t index,
                           int16_t pal_at, int16_t row, int16_t egg);
-record_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b);
+void far entity_set_type(entity_t far *e, int16_t type);
+void far animate_scene(scene_t far *scene);
+void far scene_alloc(scene_t far *s, int16_t capacity);
+int16_t far scene_add(scene_t far *s, int16_t x, int16_t y, int16_t type,
+                      int16_t param);
+extern scene_t cursor_scene;
+void far build_washed_ramp(void);
 
 /* the port I/O the original used; a port supplies its own or drops them */
 void outp(uint16_t port, uint8_t v);
@@ -249,7 +346,7 @@ int putw(int w, FILE *f);   /* Borland's; one word out */
 
 /* stubs.c, until each is read out - see that file for what they are */
 int16_t far in_game_frame(int16_t arg);
-record_t far *far run_screen(menu_t far *menu, void far *a, int16_t b);
+item_t far *far run_screen(menu_t far *menu, void far *a, int16_t b);
 int16_t far egg_find_block(uint8_t type, uint8_t index, int16_t arg);
 int16_t far egg_read_word(void far *s);
 uint8_t far egg_read_byte(void far *s);
