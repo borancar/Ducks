@@ -2573,6 +2573,140 @@ void far build_episode_index(void)
     }
 }
 
+/* --------------------------------------------- 0x11efb: show_readme_section
+ *
+ * The readme viewer: one page of an 'H' block on the same blueprint background
+ * the version page uses, with the section's name in the top left, "Page n of m"
+ * in the top right, and what the keys do along the bottom.
+ *
+ *   n   which record of the readme index - game_main passes the item's param
+ *
+ * A section's pages are numbered by where they sit in the egg, not by position
+ * in a list: DUCKS OVERVIEW is pages 1 to 3, THE OBJECTS is 11 to 19, and there
+ * is nothing at 4 to 10. So "next page" is first + 1, and the ends of the range
+ * are what the arrows are tested against.
+ *
+ * Two loops. The outer one is a page: load the blueprint, draw everything into
+ * it, run the inner one, free it. The inner one is a frame, and it reads no
+ * input at all while a fade is running.
+ */
+void far show_readme_section(uint8_t n)
+{
+    char     line[0x100];                          /* [bp-0x420] */
+    desc_t   page;                                 /* [bp-0x320] */
+    uint8_t  buffer[768];                          /* [bp-0x30a] */
+    int16_t  at = readme_index[n].first;           /* si - the page number */
+    int16_t  running = 1;                          /* [bp-2] */
+    int16_t  has_next, has_prev;                   /* [bp-4], [bp-6] */
+    int16_t  x, plane, alive;                      /* [bp-8], [bp-0xa], di */
+
+    clear_vram();
+    set_buffer(buffer);
+    fade_level = 0;
+    fade_direction = 1;                            /* only the first page fades */
+
+    do {
+        if (!resource_load(&page, 0x4d, 7, 0, 1, 0xff, 1))
+            break;                                 /* 0x11f55 - and the original
+                                                    * spins here rather than
+                                                    * leaving, since running is
+                                                    * still set */
+        alive = 1;
+        has_next = (readme_index[n].last  != at);
+        has_prev = (readme_index[n].first != at);
+
+        text_colour[0] = 1;
+        load_text_page(&page, 0x48, (uint8_t) at, 0, 0x10e,
+                       (int16_t) readme_index[n].egg);
+
+        sprintf(line, "Page %i of %i",             /* d+0x266e */
+                at - readme_index[n].first + 1,
+                readme_index[n].last - readme_index[n].first + 1);
+
+        text_colour[0] = 3;
+        draw_string(&page, readme_index[n].name, 5, 3);
+        draw_string(&page, line, 0x13b - text_width(line), 3);
+
+        /* The three key hints, each replaced by an empty string when that key
+         * would do nothing here. */
+        sprintf(line, "%s%s%s",                    /* d+0x267c */
+                has_prev ? menu_text[71] : "",     /* "UP: Last Page" */
+                menu_text[72],                     /* "ESC: Done" */
+                has_next ? menu_text[73] : "");    /* "DOWN: Next Page" */
+        x = 0xa0 - text_width(line) / 2;
+        text_colour[0] = 5;
+        draw_string(&page, line, x, 0xbb);
+
+        do {
+            if (fade_direction == 0) {             /* 0x12107 - no input mid-fade */
+                input_poll(0x140, 0xc8);
+
+                /* A mouse button, or SPACE, means the obvious thing: turn the
+                 * page if there is one, and otherwise leave. */
+                if (g_18e5 || last_key == 0x20)
+                    last_key = has_next ? 0x151 : 0x1b;
+
+                switch (last_key) {
+                case 0x2b: case 0x3d:              /* '+' and '=' */
+                case 0x14d:                        /* right */
+                case 0x150:                        /* down */
+                case 0x151:                        /* page down */
+                    if (has_next) {
+                        at++;
+                        alive = 0;
+                        sound_play_guarded(3, 1);
+                    } else {
+                        sound_play_guarded(0x17, 1);   /* the refusal */
+                    }
+                    break;
+
+                case 0x2d:                         /* '-' */
+                case 0x148:                        /* up */
+                case 0x149:                        /* page up */
+                case 0x14b:                        /* left */
+                    if (has_prev) {
+                        at--;
+                        alive = 0;
+                        sound_play_guarded(3, 1);
+                    } else {
+                        sound_play_guarded(0x17, 1);
+                    }
+                    break;
+
+                case 0x1b:                         /* ESC */
+                    fade_direction = -1;
+                    running = 0;
+                    sound_play_guarded(5, 1);
+                    break;
+
+                case 0:                            /* nothing pressed */
+                    break;
+
+                default:
+                    sound_play_guarded(0x17, 1);
+                    break;
+                }
+            }
+
+            for (plane = 0; plane < 4; plane++) {
+                set_plane((uint8_t) plane);
+                blit_rows(&page, viewport_screen, 0);
+            }
+            page_flip();
+            palette_fade_step(0);
+
+            if (fade_level == 0)                   /* 0x1222d - the fade out has
+                                                    * finished, so let go */
+                alive = 0;
+        } while (alive);
+
+        resource_release(&page);
+    } while (running);
+
+    set_buffer(default_buffer);
+    input_poll(0x140, 0xc8);
+}
+
 /* ------------------------------------------------- 0x13fea: scan_save_slots
  *
  * Takes nothing, returns nothing; its only output is one global. The names are
@@ -2705,7 +2839,8 @@ void far main(void)
 
     /* The intro: two screen players, interleaved with sounds. Screen (1) draws
      * nothing - the 320x24 source is allocated but empty, checked in the planes. */
-    show_splash(g_28ff, 100);               /* 0x14520 - (1) blank */
+    // NOT NEEDED
+    //show_splash(g_28ff, 100);               /* 0x14520 - (1) blank */
     egg_load_pass_0x48();                    /* 0x14527 - and it draws the version
                                               * and credits page, which waits for
                                               * a key */

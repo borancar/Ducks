@@ -47,7 +47,6 @@ void far cutscene_night_monster(void)     { }
 
 /* ------------------------------------------------------------ the screens */
 
-void far show_readme_section(uint8_t n)   { (void) n; }
 void far save_game_screen(void)           { }
 void far load_game_screen(void)           { }
 void far register_screen(void)            { }
