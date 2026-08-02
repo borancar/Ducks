@@ -92,7 +92,7 @@ they identify it:
 
 ## What has moved, and how it was checked
 
-**2026-08-02, the same day.** Thirteen of the ninety-one are Python natives in
+**2026-08-02, the same day.** Seventeen of the ninety-one are Python natives in
 `native.py` now, taken innermost first: `scene_keep_positions`,
 `scroll_axis_toward`, `scroll_axis_snap`, `scroll_follow`, `entity_set_type`,
 `scene_swap_pair`, `egg_block_end`, `rle_reset`, `set_buffer`,
