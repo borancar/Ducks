@@ -120,7 +120,10 @@ typedef struct {
 typedef struct {
     int32_t x, y;               /* +0x00, +0x04 */
     uint8_t unread[0x0c];       /* +0x08 - never touched by anything read yet */
-    uint8_t f14, f15, f16;      /* +0x14 - scene_add zeroes all three */
+    int8_t  f14;                /* +0x14 - which way the entity faces: every
+                                 *         read of it is a byte load and a cbw,
+                                 *         and draw_entities tests it for < 0 */
+    uint8_t f15, f16;           /* +0x15 - scene_add zeroes these with it */
     int16_t param;              /* +0x17 - scene_add's last argument */
     uint8_t unread2[6];         /* +0x19 */
     int16_t frame;              /* +0x1f - animate_scene's step, zeroed when
