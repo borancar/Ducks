@@ -368,7 +368,7 @@ VARIABLES = {
                                         # test it. --no-demo works by setting it,
                                         # which also disables the PLAYBACKTIME
                                         # cheat, since that is guarded on it too
-    0x1798: "level_running",            # level loops while this is set
+    0x1798: "level_running",            # run_level loops while this is set
     0x178C: "tool_scene",               # the two-entity scene the tool cursor is
     0x201A: "level_clock",              # frames since the level started; both
                                         # event tables compare against it
