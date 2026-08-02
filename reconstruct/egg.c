@@ -133,8 +133,16 @@ int16_t far egg_read_word(void far *s)
 char far *far egg_read_string(void far *s)
 {
     int16_t  len = egg_read_word(s);
-    char far *buf = malloc((size_t) len + 1);
+    char far *buf;
     int16_t  i;
+
+    /* A stream that has ended gives 0xff twice, which is -1 as a word, and the
+     * original then mallocs nothing and writes the terminator one byte in front
+     * of it. That is a heap corruption whether it faults or not, and glibc says
+     * so; a length that cannot be right is no string at all. */
+    if (len < 0)
+        len = 0;
+    buf = malloc((size_t) len + 1);
 
     if (!buf)
         fatal("No room for string", NULL);       /* ds:0x2269 */
