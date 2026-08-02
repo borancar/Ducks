@@ -2408,15 +2408,30 @@ void far load_animations(void)
  * ======================================================================== */
 
 /* 0x11547. The separator between the startup screen's sections: a newline, then
- * eighty dashes in grey. */
+ * eighty dashes in grey.
+ *
+ * There is no newline after the dashes in the original, and there does not need
+ * to be: eighty of them fill a DOS console row exactly, so the wrap is the line
+ * break. docs/notes/accepting-is-not-answering.md is that assumption failing -
+ * when the cursor was left in the wrong column the rules "started mid-line and
+ * ran over the messages". A terminal that is not eighty columns wide has no such
+ * wrap, so the newline below stands in for it.
+ *
+ * The two printers are not the same one. 0:0x3b4d is printf and goes to the
+ * stream - "Using file %s - %i slices" comes out of it, and that is the one line
+ * a run's captured stdout holds. 0:0x2012 is cprintf, which writes straight into
+ * 0xb8000, which is why none of the rest of the startup screen appears there.
+ */
 void far console_rule(void)
 {
     int16_t i;
 
-    fputs("\n", stdout);                           /* d+0x2555, 0:0x3b4d */
+    printf("\n");                                  /* d+0x2555, 0:0x3b4d */
     set_text_colour(7);
     for (i = 0; i < 0x50; i++)
         printf("-");                               /* d+0x2557, 0:0x2012 */
+    printf("\n");                                  /* not in the original: see
+                                                    * above, it is the wrap */
 }
 
 /* 0x1157a. Reads records out of the open information block until the running
@@ -2473,9 +2488,9 @@ void far build_episode_index(void)
     episode_count = 0;
     console_rule();
     set_text_colour(15);
-    printf("Building episode index...");           /* d+0x25b1 */
+    printf("Building episode index...");           /* d+0x25b1, cprintf */
     console_rule();
-    fputs("\n", stdout);
+    printf("\n");                                  /* d+0x25cb, printf */
 
     /* Pass one: the header of each egg's information block - version, shareware
      * limit, how many episodes and how many readme sections. */
