@@ -101,7 +101,9 @@ FUNCTIONS = {
     0x0876A: "build_washed_ramp",       # native. v*0.75+64 into [0x0dad]
     0x0537D: "egg_block_end",           # native
     0x0580B: "rle_reset",                # native
+    0x05F15: "scroll_axis_snap",         # native
     0x05F7F: "scroll_axis_toward",      # native
+    0x0A3A7: "scene_swap_pair",          # native
     0x0600D: "scroll_follow",            # native
     0x0B0C5: "palette_apply_gamma",      # native
     0x0D55D: "tool_list_has",            # native

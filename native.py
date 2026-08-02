@@ -4773,6 +4773,59 @@ def native_build_washed_ramp(m, args):
     return None
 
 
+def native_scroll_axis_snap(m, args):
+    """0x05f15: put one axis of the scroll where it belongs, now.
+
+        scroll_axis_snap(long focus, long extent, long far *pos, int16_t span)
+
+    scroll_axis_toward without the easing: *pos = clamp(focus - extent/2, 0,
+    span), and no mask, because there is nothing to converge to. in_game_frame
+    calls it twice immediately after cursor_to_centre, which is how a level
+    starts with the view already around the cursor rather than sliding to it.
+
+    The halving is a 32-bit arithmetic shift of the caller's whole long
+    (sar/rcr), not of a word, so a negative extent rounds toward minus infinity.
+
+    The result is written to *pos before the clamps and again after, which
+    changes nothing but is why the guest touches it twice.
+    """
+    focus, extent, off, seg, span = struct.unpack(
+        "<iiHHh", m.uc.mem_read(args, 14))
+    v = _sign32(focus - (extent >> 1))
+    if span < v:
+        v = span
+    if v < 0:
+        v = 0
+    m.uc.mem_write(seg * 16 + off, struct.pack("<i", v))
+    return None
+
+
+def native_scene_swap_pair(m, args):
+    """0x0a3a7: swap two entity types throughout the third scene.
+
+    Types 0x2c and 0x2d become each other, over the scene at d+0x0d7b - count at
+    d+0x0d7d, entities at d+0x0d83 - and nothing else is touched. The swap goes
+    through entity_set_type, so an entity that changes has its frame reset, and
+    since the two types always differ every one of them does.
+
+    The address is built as a 16-bit offset added to the array's own, so a scene
+    large enough to cross the segment wraps rather than running on. Reproduced,
+    not corrected.
+    """
+    d = m.dgroup_base
+    off, seg = struct.unpack("<HH", m.uc.mem_read(d + 0x0D83, 4))
+    n = struct.unpack("<h", m.uc.mem_read(d + 0x0D7D, 2))[0]
+
+    for i in range(n):
+        e = seg * 16 + ((off + i * 0x29) & 0xFFFF)
+        t = struct.unpack("<h", m.uc.mem_read(e + 0x25, 2))[0]
+        if t not in (0x2C, 0x2D):
+            continue
+        m.uc.mem_write(e + 0x25, struct.pack("<h", 0x2D if t == 0x2C else 0x2C))
+        m.uc.mem_write(e + 0x1F, b"\x00\x00")
+    return None
+
+
 def native_tool_events(m, args):
     """0x0d4c2: the level's scheduled tool changes. Takes no arguments.
 
@@ -4817,6 +4870,15 @@ def _watch_dgroup(m, args):
 def _watch(off, n):
     """The commonest case: a fixed run of DGROUP, the same every call."""
     return lambda m, args: [(m.dgroup_base + off, n)]
+
+
+def _watch_swap_scene(m, args):
+    """The third scene's entity array. Clamped to the segment, since the guest's
+    own indexing wraps there."""
+    d = m.dgroup_base
+    off, seg = struct.unpack("<HH", m.uc.mem_read(d + 0x0D83, 4))
+    n = struct.unpack("<h", m.uc.mem_read(d + 0x0D7D, 2))[0]
+    return [(seg * 16, min(0x10000, max(0, n) * 0x29 + (off & 0xFFFF)))]
 
 
 def _watch_image_rows(m, args):
@@ -4874,6 +4936,8 @@ VERIFY_REGIONS = {
     "palette_apply_gamma": _watch(0x10E1, 0x300),
     "build_washed_ramp": _watch(0x0DAD, 0x30),
     "image_clear": _watch_image_rows,
+    "scroll_axis_snap": _watch_scroll_pos,
+    "scene_swap_pair": _watch_swap_scene,
     "entity_set_type": _watch_entity,
 }
 
@@ -4915,6 +4979,8 @@ NATIVE_TABLE = [
     (0x06D52, "text_width", native_text_width, "far"),
     (0x06A49, "image_clear", native_image_clear, "far"),
     (0x0876A, "build_washed_ramp", native_build_washed_ramp, "far"),
+    (0x05F15, "scroll_axis_snap", native_scroll_axis_snap, "far"),
+    (0x0A3A7, "scene_swap_pair", native_scene_swap_pair, "far"),
 ]
 
 # Written but not enabled: 0x0d4c2 is called once as a level starts, and every

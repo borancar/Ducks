@@ -281,7 +281,34 @@ def case_build_washed_ramp(m, rng):
     return 0x0876A, b"", [(d + 0x0DAD, 0x30)], "build_washed_ramp"
 
 
+def case_scroll_axis_snap(m, rng):
+    p = SCRATCH_SEG * 16
+    m.uc.mem_write(p, struct.pack("<i", rng.randrange(-4096, 4096)))
+    frame = struct.pack("<iiHHh",
+                        rng.randrange(-5000, 5000),
+                        rng.randrange(-800, 800),
+                        0, SCRATCH_SEG,
+                        rng.randrange(-32, 4096))
+    return 0x05F15, frame, [(p, 4)], "scroll_axis_snap"
+
+
+def case_scene_swap_pair(m, rng):
+    """Entities carrying a mix of the two types and of ones that must not move."""
+    d = m.dgroup_base
+    n = rng.randrange(0, 12)
+    blob = bytearray(rng.randbytes(max(1, n) * 0x29))
+    for i in range(n):
+        t = rng.choice([0x2C, 0x2D, 0x2C, 0x2D, rng.randrange(0, 0x60)])
+        blob[i * 0x29 + 0x25:i * 0x29 + 0x27] = struct.pack("<h", t)
+    m.uc.mem_write(SCRATCH_SEG * 16, bytes(blob))
+    m.uc.mem_write(d + 0x0D83, struct.pack("<HH", 0, SCRATCH_SEG))
+    m.uc.mem_write(d + 0x0D7D, struct.pack("<h", n))
+    return (0x0A3A7, b"", [(SCRATCH_SEG * 16, max(1, n) * 0x29)],
+            "scene_swap_pair")
+
+
 CASES = [case_scroll, case_scroll_axis, case_entity_set_type,
+         case_scroll_axis_snap, case_scene_swap_pair,
          case_tool_list_has, case_tool_list_any_flagged, case_text_width,
          case_image_clear, case_build_washed_ramp,
          case_egg_block_end, case_rle_reset, case_set_buffer,
