@@ -98,6 +98,10 @@ FUNCTIONS = {
     0x06D84: "draw_string",             # (desc, str, x, y): glyph_to_image
                                         # per character, advancing by its return
     0x0876A: "build_washed_ramp",       # v*0.75+64 into [0x0dad]
+    0x0979F: "scene_keep_positions",    # native. Copies each entity's
+                                        # position to +0x0c/+0x10, so what is
+                                        # there is where it was when the frame
+                                        # began
     0x0AB09: "particles",               # native
     0x0ABA5: "draw_entities",           # native
     0x0B10B: "palette_fade_step",       # the fade state machine

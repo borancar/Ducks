@@ -1822,39 +1822,41 @@ class Native(VgaDos):
         restore, then let the original body run. A one-shot hook on the return
         address diffs the two once the real code is done.
 
-        DGROUP goes too, but only for the natives in VERIFY_DGROUP. Every native
-        this started with wrote pixels and nothing else, so the planes were
-        enough; a gameplay routine writes tables and no pixels at all, and
-        comparing only the planes would call it a match however wrong it was -
-        including a native that did nothing.
+        Memory goes too, for the natives in VERIFY_REGIONS, which say what to
+        watch given their own arguments. Every native this started with wrote
+        pixels and nothing else, so the planes were enough; a gameplay routine
+        writes tables and no pixels at all, and comparing only the planes would
+        call it a match however wrong it was - including a native that did
+        nothing.
 
-        It is opt-in rather than always because the shims that stand in for an
-        interrupt do not take the same path through the runtime as the interrupt
-        did, and leave different scratch behind: switching it on for everything
-        made bios_video, isatty and dos_setblock report mismatches of a handful
-        of bytes each, none of them anything either side got wrong.
-
-        What is still not compared either way: anything written outside DGROUP
-        and the planes - the far heap most of all. A native that only rearranges
-        a malloc'd block is not checked by this.
+        Declared per native rather than blanket, for two reasons. The shims that
+        stand in for an interrupt do not take the interrupt's path through the
+        runtime and leave different scratch behind, so watching DGROUP for
+        everything made bios_video, isatty and dos_setblock report a handful of
+        bytes each that neither side got wrong. And what has to be watched is
+        often not DGROUP at all: a scene's entities are farmalloc'd, so a routine
+        that walks them writes nowhere near it. Comparing all 2 MB a call would
+        cover both and cost half a gigabyte a second at this call rate.
         """
-        deep = name in VERIFY_DGROUP
         ss, sp = self._reg(UC_X86_REG_SS), self._reg(UC_X86_REG_SP)
         ret_ip = struct.unpack("<H", uc.mem_read(ss * 16 + sp, 2))[0]
         ret_cs = struct.unpack("<H", uc.mem_read(ss * 16 + sp + 2, 2))[0] \
             if kind == "far" else self._reg(UC_X86_REG_CS)
         args_at = ss * 16 + sp + (4 if kind == "far" else 2)
 
+        regions = VERIFY_REGIONS.get(name)
+        watch = regions(self, args_at) if regions else []
+
         before = [bytes(p) for p in self.planes]
-        dg_before = bytes(uc.mem_read(self.dgroup_base, 0x10000)) if deep else None
+        mem_before = [bytes(uc.mem_read(a, n)) for a, n in watch]
         try:
             outcome = handler(self, args_at)
         except Exception as e:
             print(f"  [verify] {name}: native raised {e!r}")
             for i, p in enumerate(before):
                 self.planes[i][:] = p
-            if deep:
-                uc.mem_write(self.dgroup_base, dg_before)
+            for (a, _), b in zip(watch, mem_before):
+                uc.mem_write(a, b)
             return
         if outcome is DECLINE:
             # A declining native is not predicting anything, so there is nothing
@@ -1865,16 +1867,15 @@ class Native(VgaDos):
             self.verify_declined += 1
             for i, p in enumerate(before):
                 self.planes[i][:] = p
-            if deep:
-                uc.mem_write(self.dgroup_base, dg_before)
+            for (a, _), b in zip(watch, mem_before):
+                uc.mem_write(a, b)
             return
         predicted = [bytes(p) for p in self.planes]
-        dg_predicted = bytes(uc.mem_read(self.dgroup_base, 0x10000)) if deep \
-            else None
+        mem_predicted = [bytes(uc.mem_read(a, n)) for a, n in watch]
         for i, p in enumerate(before):
             self.planes[i][:] = p           # undo; the original will redo it
-        if deep:
-            uc.mem_write(self.dgroup_base, dg_before)
+        for (a, _), b in zip(watch, mem_before):
+            uc.mem_write(a, b)
 
         ret_lin = ret_cs * 16 + ret_ip
         state = {"h": None}
@@ -1892,14 +1893,15 @@ class Native(VgaDos):
                         diffs += 1
                         if first is None:
                             first = (f"plane{pi}", j, a[j], b[j])
-            dg_after = bytes(uc.mem_read(self.dgroup_base, 0x10000)) if deep \
-                else None
-            if deep and dg_predicted != dg_after:
-                for j in range(0x10000):
-                    if dg_predicted[j] != dg_after[j]:
+            for (a, n), want in zip(watch, mem_predicted):
+                got = bytes(uc.mem_read(a, n))
+                if want == got:
+                    continue
+                for j in range(n):
+                    if want[j] != got[j]:
                         diffs += 1
                         if first is None:
-                            first = ("d", j, dg_predicted[j], dg_after[j])
+                            first = ("%#07x" % a, j, want[j], got[j])
             self.verify_calls += 1
             if diffs:
                 self.verify_bad += 1
@@ -4392,6 +4394,29 @@ def native_xms_get_entry(m, args):
     return None
 
 
+def native_scene_keep_positions(m, args):
+    """0x0979f: remember where every entity in a scene was.
+
+    Each record keeps its position twice - the live one at +0x00/+0x04 and a copy
+    at +0x0c/+0x10 - and this makes the copy. in_game_frame calls it on five of
+    the six scenes before anything moves, so what is at +0x0c is where the entity
+    was when the frame began.
+
+    Both are 32-bit and copied as such.
+    """
+    off, seg = struct.unpack("<HH", m.uc.mem_read(args, 4))
+    s = seg * 16 + off
+    count = struct.unpack("<h", m.uc.mem_read(s + 2, 2))[0]
+    eoff, eseg = struct.unpack("<HH", m.uc.mem_read(s + 8, 4))
+    base = eseg * 16 + eoff
+
+    for i in range(count):
+        e = base + i * 0x29
+        m.uc.mem_write(e + 0x0C, bytes(m.uc.mem_read(e + 0x00, 4)))
+        m.uc.mem_write(e + 0x10, bytes(m.uc.mem_read(e + 0x04, 4)))
+    return None
+
+
 def native_tool_events(m, args):
     """0x0d4c2: the level's scheduled tool changes. Takes no arguments.
 
@@ -4420,10 +4445,25 @@ def native_tool_events(m, args):
     return None
 
 
-# Natives whose verification also diffs DGROUP - see _verify_native. A drawing
-# routine is fully described by the pixels it leaves; a routine that writes
-# tables and no pixels is not described by them at all.
-VERIFY_DGROUP = {"tool_events"}
+def _watch_dgroup(m, args):
+    return [(m.dgroup_base, 0x10000)]
+
+
+def _watch_scene_entities(m, args):
+    """The scene's entity array, wherever farmalloc put it."""
+    off, seg = struct.unpack("<HH", m.uc.mem_read(args, 4))
+    s = seg * 16 + off
+    n = struct.unpack("<h", m.uc.mem_read(s + 2, 2))[0]
+    eoff, eseg = struct.unpack("<HH", m.uc.mem_read(s + 8, 4))
+    return [(eseg * 16 + eoff, max(0, n) * 0x29)]
+
+
+# What each native's verification watches besides the planes, given its own
+# arguments - see _verify_native.
+VERIFY_REGIONS = {
+    "tool_events": _watch_dgroup,
+    "scene_keep_positions": _watch_scene_entities,
+}
 
 NATIVE_TABLE = [
     (0x05D3A, "compose_layer", native_compose_layer, "far"),
@@ -4440,6 +4480,7 @@ NATIVE_TABLE = [
     (0x065F1, "outline_sprite", native_outline_sprite, "far"),
     (0x0AB09, "particles", native_particles, "far"),
     (0x157C1, "sound_gather", native_sound_gather, "far"),
+    (0x0979F, "scene_keep_positions", native_scene_keep_positions, "far"),
 ]
 
 # Written but not enabled: 0x0d4c2 is called once as a level starts, and every
