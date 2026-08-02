@@ -94,16 +94,18 @@ FUNCTIONS = {
     0x06AA4: "font_load",               # reads block 'F', mallocs each glyph
     0x06C29: "glyph_to_screen",         # (ch, x, y) through the plot pointer
     0x06CB6: "glyph_to_image",          # (desc, ch, x, y) into a row table
-    0x06D52: "text_width",              # sums width-1 over a string, from 1
+    0x06D52: "text_width",              # native. Sums width-1 over a string,
+                                        # from 1
     0x06D84: "draw_string",             # (desc, str, x, y): glyph_to_image
                                         # per character, advancing by its return
-    0x0876A: "build_washed_ramp",       # v*0.75+64 into [0x0dad]
+    0x0876A: "build_washed_ramp",       # native. v*0.75+64 into [0x0dad]
     0x0537D: "egg_block_end",           # native
     0x0580B: "rle_reset",                # native
     0x05F7F: "scroll_axis_toward",      # native
     0x0600D: "scroll_follow",            # native
-    0x078D4: "entity_set_type",          # native
     0x0B0C5: "palette_apply_gamma",      # native
+    0x0D55D: "tool_list_has",            # native
+    0x0D591: "tool_list_any_flagged",    # native
     0x0D6C3: "bg_scroll_reset",          # native
     0x0979F: "scene_keep_positions",    # native. Copies each entity's
                                         # position to +0x0c/+0x10, so what is
@@ -209,9 +211,10 @@ FUNCTIONS = {
                                         # VOLUME, GAMMA CORRECT
     0x06DBC: "scene_add",               # (scene, x, y, type, param)
     0x06EE9: "scene_alloc",             # (scene, capacity): capacity * 0x29
-    0x078D4: "entity_set_type",         # (e, type): zeroes the frame counter
+    0x078D4: "entity_set_type",         # native. (e, type): zeroes the frame
+                                        # counter
                                         # only when the type actually changes
-    0x06A49: "image_clear",             # (desc, value), a row at a time
+    0x06A49: "image_clear",             # native. (desc, value), a row at a time
     0x087BC: "load_background",         # (index, egg): the tile behind a menu,
                                         # palette at entry 64, then the wrap masks
     0x05A95: "resource_load_at",        # resource_load_full with nothing

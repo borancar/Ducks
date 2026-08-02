@@ -1872,6 +1872,19 @@ class Native(VgaDos):
             return
         predicted = [bytes(p) for p in self.planes]
         mem_predicted = [bytes(uc.mem_read(a, n)) for a, n in watch]
+        # A native that returns a value is claiming that register too, and a
+        # routine that only reads memory - the tool-list queries, text_width -
+        # has nothing else to claim. Comparing memory alone would pass those
+        # however wrong the answer was.
+        #
+        # Declared per native, like the regions and for the same reason. The
+        # input shims cannot be compared this way at all: the native answers
+        # from a queue it has already emptied, and then the original goes to the
+        # hardware and quite properly gets a different answer. That is not a
+        # mismatch, it is the shim working.
+        regs_predicted = () if name not in VERIFY_RETURNS else \
+            outcome if isinstance(outcome, tuple) else \
+            (outcome,) if outcome is not None else ()
         for i, p in enumerate(before):
             self.planes[i][:] = p           # undo; the original will redo it
         for (a, _), b in zip(watch, mem_before):
@@ -1902,8 +1915,18 @@ class Native(VgaDos):
                         diffs += 1
                         if first is None:
                             first = ("%#07x" % a, j, want[j], got[j])
+            regs_real = tuple(self._reg(r) for r in
+                              (UC_X86_REG_AX, UC_X86_REG_DX))
+            bad_reg = next((i for i, v in enumerate(regs_predicted)
+                            if (v & 0xFFFF) != regs_real[i]), None)
             self.verify_calls += 1
-            if diffs:
+            if bad_reg is not None:
+                self.verify_bad += 1
+                print(f"  [verify] {name}: MISMATCH in "
+                      f"{'AX' if bad_reg == 0 else 'DX'}, "
+                      f"native={regs_predicted[bad_reg] & 0xFFFF:#06x} "
+                      f"real={regs_real[bad_reg]:#06x}")
+            elif diffs:
                 self.verify_bad += 1
                 print(f"  [verify] {name}: MISMATCH {diffs} bytes, first "
                       f"{first[0]} off {first[1]:#07x} "
@@ -4651,6 +4674,105 @@ def native_palette_apply_gamma(m, args):
     return None
 
 
+def native_tool_list_has(m, args):
+    """0x0d55d: does the level's tool list hold this entity type?
+
+    Answers in AX and writes nothing, which is why the verify had to learn to
+    compare a return value: on memory alone this native could answer anything.
+    The loop does not stop at the first match.
+    """
+    d = m.dgroup_base
+    want = struct.unpack("<h", m.uc.mem_read(args, 2))[0]
+    off, seg = struct.unpack("<HH", m.uc.mem_read(d + 0x1782, 4))
+    n = m.uc.mem_read(d + 0x178B, 1)[0]
+    found = 0
+    for i in range(n):
+        if struct.unpack("<h", m.uc.mem_read(seg * 16 +
+                                             ((off + i * 2) & 0xFFFF), 2))[0] \
+                == want:
+            found = 1
+    return found
+
+
+def native_tool_list_any_flagged(m, args):
+    """0x0d591: does any tool in the list have bit 1 set in type_flags?
+
+    The entry is used as an index into the per-type table at d+0x3a7 with no
+    range check, so a junk type reads a junk byte of DGROUP rather than faulting
+    - reproduced rather than guarded, because that is what the guest does.
+    """
+    d = m.dgroup_base
+    off, seg = struct.unpack("<HH", m.uc.mem_read(d + 0x1782, 4))
+    n = m.uc.mem_read(d + 0x178B, 1)[0]
+    found = 0
+    for i in range(n):
+        t = struct.unpack("<H", m.uc.mem_read(seg * 16 +
+                                              ((off + i * 2) & 0xFFFF), 2))[0]
+        if m.uc.mem_read(d + ((0x3A7 + t) & 0xFFFF), 1)[0] & 2:
+            found = 1
+    return found
+
+
+def native_text_width(m, args):
+    """0x06d52: how wide a string is, in pixels.
+
+    One less than each glyph's width, plus one at the end - the glyphs overlap
+    by a column. font is 8 bytes an entry at d+0x54d and the width is the first
+    word of it.
+    """
+    d = m.dgroup_base
+    off, seg = struct.unpack("<HH", m.uc.mem_read(args, 4))
+    base = seg * 16
+    w, i = 1, 0
+    while True:
+        c = m.uc.mem_read(base + ((off + i) & 0xFFFF), 1)[0]
+        if not c:
+            return w & 0xFFFF
+        w += struct.unpack("<H", m.uc.mem_read(
+            d + ((0x54D + c * 8) & 0xFFFF), 2))[0] - 1
+        i += 1
+
+
+def native_image_clear(m, args):
+    """0x06a49: fill every row of an image with one colour.
+
+    An image is a row-pointer table and a size: rows at +0x00 (far), width at
+    +0x0c, height at +0x0e. The height is compared unsigned, so a height of zero
+    clears nothing rather than wrapping.
+    """
+    off, seg, colour = struct.unpack("<HHH", m.uc.mem_read(args, 6))
+    im = seg * 16 + off
+    roff, rseg = struct.unpack("<HH", m.uc.mem_read(im, 4))
+    w, h = struct.unpack("<HH", m.uc.mem_read(im + 0x0C, 4))
+    fill = bytes([colour & 0xFF]) * w
+    for i in range(h):
+        poff, pseg = struct.unpack(
+            "<HH", m.uc.mem_read(rseg * 16 + ((roff + i * 4) & 0xFFFF), 4))
+        if w:
+            m.uc.mem_write(pseg * 16 + poff, fill)
+    return None
+
+
+def native_build_washed_ramp(m, args):
+    """0x0876a: the sixteen washed-out colours the terrain is drawn in.
+
+    Sixteen RGB triples read from d+0x14b1 and written to palette_washed at
+    d+0xdad, each channel lifted toward white - c/2 + c/4 + 0x40, so 0 becomes
+    0x40 and 0xff becomes 0xff - and then put through the same gamma scaling
+    palette_apply_gamma uses.
+    """
+    d = m.dgroup_base
+    scale = m.uc.mem_read(d + 0x1FD5, 1)[0] + 6
+    out = bytearray(0x30)
+    for i in range(0x30):
+        c = m.uc.mem_read(d + 0x14B1 + i, 1)[0]
+        v = _cdiv(_sign16((((c >> 1) + (c >> 2) + 0x40) * scale) & 0xFFFF),
+                  0x13)
+        out[i] = 0xFF if v > 0xFF else v & 0xFF
+    m.uc.mem_write(d + 0x0DAD, bytes(out))
+    return None
+
+
 def native_tool_events(m, args):
     """0x0d4c2: the level's scheduled tool changes. Takes no arguments.
 
@@ -4697,6 +4819,20 @@ def _watch(off, n):
     return lambda m, args: [(m.dgroup_base + off, n)]
 
 
+def _watch_image_rows(m, args):
+    """Every row of the image the first argument points at."""
+    off, seg = struct.unpack("<HH", m.uc.mem_read(args, 4))
+    im = seg * 16 + off
+    roff, rseg = struct.unpack("<HH", m.uc.mem_read(im, 4))
+    w, h = struct.unpack("<HH", m.uc.mem_read(im + 0x0C, 4))
+    out = []
+    for i in range(h):
+        poff, pseg = struct.unpack(
+            "<HH", m.uc.mem_read(rseg * 16 + ((roff + i * 4) & 0xFFFF), 4))
+        out.append((pseg * 16 + poff, w))
+    return out
+
+
 def _watch_scroll(m, args):
     """Both scroll longs, at d+0x1739."""
     return [(m.dgroup_base + 0x1739, 8)]
@@ -4736,7 +4872,17 @@ VERIFY_REGIONS = {
     "cursor_to_centre": _watch(0x18D3, 8),
     "bg_scroll_reset": _watch(0x177E, 4),
     "palette_apply_gamma": _watch(0x10E1, 0x300),
+    "build_washed_ramp": _watch(0x0DAD, 0x30),
+    "image_clear": _watch_image_rows,
     "entity_set_type": _watch_entity,
+}
+
+# Natives whose return value is a function of memory alone, so replaying the
+# original from the same state must produce the same one. See _verify_native.
+VERIFY_RETURNS = {
+    "tool_list_has",
+    "tool_list_any_flagged",
+    "text_width",
 }
 
 NATIVE_TABLE = [
@@ -4764,6 +4910,11 @@ NATIVE_TABLE = [
     (0x0C20E, "cursor_to_centre", native_cursor_to_centre, "far"),
     (0x0D6C3, "bg_scroll_reset", native_bg_scroll_reset, "far"),
     (0x0B0C5, "palette_apply_gamma", native_palette_apply_gamma, "far"),
+    (0x0D55D, "tool_list_has", native_tool_list_has, "far"),
+    (0x0D591, "tool_list_any_flagged", native_tool_list_any_flagged, "far"),
+    (0x06D52, "text_width", native_text_width, "far"),
+    (0x06A49, "image_clear", native_image_clear, "far"),
+    (0x0876A, "build_washed_ramp", native_build_washed_ramp, "far"),
 ]
 
 # Written but not enabled: 0x0d4c2 is called once as a level starts, and every

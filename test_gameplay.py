@@ -34,8 +34,9 @@ import random
 import struct
 import sys
 
-from unicorn.x86_const import (UC_X86_REG_CS, UC_X86_REG_DS, UC_X86_REG_ES,
-                               UC_X86_REG_SP, UC_X86_REG_SS)
+from unicorn.x86_const import (UC_X86_REG_AX, UC_X86_REG_CS, UC_X86_REG_DS,
+                               UC_X86_REG_DX, UC_X86_REG_ES, UC_X86_REG_SP,
+                               UC_X86_REG_SS)
 
 import native
 from native import DECLINE, Native
@@ -82,11 +83,20 @@ def compare(m, off, name, frame, watch, label):
             m.uc.mem_write(a, b)
         return "declined"
     ours = [bytes(m.uc.mem_read(a, n)) for a, n in watch]
+    # A native that returns something is claiming AX, and for a routine that
+    # only reads - the tool-list queries, text_width - that is the whole answer.
+    regs = outcome if isinstance(outcome, tuple) else \
+        (outcome,) if outcome is not None else ()
     for (a, _), b in zip(watch, before):
         m.uc.mem_write(a, b)
 
     guest_call(m, off, frame)
     theirs = [bytes(m.uc.mem_read(a, n)) for a, n in watch]
+    real = [m.uc.reg_read(r) & 0xFFFF for r in (UC_X86_REG_AX, UC_X86_REG_DX)]
+    for i, v in enumerate(regs):
+        if (v & 0xFFFF) != real[i]:
+            return (f"{label}: {'AX' if i == 0 else 'DX'} "
+                    f"native={v & 0xFFFF:#06x} guest={real[i]:#06x}")
 
     for (a, n), want, got in zip(watch, ours, theirs):
         for j in range(n):
@@ -204,7 +214,76 @@ def case_palette_apply_gamma(m, rng):
     return 0x0B0C5, b"", [(d + 0x10E1, 0x300)], "palette_apply_gamma"
 
 
+def _seed_tool_list(m, rng):
+    d = m.dgroup_base
+    n = rng.randrange(0, 9)
+    m.uc.mem_write(SCRATCH_SEG * 16,
+                   b"".join(struct.pack("<h", rng.randrange(0, 112))
+                            for _ in range(max(1, n))))
+    m.uc.mem_write(d + 0x1782, struct.pack("<HH", 0, SCRATCH_SEG))
+    m.uc.mem_write(d + 0x178B, bytes([n]))
+    m.uc.mem_write(d + 0x03A7, rng.randbytes(112))
+
+
+def case_tool_list_has(m, rng):
+    _seed_tool_list(m, rng)
+    frame = struct.pack("<h", rng.randrange(0, 112))
+    return 0x0D55D, frame, [], "tool_list_has"
+
+
+def case_tool_list_any_flagged(m, rng):
+    _seed_tool_list(m, rng)
+    return 0x0D591, b"", [], "tool_list_any_flagged"
+
+
+def case_text_width(m, rng):
+    """A random string against a random font table, empty string included."""
+    d = m.dgroup_base
+    m.uc.mem_write(d + 0x054D, b"".join(
+        struct.pack("<H", rng.randrange(0, 40)) + bytes(6)
+        for _ in range(256)))
+    n = rng.randrange(0, 24)
+    m.uc.mem_write(SCRATCH_SEG * 16,
+                   bytes(rng.randrange(1, 256) for _ in range(n)) + b"\0")
+    return 0x06D52, struct.pack("<HH", 0, SCRATCH_SEG), [], "text_width"
+
+
+def _make_image(m, rng, w, h):
+    """An image_t with its rows spread out, at SCRATCH_SEG."""
+    im = SCRATCH_SEG * 16
+    rows = im + 0x20
+    pix = SCRATCH_SEG * 16 + 0x400
+    m.uc.mem_write(im, struct.pack("<HH", 0x20, SCRATCH_SEG))
+    m.uc.mem_write(im + 0x0C, struct.pack("<HH", w, h))
+    # Sixteen rows always, whatever the height says, so clearing one row too
+    # many shows up as a difference rather than as memory nobody looks at.
+    for i in range(16):
+        at = pix + i * 0x100
+        m.uc.mem_write(rows + i * 4,
+                       struct.pack("<HH", at - SCRATCH_SEG * 16, SCRATCH_SEG))
+        m.uc.mem_write(at, rng.randbytes(0x100))
+    return im
+
+
+def case_image_clear(m, rng):
+    w, h = rng.randrange(0, 64), rng.randrange(0, 16)
+    im = _make_image(m, rng, w, h)
+    frame = struct.pack("<HHH", 0x00, SCRATCH_SEG, rng.randrange(0, 256))
+    watch = [(SCRATCH_SEG * 16 + 0x400 + i * 0x100, max(1, w))
+             for i in range(16)]
+    return 0x06A49, frame, watch, "image_clear"
+
+
+def case_build_washed_ramp(m, rng):
+    d = m.dgroup_base
+    m.uc.mem_write(d + 0x14B1, rng.randbytes(0x30))
+    m.uc.mem_write(d + 0x1FD5, bytes([rng.randrange(0, 0x20)]))
+    return 0x0876A, b"", [(d + 0x0DAD, 0x30)], "build_washed_ramp"
+
+
 CASES = [case_scroll, case_scroll_axis, case_entity_set_type,
+         case_tool_list_has, case_tool_list_any_flagged, case_text_width,
+         case_image_clear, case_build_washed_ramp,
          case_egg_block_end, case_rle_reset, case_set_buffer,
          case_cursor_to_centre, case_bg_scroll_reset,
          case_palette_apply_gamma]
