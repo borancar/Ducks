@@ -63,6 +63,7 @@ extern uint8_t far **bg_rows;        /* 0x170b */
 extern int16_t    layer_width;       /* 0x0538 via the same geometry */
 extern int16_t    layer_height;      /* 0x053a */
 extern int16_t    dest_row;          /* 0x1727 - the destination row offset */
+extern uint8_t    bg_scroll_x, bg_scroll_y;  /* 0x177e, 0x177f */
 extern int16_t    wrap_x, wrap_y;    /* 0x1729, 0x172b - background wrap masks */
 extern int16_t    background_warp;   /* 0x2022 - first seen set on level 80 */
 extern uint8_t    warp_table[32];    /* 0x179f */
@@ -566,11 +567,15 @@ void far blit_rows_masked(desc_t far *desc, viewport_t rect, int16_t srcrow)
  *   [0x170b]  far ptr -> array of far row pointers, background
  *   [0x16f1]  destination, plus [0x1727] for the row offset
  *   [0x538]   width limit          [0x53a]  height
- *   [0x177d]  x scroll             [0x177f] y scroll
+ *   [0x177f]  y scroll into the tile
  *   [0x1729]  wrap mask, x         [0x172b] wrap mask, y
  *
  * Per pixel: take the foreground byte, and where it is zero fall through to the
  * background tile. Column steps by 4, so one call fills a single plane.
+ *
+ * There is no x scroll. The column starts at [0x177d], which is current_plane,
+ * and the tile is indexed by that same column masked - so what this note used to
+ * call an x scroll was the plane number counted twice.
  */
 void far compose_layer(void)
 {
@@ -578,11 +583,11 @@ void far compose_layer(void)
 
     for (row = 0; row < layer_height; row++) {          /* [0x53a] */
         uint8_t far *fg  = fg_rows[row];
-        uint8_t far *bg  = bg_rows[(row + scroll_y) & wrap_y];
+        uint8_t far *bg  = bg_rows[(row + bg_scroll_y) & wrap_y];
         uint8_t far *dst = &((uint8_t far *) vram)[row * 80 + dest_row];
         for (x = current_plane; x < layer_width; x += 4) {
             uint8_t px = fg[x];
-            dst[x >> 2] = px ? px : bg[(x + scroll_x) & wrap_x];
+            dst[x >> 2] = px ? px : bg[x & wrap_x];
         }
     }
 }
