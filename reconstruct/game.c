@@ -508,7 +508,17 @@ void far load_string_table(uint8_t index, char far ***table, uint8_t far *count,
         fatal(missing, NULL);
 
     *count = egg_read_byte(egg_stream);
-    *table = malloc((size_t) *count * 4);          /* four bytes a far pointer */
+    *table = malloc((size_t) *count * sizeof **table);
+                                                   /* four bytes an entry in the
+                                                    * original, because that is
+                                                    * what a far pointer was.
+                                                    * Writing 4 here overruns the
+                                                    * array on anything with
+                                                    * wider pointers and frees
+                                                    * the strings allocated right
+                                                    * after it - which showed up
+                                                    * as the first ten menu items
+                                                    * being heap rubble */
     if (!*table)
         fatal(out_of_memory, NULL);
 
