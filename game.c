@@ -3736,10 +3736,11 @@ void far main(void)
     sound_play_guarded(0x28, 1);
     show_resource(0x4d, 8, 100, 0xff);       /* 0x14577 - the title */
 
-    if (!registered) {                       /* 0x1457d - [0x548] */
+    /* Only the splash is inside the test - the `jne` at 0x14582 lands on the
+     * sound call, not past it - so the quack plays either way. */
+    if (!registered)                         /* 0x1457d - [0x548] */
         show_splash(menu_text[62], 100);     /* 0x1459b - "UNREGISTERED" */
-        sound_play_guarded(0x0b, 1);
-    }
+    sound_play_guarded(0x0b, 1);             /* 0x145a1 */
 
     game_main(&main_menu);                   /* 0x145b1 - does not return until
                                               * QUIT clears its loop flag */
