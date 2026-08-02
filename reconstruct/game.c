@@ -1474,7 +1474,11 @@ void far item_label(item_t far *it)
     default:
         return;
     }
-    for (j = 0; j < strlen(src); j++)              /* 0x0c338: strlen each time */
+    /* One past the length, because the compare is `jbe`: the terminator is
+     * copied with the value, and that is what shortens the label when a shorter
+     * value replaces a longer one. Without it "SOUNDS: OFF" turned back on
+     * reads "SOUNDS: ONF", and the mouse buttons keep their dashes. */
+    for (j = 0; j <= strlen(src); j++)             /* 0x0c338: strlen each time */
         it->text[it->value_at + j] = src[j];
 }
 
