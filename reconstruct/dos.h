@@ -229,9 +229,15 @@ void far save_settings(void);
 void far init(void);
 void far game_main(menu_t far *menu);
 int16_t far resource_load(desc_t far *desc, uint8_t type, uint8_t index,
-                          int16_t pal_at, int16_t set_size,
-                          int16_t arg18, int16_t arg1a);
+                          int16_t pal_at, int16_t bias_zero,
+                          int16_t egg, int16_t arg1a);
+int16_t far resource_load_full(desc_t far *desc, int16_t allocate,
+                               uint8_t type, uint8_t index, int16_t pal_at,
+                               int16_t bias_zero, int16_t row, int16_t opaque,
+                               int16_t egg, int16_t arg1a);
 int16_t far episode_end_gate(int16_t level, int16_t egg);
+void far resource_load_at(desc_t far *desc, uint8_t type, uint8_t index,
+                          int16_t pal_at, int16_t row, int16_t egg);
 record_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b);
 
 /* the port I/O the original used; a port supplies its own or drops them */

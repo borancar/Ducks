@@ -211,36 +211,49 @@ void far close_egg_files(void)
  * Pull one resource out of an egg and build a descriptor for it. Everything that
  * draws a screen comes through here.
  *
- *   desc      the descriptor to fill
- *   set_size  when non-zero, write the source's width and height into it
- *   type      the resource type - 0x4d for the screens main and game_main show
- *   index     which one
- *   pal_at    where in the palette buffer this resource's colours go
+ *   desc        the descriptor to fill
+ *   allocate    when non-zero, write the source's size into the descriptor and
+ *               allocate its rows; when zero, draw into one that already exists
+ *   type        the resource type - 0x4d for the screens main and game_main show
+ *   index       which one
+ *   pal_at      where in the palette buffer this resource's colours go, and the
+ *               same number is added to every pixel, so a resource loaded at
+ *               entry 112 draws in the sixteen colours from 112 up
+ *   bias_zero   whether a pixel that ends up zero is biased by pal_at as well
+ *   row         the first destination row
+ *   opaque      when zero, a zero source pixel leaves the destination alone
+ *   egg         which egg file to look in
  *
  * The stream is the open egg at egg_stream ([0x20c6]): egg_find_block seeks it to
  * the resource, then the header is two words and a byte - width, height, and how
  * many palette entries follow - and the palette is read three bytes at a time
  * straight into the current buffer at pal_at * 3.
+ *
+ * Ten arguments, which is why both of the forwarders below exist and why nothing
+ * calls this directly.
  */
-int16_t far resource_load_full(desc_t far *desc, int16_t set_size,
+int16_t far resource_load_full(desc_t far *desc, int16_t allocate,
                                uint8_t type, uint8_t index, int16_t pal_at,
-                               int16_t arg18, int16_t arg1a)
+                               int16_t bias_zero, int16_t row, int16_t opaque,
+                               int16_t egg, int16_t arg1a)
 {
-    int16_t w, h, colours, i, x0;
+    int16_t w, h, colours, i, x0, ok = 1;          /* [bp-0xe] starts at 1 */
 
-    if (!egg_find_block(type, index, arg18))       /* 0x05232 */
+    if (!egg_find_block(type, index, egg))         /* 0x05232 */
         return 0;
 
     w       = egg_read_word(egg_stream);           /* 0x04e88 */
     h       = egg_read_word(egg_stream);
     colours = egg_read_byte(egg_stream);           /* 0x03791 */
 
-    if (set_size) {
+    if (allocate) {
         desc->w = w;                               /* +0x0c */
         desc->h = h;                               /* +0x0e */
+        ok = alloc_image(desc, 0, 0, 0, arg1a);    /* 0x05388 */
     }
-
-    if (!alloc_image(desc, 0, 0, 0, arg1a))        /* 0x05388 */
+    if (!ok)                                       /* 0x05954 - and when the
+                                                    * caller supplied the image,
+                                                    * this cannot fail */
         return 0;
 
     /* Where this image sits inside the descriptor's own width, so a source
@@ -254,16 +267,21 @@ int16_t far resource_load_full(desc_t far *desc, int16_t set_size,
     f_0580b();                                     /* reset the chunk decoder */
 
     /* The rows. One pixel at a time out of the decoder, placed at x0 so a source
-     * narrower than the destination lands centred. Zero is transparent unless the
-     * caller asked for it to be kept - which is the arg18 test at 0x059b6. */
+     * narrower than the destination lands centred, and at `row` down, so a logo
+     * can be dropped onto a backdrop that is already drawn. */
     for (i = 0; i < h; i++) {
         int16_t x;
 
         for (x = 0; x < w; x++) {
             uint8_t px = egg_next_pixel();
 
-            if (px || arg18)
-                desc->rows[i][x0 + x] = px;
+            if (px == 0 && !opaque)                /* 0x059b6 - transparent */
+                continue;
+            desc->rows[i + row][x0 + x] = px;      /* 0x059bf */
+            if (desc->rows[i + row][x0 + x] == 0 && !bias_zero)  /* 0x059ff */
+                continue;
+            desc->rows[i + row][x0 + x] =          /* 0x05a22 - a byte add */
+                (uint8_t) (desc->rows[i + row][x0 + x] + pal_at);
         }
     }
     egg_block_end();                               /* 0x05a55 - releases the
@@ -273,14 +291,30 @@ int16_t far resource_load_full(desc_t far *desc, int16_t set_size,
 
 /* --------------------------------------------- 0x05a67: resource_load
  *
- * The form everything actually calls: the same thing with `set_size` forced to 1
- * and two of the arguments fixed. A thin forwarder, twenty bytes of pushes.
+ * The form that loads a whole screen: allocate the image, start at row 0, and
+ * write every pixel including the zeros. A thin forwarder, twenty bytes of
+ * pushes - the caller's fifth argument is the one that decides whether a pixel
+ * that came out zero is biased by pal_at with all the others.
  */
 int16_t far resource_load(desc_t far *desc, uint8_t type, uint8_t index,
-                          int16_t pal_at, int16_t set_size,
-                          int16_t arg18, int16_t arg1a)
+                          int16_t pal_at, int16_t bias_zero,
+                          int16_t egg, int16_t arg1a)
 {
-    return resource_load_full(desc, 1, type, index, pal_at, arg18, arg1a);
+    return resource_load_full(desc, 1, type, index, pal_at,
+                              bias_zero, 0, 1, egg, arg1a);
+}
+
+/* 0x05a95. The other forwarder: nothing is allocated, so the resource is drawn
+ * into a descriptor that already exists, starting at the row given, and a zero
+ * source pixel leaves what is underneath alone.
+ *
+ * run_screen uses it twice, for the two pieces of furniture around a menu: the
+ * DUCKS logo along the bottom, and the big one at the top of a short menu. Each
+ * brings sixteen colours of its own, which is what pal_at is for. */
+void far resource_load_at(desc_t far *desc, uint8_t type, uint8_t index,
+                          int16_t pal_at, int16_t row, int16_t egg)
+{
+    resource_load_full(desc, 0, type, index, pal_at, 0, row, 0, egg, 1);
 }
 
 /* 0x056f7. Forces one entry of the current palette buffer to black.
