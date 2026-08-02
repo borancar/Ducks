@@ -45,6 +45,12 @@ uint8_t    current_plane;
 uint16_t   page_front, page_back;
 int16_t    flip_phase;
 
+/* The compositor's state, the same four variables dos_io.c has: the tile's wrap
+ * masks and the scroll into it. load_background sets the masks; a menu holds the
+ * scroll at zero. */
+int16_t    wrap_x, wrap_y;              /* 0x1729, 0x172b */
+uint8_t    bg_scroll_x, bg_scroll_y;    /* 0x177e, 0x177f */
+
 /* There are no ports here. The game still writes the DAC directly in one place -
  * cutscene_photos flashes the screen white - so these exist to let that link, and
  * the flash is a palette operation waiting to be written. */
@@ -413,10 +419,30 @@ void far outline_sprite(int16_t far *index, int16_t x, int16_t y,
      * until a sprite is actually on screen to check it against. */
 }
 
-/* TODO: the two compositors read the game's row tables, which resource_load has
- * not been read far enough to fill in. No-ops until it has - a menu draws through
- * blit_rows, not through these, so the menus do not need them. */
-void far compose_layer(void) { }
+/* 0x05d3a, on a linear framebuffer. Two layers a pixel: the backdrop, which the
+ * menu drew its items into, and where that is zero the background tile, repeated
+ * with an AND against the wrap masks. The column steps by four, so one call
+ * fills a single plane - which is the only reason a menu frame calls it four
+ * times over.
+ *
+ * The x index into the tile is the column itself: the original starts it at
+ * current_plane and masks it, and adds no scroll at all. */
+void far compose_layer(void)
+{
+    int16_t row, x;
+
+    if (!backdrop.rows || !background.rows)
+        return;
+
+    for (row = 0; row < screen_height; row++) {
+        uint8_t far *fg  = backdrop.rows[row];
+        uint8_t far *bg  = background.rows[(row + bg_scroll_y) & wrap_y];
+        uint8_t far *dst = fb_back + (size_t) row * screen_width;
+
+        for (x = current_plane; x < screen_width; x += 4)
+            dst[x] = fg[x] ? fg[x] : bg[x & wrap_x];
+    }
+}
 void far compose_scroll(int16_t scroll_x, int16_t scroll_y)
 {
     (void) scroll_x; (void) scroll_y;

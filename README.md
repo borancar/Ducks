@@ -93,8 +93,8 @@ the address space, which is a reminder that this split is ours and the original
 had one module here, or several we cannot see.
 
 Still missing and worth adding as they are read: the in-game frame at `0x0d7ee`
-with the four plane loops inside it, `run_screen` (`0x0c716`), the other four
-cutscene screens, and `high_score_screen`.
+with the four plane loops inside it, the other four cutscene screens, and
+`high_score_screen`.
 
 **Where a body came from native.py rather than from the disassembly, the comment
 says so.** Those natives are byte-compared against the original on every call, so
@@ -183,14 +183,20 @@ fact that it compiles either way is the first real check that the line was drawn
 in the right place.
 
 **It is not the game yet.** Most of the segment is unread, and `stubs.c` is the
-list of what: `run_screen` above all, since every menu is that one function on
-different data, and then the egg reader, which is what makes a resource exist at
-all. `in_game_frame` is deliberately a no-op returning "the run ended", so
-`game_main`'s inner loop falls through to the screens either side of it - the
+list of what. `in_game_frame` is deliberately a no-op returning "the run ended",
+so `game_main`'s inner loop falls through to the screens either side of it - the
 menus are what this is for at the moment, not the gameplay.
 
-What happens if you run it today: `init` spins until a key, then `game_main` calls
-`run_screen`, which is stubbed to answer QUIT, so it takes main's teardown path
-and exits. That is a full pass through the program's real control flow with almost
-none of its content - which is the point of getting it to link this early. The
-shape is testable before the pixels are.
+What happens if you run it today: the intro splashes, the version page, and then
+the menus. All fifteen of them are real - `build_menus` assembles them out of the
+string tables at startup and `run_screen` runs whichever one `game_main` points
+at - so PLAY DUCKS, OPTIONS, the settings screens, READ ME! and QUIT DUCKS all
+navigate, the toggles toggle, and QUIT takes main's teardown path and exits.
+
+Three things are visibly absent from a menu. The mouse pointer is not drawn,
+because `animate_scene` (`0x0a52a`) and the sprite table it animates against are
+still stubbed - the keyboard and the mouse both still *move* the highlight. The
+sliders behind GAME SPEED, AMBIENCE VOLUME and GAMMA CORRECT are a screen of
+their own at `0x0c4f0` and are not read. And the episode, readme and demo lists
+come out empty, because `build_episode_index` (`0x11657`) has not been read, so
+there are no records for `menu_add_list` to page through.
