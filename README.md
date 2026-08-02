@@ -212,6 +212,6 @@ only offered while a game is in progress, so it needs gameplay to reach honestly
 Leave the menu alone for a while and the hall of fame comes up on its own, read
 out of `settings.dat` at startup and written back on the way out.
 
-One thing is still absent from a menu: the sliders behind GAME SPEED, AMBIENCE
-VOLUME and GAMMA CORRECT are a screen of their own at `0x0c4f0` and are not
-read.
+The menus are complete: the sliders, REGISTER DUCKS and the hall of fame all
+work, and every action code `game_main` switches on now reaches something real
+except the ones that lead into the game itself.

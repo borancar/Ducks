@@ -3227,6 +3227,138 @@ void far high_score_name(char far *buf)
     menu_free(&m);
 }
 
+/* --------------------------------------- 0x12edf: check_registration
+ *
+ * The name is hashed and the result, as six digits, is the key. Letters and the
+ * space count and nothing else does - anything outside the alphabet at d+0x21b0
+ * is passed over - and each one contributes its position times a multiplier that
+ * changes as it goes. Both running values are kept inside their own modulus,
+ * which is what stops the arithmetic from mattering beyond sixteen bits.
+ *
+ *   announce  whether to say so on screen. load_settings passes 0, because it is
+ *             only re-checking what it has just read out of the file; the
+ *             registration screen passes 1.
+ *
+ * One name is refused however good the key: MR. BLACK. Nothing here says why.
+ *
+ * Whatever the answer, the copy is unregistered first - so a wrong key entered
+ * on a registered copy loses the registration.
+ */
+void far check_registration(char far *name, char far *key, int16_t announce)
+{
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ ";  /* d+0x21b0 */
+    char      want[8];                             /* [bp-8] */
+    char far *fresh = 0;
+    int32_t   acc = 0x8f12;                        /* [bp-0xc] */
+    int32_t   mul = 0x30a8;                        /* [bp-0x10] */
+    int16_t   i, j;
+
+    for (i = 0; name[i]; i++) {
+        int16_t at = -1;
+
+        for (j = 0; alphabet[j]; j++)
+            if (alphabet[j] == name[i])
+                at = j;
+        if (at < 0)                                /* not one of the 27 */
+            continue;
+        acc += (int32_t) (at + 1) * mul;
+        acc %= 65530;
+        mul += 0x6b0b;
+        mul %= 0x406c;
+    }
+    acc++;
+    sprintf(want, "%06u", (uint16_t) acc);         /* d+0x2704 */
+
+    /* The copy is taken before the old name is let go, and that is a departure.
+     * The original frees first and then copies from the caller's pointer - which
+     * load_settings has just handed it as owner_name itself, the very thing being
+     * freed. DOS's allocator leaves the bytes alone and hands the same block
+     * back, so it works there; here the name came back as "F6". */
+    if (strcmp(key, want) == 0 && strcmp(name, "MR. BLACK") != 0)
+        str_copy(name, &fresh);
+
+    if (registered) {                              /* 0x12fb7 */
+        registered = 0;
+        free(owner_name);
+        owner_name = 0;
+    }
+
+    if (fresh) {
+        if (announce)
+            show_splash(menu_text[57], 100);       /* "GAME REGISTERED!" */
+        registered = 1;
+        owner_name = fresh;
+        owner_key = (int16_t) (acc + 1);
+    } else if (announce) {
+        show_splash(menu_text[58], 100);           /* "INCORRECT KEY" */
+        show_splash(menu_text[59], 100);           /* "REGISTRATION FAILED" */
+    } else {
+        printf("Invalid registration details...\r\n");          /* d+0x2713 */
+    }
+}
+
+/* ----------------------------------------- 0x13096: register_screen
+ *
+ * Two menus in a row, each one item and a CANCEL, with the name entry over the
+ * top - the same shape as saving a game. The name may be abandoned with ESC and
+ * the key may not, which is the third argument to name_entry.
+ *
+ * The idle timeout is held off for the whole of it and put back afterwards,
+ * because typing slowly is not being idle.
+ */
+void far register_screen(void)
+{
+    menu_t  m;                                     /* [bp-0x78] */
+    char    name[0x16];                            /* [bp-0x8e] */
+    char    key[0x16];                             /* [bp-0xa4] */
+    int16_t chosen;
+    int16_t saved;
+    int16_t ok;                                    /* si */
+
+    menu_reset(&m);
+    menu_add_title(&m, menu_text[56]);                          /* REGISTER DUCKS */
+    menu_add_action(&m, menu_text[60], 0x0b, &menu_always, 0);  /* ENTER YOUR NAME */
+    menu_add_action(&m, menu_text[33], 0x0f, &menu_always, 0);  /* CANCEL */
+    m.background = 7;
+
+    saved = menu_idle_suppress;
+    menu_idle_suppress = 1;
+
+    menu_screen_driver(&m, &chosen, 0);
+    if (m.item[chosen].action == 0x0b) {
+        strcpy(name, "`");                         /* d+0x2735 - the cursor */
+        ok = name_entry(name, chosen, 1);
+    } else {
+        ok = 0;
+    }
+    menu_free(&m);
+
+    if (ok) {
+        menu_reset(&m);
+        menu_add_title(&m, menu_text[56]);
+        menu_add_action(&m, menu_text[61], 0x0b, &menu_always, 0);  /* ENTER YOUR KEY */
+        menu_add_action(&m, menu_text[33], 0x0f, &menu_always, 0);
+        m.background = 7;
+
+        menu_screen_driver(&m, &chosen, 0);
+        if (m.item[chosen].action == 0x0b) {
+            strcpy(key, "`");                      /* d+0x2737 */
+            ok = name_entry(key, chosen, 0);       /* and this one cannot be
+                                                    * abandoned */
+        } else {
+            ok = 0;
+        }
+        menu_free(&m);
+
+        if (ok)
+            check_registration(name, key, 1);
+    }
+    if (!ok)
+        show_splash("ABORTED", 100);               /* d+0x2739 */
+
+    menu_idle_suppress = saved;
+}
+
 /* ------------------------------------------------- 0x12951: load_game_screen
  *
  * Returns non-zero when a game was actually loaded, and everything after the
@@ -3451,7 +3583,7 @@ int16_t far load_settings(void)
         owner_name = egg_read_string(fp);          /* 0x0542 */
         owner_key  = egg_read_word(fp);            /* 0x0546 */
         sprintf(line, "%06u", owner_key - 1);      /* d+0x27fb */
-        f_12edf(owner_name, line, 0);
+        check_registration(owner_name, line, 0);
     }
 
     for (i = 0; i < 10; i++) {

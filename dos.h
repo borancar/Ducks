@@ -423,6 +423,7 @@ void far menus_resume(void);
 void far save_note(int16_t serial);
 int16_t far name_entry(char far *buf, int16_t row, int16_t escape);
 void far register_screen(void);
+void far check_registration(char far *name, char far *key, int16_t announce);
 void far high_score_screen(void);
 void far show_attract_screen(int16_t frames);
 void far high_score_screen(void);
@@ -495,7 +496,6 @@ void far f_0becb(void);
 void far f_0f8bd(void);
 void far f_11bee(void far *name, int16_t egg);
 void far f_15388(void far *o);
-void far f_12edf(char far *name, char far *key, int16_t arg);
 extern char far *owner_name;
 extern int16_t   owner_key;
 
