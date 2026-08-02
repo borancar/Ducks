@@ -100,9 +100,17 @@ int egg_open(const char *path)
 
 /* ------------------------------------------------------------ the stream */
 
+/* The original has one kind of stream: every one of these is the runtime's fgetc
+ * on a FILE *, and the egg is just another open file. The port maps the egg and
+ * walks it with a cursor instead, so there are two - and the saved games are read
+ * with the same three readers, off a real FILE *.
+ *
+ * NULL is the egg. That is not a convention invented here: egg_stream is what
+ * every caller passes for it, and nothing ever assigns to it. */
 uint8_t far egg_read_byte(void far *s)
 {
-    (void) s;
+    if (s)
+        return (uint8_t) fgetc((FILE *) s);
     return cursor < egg_len ? egg[cursor++] : 0;
 }
 
