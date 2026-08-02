@@ -77,7 +77,7 @@ menu_t         menu_demos;              /* 0x1f60 */
  */
 
 /* video and the flip */
-uint8_t    game_speed;           /* 0x1fd4 - 0..0x1f, higher is faster; read
+uint8_t    game_speed = 29;      /* 0x1fd4 - 0..0x1f, higher is faster; read
                                   * as `mov al / mov ah, 0`, so unsigned */
 uint8_t    gamma_level = 16;     /* 0x1fd5 - what GAMMA CORRECT sets, and 16 is
                                   * what the image initialises it to. Every
@@ -276,7 +276,7 @@ uint8_t  g_18f5;                /* byte-sized on every access */
  * That is what it is used as and where it is kept, beside game_speed and gamma
  * in the three bytes settings.dat carries; the slider that writes it is the
  * screen at 0x0c4f0, which is not read, so nothing here has watched it change. */
-uint8_t  ambience_volume;
+uint8_t  ambience_volume = 12;
 int16_t  g_201c;                /* compared with jle, so signed */
 uint16_t g_2036;                /* compared with jb, so unsigned */
 int16_t  g_21a3;
