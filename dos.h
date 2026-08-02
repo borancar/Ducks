@@ -382,7 +382,14 @@ void far build_episode_index(void);
 int16_t far read_index(episode_t far *array, int16_t start, int16_t far *total,
                        int16_t egg, int16_t store);
 void far save_game_screen(void);
-void far load_game_screen(void);
+int16_t far load_game_screen(void);
+void far write_word(int16_t v, FILE far *fp);
+void far write_string(FILE far *fp, const char far *s);
+void far add_save_slots(menu_t far *m, int16_t for_saving);
+void far find_egg_by_id(const char far *id, const char far *name);
+void far menus_resume(void);
+void far save_note(int16_t serial);
+int16_t far name_entry(char far *buf, int16_t row, int16_t escape);
 void far register_screen(void);
 void far high_score_screen(void);
 void far show_attract_screen(int16_t frames);

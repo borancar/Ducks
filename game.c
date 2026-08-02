@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>       /* strcasecmp, which is Borland's stricmp */
+#include <ctype.h>         /* toupper, at 0:0x184f */
 
 #include "dos.h"
 
@@ -160,6 +161,9 @@ int16_t    registered;           /* 0x0548 */
 int16_t    lives;                /* 0x2034 - decremented on a lost run */
 uint16_t   max_save_value;       /* 0x2055 - scan_save_slots' only output;
                                   * compared with `jbe` */
+int16_t    save_serial;          /* 0x2053 - which save is the newest: written
+                                  * into the file, and given max_save_value + 1
+                                  * when the slot has none of its own */
 
 /* ------------------------------------------------------- the animation tables
  *
@@ -260,6 +264,9 @@ extern uint8_t bg_step_x, bg_step_y;    /* 0x1780, 0x1781 */
 
 /* used but not identified */
 int16_t  g_509, g_50b, g_1ffa, g_1ffc, g_1ffe, g_18e1, g_18e3;
+uint8_t  g_205d[80];            /* 0x205d - ten eight-byte records save_note
+                                 * reads the first word of; nothing that fills
+                                 * them has been read */
 uint8_t  g_18f5, g_1fd3;        /* both byte-sized on every access */
 int16_t  g_201c;                /* compared with jle, so signed */
 uint16_t g_2036;                /* compared with jb, so unsigned */
@@ -2723,6 +2730,342 @@ void far show_readme_section(uint8_t n)
 
     set_buffer(default_buffer);
     input_poll(0x140, 0xc8);
+}
+
+/* ============================================ save and load, 0x12281 on
+ *
+ * Five slots, GAME1.SG to GAME5.SG, and both screens are the ordinary menu with
+ * one entry per slot. The name in a slot is the name the player typed, read
+ * straight back out of the file - so the list is built by opening all five.
+ *
+ * The file's strings carry the same +1 shift the eggs use, through the same
+ * reader and a writer that puts it back on.
+ * ======================================================================== */
+
+/* 0x04ebb. A word, high byte first. */
+void far write_word(int16_t v, FILE far *fp)
+{
+    fputc((v >> 8) & 0xff, fp);
+    fputc(v & 0xff, fp);
+}
+
+/* 0x04fbd. A length and then the characters, each shifted up by one - the same
+ * form egg_read_string takes apart. */
+void far write_string(FILE far *fp, const char far *s)
+{
+    int16_t n = (int16_t) strlen(s);
+    int16_t i;
+
+    write_word(n, fp);
+    for (i = 0; i < n; i++)
+        fputc((s[i] + 1) & 0xff, fp);
+}
+
+/* 0x12281. One menu entry per save slot.
+ *
+ *   for_saving  the save screen offers an empty slot as "EMPTY SLOT n"; the load
+ *               screen simply leaves it out, which is how a machine with nothing
+ *               saved gets a LOAD SAVED GAME screen with only CANCEL on it.
+ */
+void far add_save_slots(menu_t far *m, int16_t for_saving)
+{
+    int16_t   action = for_saving ? 8 : 9;
+    int16_t   i;
+    FILE far *fp;
+    char far *label;
+
+    for (i = 1; i < 6; i++) {
+        save_name[4] = (char) ('0' + i);
+        fp = fopen(save_name, "rb");
+        if (fp) {
+            while (fgetc(fp))                      /* past "Ducks Saved Game.." */
+                ;
+            label = egg_read_string(fp);
+            menu_add_action(m, label, action, &menu_always, (uint8_t) i);
+            fclose(fp);
+            free(label);
+        } else if (for_saving) {
+            label = malloc(0x14);
+            sprintf(label, "%s %i", menu_text[36], i);      /* "EMPTY SLOT" */
+            menu_add_action(m, label, action, &menu_always, (uint8_t) i);
+            free(label);
+        }
+    }
+}
+
+/* 0x1239e. Which open egg a save belongs to, by the egg's own name.
+ *
+ *   id    what the save recorded
+ *   name  the egg's file name, for the refusal
+ *
+ * Nothing here compares whole strings: it walks until the bytes differ, and a
+ * stop on the terminator is what counts as a match. */
+void far find_egg_by_id(const char far *id, const char far *name)
+{
+    int16_t i, j;
+
+    episode_egg_index = 0xff;
+    for (i = 0; i < egg_file_count; i++) {
+        for (j = 0; id[j]; j++)
+            if (id[j] != egg_files[i].id[j])
+                break;
+        if (id[j] == 0)
+            episode_egg_index = i;
+    }
+    if (episode_egg_index == 0xff)
+        fatal("A required data file isn't loaded", name);   /* d+0x268e */
+}
+
+/* 0x128a5. Relabels two menu items for a game that is now in progress: the main
+ * menu's first item becomes BACK TO IT_, and PLAY DUCKS' first becomes RETRY
+ * LEVEL or PLAY NEXT LEVEL depending on whether the last one was finished. Its
+ * action changes with it, from "start a new game" to "carry on". */
+void far menus_resume(void)
+{
+    menu_idle_suppress = 1;                        /* a game is in progress */
+    menu_set_text(&main_menu.item[0], menu_text[3]);       /* "BACK TO IT_" */
+    menu_play.item[0].action = 2;
+    menu_set_text(&menu_play.item[0],
+                  g_21a3 ? menu_text[6]            /* "PLAY NEXT LEVEL" */
+                         : menu_text[5]);          /* "RETRY LEVEL" */
+}
+
+/* 0x12916. Ten eight-byte records at d+0x205d, and only the first word of each
+ * is read. Where one matches, a text page is shown - the same page every time,
+ * so this is a "you have seen this before" gate rather than a lookup.
+ *
+ * TODO: what fills d+0x205d has not been read, so the records are a byte array
+ * here rather than a type. */
+void far save_note(int16_t serial)
+{
+    uint8_t i;
+
+    for (i = 0; i < 10; i++)
+        if (((int16_t far *) g_205d)[i * 4] == serial)
+            egg_load_one(0xfa, 0x48, 0xff);
+}
+
+/* --------------------------------------------- 0x12b6a: the name entry
+ *
+ * Typing a save's name, drawn as one more line of the menu that is still on
+ * screen behind it - which is why the save screen hands its menu back without
+ * letting go of the backdrop, and why the freeing at the end of this is the
+ * freeing run_screen would otherwise have done.
+ *
+ *   buf     the text, always ending in a '`' that stands in for the cursor
+ *   row     which line of the menu to draw it on
+ *   escape  whether ESC abandons it. Returns zero only when it did.
+ */
+int16_t far name_entry(char far *buf, int16_t row, int16_t escape)
+{
+    int16_t ok = 1;
+    int16_t plane;
+
+    for (;;) {
+        outp(0x3c8, 0);                            /* entry 0 black, every frame */
+        outp(0x3c9, 0);
+        outp(0x3c9, 0);
+        outp(0x3c9, 0);
+        colour_cycle = (colour_cycle + 1) & 0xf;
+        input_poll(0x140, 0xc8);
+
+        if (fade_direction != -1 && last_key > 0 && last_key < 0x100) {
+            uint8_t n = (uint8_t) strlen(buf);
+
+            last_key = toupper(last_key);          /* 0:0x184f */
+
+            if (last_key == 0x0d) {                /* accept */
+                if (n > 1) {
+                    fade_direction = -1;
+                    buf[n - 1] = 0;                /* drop the cursor */
+                    sound_play_guarded(3, 1);
+                } else {
+                    sound_play_guarded(0x17, 1);   /* nothing typed yet */
+                }
+            } else if (last_key == 8) {            /* backspace */
+                if (n > 1) {
+                    buf[n - 2] = '`';
+                    buf[n - 1] = 0;
+                    sound_play_guarded(8, 1);
+                } else {
+                    sound_play_guarded(0x17, 1);
+                }
+            } else if (last_key == 0x1b && escape) {
+                fade_direction = -1;
+                ok = 0;
+                sound_play_guarded(0x0f, 1);
+            } else {
+                /* Only what the large font has a sprite for. */
+                static const char allowed[] =
+                    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ,.!'-?/:";   /* d+0x26cd */
+                const char far *p;
+                int16_t         found = 0;
+
+                for (p = allowed; *p; p++)
+                    if (*p == last_key) {
+                        found = 1;
+                        break;
+                    }
+                if (!found) {
+                    sound_play_guarded(0x17, 1);
+                } else if (n < 0x14) {             /* twenty characters, no more */
+                    buf[n - 1] = (char) last_key;
+                    buf[n]     = '`';
+                    buf[n + 1] = 0;
+                    sound_play_guarded(0x12, 1);
+                }
+            }
+        }
+
+        draw_banner(buf, &menu_sprites,
+                    menu_top + row * 8 + row * 16 + 0x2a, &backdrop, 0,
+                    settings[4] ? bounce_table[colour_cycle] : bounce_table[2]);
+
+        for (plane = 0; plane < 4; plane++) {
+            set_plane((uint8_t) plane);
+            compose_layer();
+        }
+        page_flip();
+        palette_fade_step(0);
+
+        if (fade_level == 0)
+            break;
+    }
+
+    resource_release(&background);
+    resource_release(&backdrop);
+    sprite_set_free(&menu_sprites);
+    set_buffer(default_buffer);
+    return ok;
+}
+
+/* ------------------------------------------------- 0x12951: load_game_screen
+ *
+ * Returns non-zero when a game was actually loaded, and everything after the
+ * menu is the file: the name, the egg it belongs to, three words, four bytes.
+ */
+int16_t far load_game_screen(void)
+{
+    menu_t      m;
+    item_t far *r;
+    int16_t     chosen;
+    FILE far   *fp;
+    char far   *id;
+    char far   *name;
+    int16_t     loaded = 0, v12 = 0;
+    uint8_t     c;
+
+    menu_reset(&m);
+    menu_add_title(&m, menu_text[34]);             /* "LOAD SAVED GAME" */
+    add_save_slots(&m, 0);
+    menu_add_action(&m, menu_text[33], 0x0f, &menu_always, 0);   /* "CANCEL" */
+    m.background = 0x11;
+
+    r = menu_screen_driver(&m, &chosen, 1);
+    if (r->action == 0x0f)
+        goto done;
+
+    save_name[4] = (char) ('0' + r->param);
+    fp = fopen(save_name, "rb");
+    if (!fp)
+        goto done;
+
+    /* The header doubles as a version stamp: a '2' anywhere in it means the file
+     * has the extra field v1.2 added at the end. */
+    do {
+        c = (uint8_t) fgetc(fp);
+        if (c == '2')
+            v12 = 1;
+    } while (c);
+
+    free(egg_read_string(fp));                     /* the slot's name, shown in
+                                                    * the menu and not needed
+                                                    * again */
+    id   = egg_read_string(fp);
+    name = egg_read_string(fp);
+    find_egg_by_id(id, name);
+    shareware_limit = egg_files[episode_egg_index].limit;
+    free(id);
+    free(name);
+
+    save_serial     = egg_read_word(fp);
+    g_2036          = egg_read_word(fp);
+    g_201c          = egg_read_word(fp);
+    level_attempted = fgetc(fp);
+    lives           = fgetc(fp);
+    g_21a3          = fgetc(fp);
+    if (v12)
+        g_1ffa      = fgetc(fp);
+
+    menus_resume();
+    loaded = 1;
+    save_note(save_serial);
+    fclose(fp);
+
+done:
+    menu_free(&m);
+    return loaded;
+}
+
+/* ------------------------------------------------- 0x13298: save_game_screen
+ *
+ * The mirror of it, with the name entry in the middle. The menu is run with
+ * `owns` clear so the backdrop survives it, the chosen item's text becomes the
+ * starting point for what is typed, and a '`' is stuck on the end as the cursor.
+ */
+void far save_game_screen(void)
+{
+    menu_t      m;
+    char        typed[0x16];
+    item_t far *r;
+    int16_t     chosen;
+    FILE far   *fp;
+
+    menu_reset(&m);
+    menu_add_title(&m, menu_text[35]);             /* "SAVE THIS GAME" */
+    add_save_slots(&m, 1);
+    menu_add_action(&m, menu_text[33], 0x0f, &menu_always, 0);   /* "CANCEL" */
+    m.background = 7;
+
+    r = menu_screen_driver(&m, &chosen, 0);
+    if (r->action == 0x0f)
+        goto done;
+
+    strcpy(typed, m.item[chosen].text);
+    strcpy(typed + strlen(typed), "`");            /* d+0x2741 - the cursor */
+
+    if (!name_entry(typed, chosen, 1)) {
+        show_splash(menu_text[38], 100);           /* "SAVE ABORTED" */
+        goto done;
+    }
+
+    save_name[4] = (char) ('0' + r->param);
+    fp = fopen(save_name, "wb");
+    if (!fp) {
+        show_splash(menu_text[37], 100);           /* "ERROR SAVING" */
+        goto done;
+    }
+
+    fputs("Ducks Saved Game v1.2", fp);            /* d+0x2746 */
+    fputc(0, fp);
+    write_string(fp, typed);
+    write_string(fp, egg_files[episode_egg_index].id);
+    write_string(fp, egg_files[episode_egg_index].name);
+
+    if (save_serial == 0)                          /* a slot that had none */
+        save_serial = ++max_save_value;
+
+    write_word(save_serial, fp);
+    write_word(g_2036, fp);
+    write_word(g_201c, fp);
+    fputc(level_attempted, fp);
+    fputc(lives, fp);
+    fputc(g_21a3, fp);
+    fputc(g_1ffa, fp);
+    fclose(fp);
+
+done:
+    menu_free(&m);
 }
 
 /* ------------------------------------------------- 0x13fea: scan_save_slots
