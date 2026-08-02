@@ -3260,7 +3260,7 @@ int16_t far load_settings(void)
     FILE     *fp;
     int16_t   old = 1;                             /* di */
     int16_t   i;
-    uint8_t   c;
+    int       n;
 
     max_save_value = 0;
     fp = fopen(settings_name, "rb");
@@ -3268,10 +3268,10 @@ int16_t far load_settings(void)
         return 0;
 
     do {
-        c = (uint8_t) fgetc(fp);
-        if (c == '!')
+        n = fgetc(fp);
+        if (n == '!')
             old = 0;
-    } while (c);
+    } while ((uint8_t) n);
     if (old)
         printf("Old %s format! Converting file...\n\n", settings_name);
 
@@ -3289,9 +3289,15 @@ int16_t far load_settings(void)
         for (i = 0; i < 3; i++)
             button_map[i] = fgetc(fp);
     }
-    /* Three bytes, or two on the old format. */
-    for (i = 0; i < 3 - old; i++)
-        ((uint8_t *) &g_1fd3)[i] = (uint8_t) fgetc(fp);
+    /* Three bytes, or two on the old format. The original reads them as one run
+     * from d+0x1fd3 because they are adjacent there; here they are three
+     * variables and taking the address of the first does not reach the others -
+     * it writes two bytes past a one-byte object, which is what a zero-length
+     * settings.dat turned into a heap assertion. */
+    g_1fd3     = (uint8_t) fgetc(fp);              /* 0x1fd3 */
+    game_speed = (uint8_t) fgetc(fp);              /* 0x1fd4 */
+    if (!old)
+        gamma_level = (uint8_t) fgetc(fp);         /* 0x1fd5 */
 
     registered = fgetc(fp);                        /* 0x0548 */
     if (registered) {
@@ -3338,11 +3344,11 @@ void far save_settings(void)
                                                             * original writes as
                                                             * one run */
     for (i = 0; i < 3; i++)  fputc(button_map[i], fp);     /* 0x20e4 */
-    for (i = 0; i < 3; i++)  fputc(((uint8_t *) &g_1fd3)[i], fp);
-                                                   /* 0x1fd3, 0x1fd4, 0x1fd5:
-                                                    * three bytes - the middle one
-                                                    * is game_speed and the last
-                                                    * is gamma */
+    fputc(g_1fd3, fp);                             /* 0x1fd3, 0x1fd4, 0x1fd5 -
+                                                    * one run in the original,
+                                                    * three variables here */
+    fputc(game_speed, fp);
+    fputc(gamma_level, fp);
     fputc(registered, fp);                         /* 0x1415e */
     if (registered) {
         write_string(fp, owner_name);
@@ -3350,7 +3356,11 @@ void far save_settings(void)
     }
     for (i = 0; i < 10; i++) {                     /* the hall of fame */
         write_word(score_table[i].score, fp);
-        write_string(fp, score_table[i].name);
+        /* A row that was never set. The original writes it as it stands - a far
+         * NULL there is read as a string out of the interrupt table rather than
+         * faulting - and with a settings.dat to load it never happens. Here it
+         * has to be something, and an empty row reads back as one. */
+        write_string(fp, score_table[i].name ? score_table[i].name : "");
         write_word(score_table[i].serial, fp);
     }
     fclose(fp);
