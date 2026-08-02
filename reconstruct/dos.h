@@ -47,15 +47,19 @@ typedef struct {
     uint8_t far *pixels;        /* +4 */
 } glyph_t;
 
-/* A sprite, 14 bytes in the original. */
+/* A sprite, 14 bytes in the original. The origin is subtracted from where it is
+ * asked to draw, so a letter's box can start left of its pen position. */
 typedef struct {
     int16_t       w, h;         /* +0x00, +0x02 */
     int16_t       ox, oy;       /* +0x04, +0x06 - origin */
-    uint8_t far  *pixels;       /* +0x0a */
+    int16_t       unused;       /* +0x08 - nothing read or written here yet */
+    uint8_t far  *pixels;       /* +0x0a - row-major, one byte a pixel */
 } sprite_t;
 
+/* A set of them: the header sprite_set_load fills and sprite_set_free empties. */
 typedef struct {
-    sprite_t far *base;         /* +0x02/+0x04 in the original header */
+    int16_t       count;        /* +0x00 */
+    sprite_t far *base;         /* +0x02 */
 } table_t;
 
 /* A menu descriptor: game_main's argument, and what action 18 swaps. run_screen
@@ -181,6 +185,21 @@ extern uint8_t    tool_names_count;  /* 0x210a */
 
 void far load_string_table(uint8_t index, char far ***table, uint8_t far *count,
                            const char far *missing, uint8_t egg);
+
+/* The large font: a sprite set, reached through charmap rather than by
+ * character code. See game.c for what the pixel values mean. */
+extern uint8_t charmap[256];        /* 0x17c1 */
+
+void far build_charmap(void);
+void far sprite_alloc(sprite_t far *s);
+void far sprite_set_load(uint8_t index, uint8_t type, table_t far *table,
+                         int16_t egg);
+void far sprite_set_free(table_t far *table);
+void far sprite_to_image(int16_t x, int16_t y, sprite_t far *s,
+                         desc_t far *desc, uint8_t colour);
+void far image_alloc(desc_t far *desc, int16_t w, int16_t h);
+void far draw_banner(const char far *s, table_t far *set, int16_t y,
+                     desc_t far *desc, uint8_t colour, uint8_t spacing);
 void far load_string_tables(void);
 
 /* the four remaining cutscene screens, in game.c */
@@ -195,7 +214,7 @@ void far draw_number(int16_t value, int16_t x, int16_t y, viewport_t far *clip,
 void far draw_number2(int16_t value, int16_t digits, int16_t x, int16_t y);
 void far particles(void);
 void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour);
-void far show_splash(void far *image, int16_t frames);
+void far show_splash(const char far *text, int16_t frames);
 void far show_resource(uint8_t type, uint8_t index, int16_t frames, int16_t x);
 void far show_resource_loop(desc_t far *desc, int16_t frames);
 void far close_egg_files(void);
@@ -261,6 +280,8 @@ void far fatal(const char far *msg, const char far *arg);
 extern char far *out_of_memory;
 void far resource_release(void far *d);
 void far set_buffer(void far *p);
+void far buffer_init(void);
+extern uint8_t default_buffer[768];
 void far sound_play_guarded(int16_t id, int16_t mode);
 void far release_sounds(void);
 void far sound_init(int16_t rate);
@@ -280,18 +301,14 @@ void egg_bringup_open(void);
 void far f_04dcd(int16_t n);
 void far f_056f7(int16_t n);
 void far f_0615a(int16_t a, int16_t b, void far *c, int16_t d);
-void far f_088b3(void far *p);
 void far f_088fa(void);
 void far f_09329(void);
-void far f_0b5cf(void far *img, void far *loc, int16_t a, void far *b,
-                 int16_t c, int16_t d);
 void far f_0becb(void);
 void far f_0f55c(void);
 void far f_0f8bd(void);
 void far f_11bee(void far *name, int16_t egg);
 void far f_147c5(int16_t a, int16_t b, int16_t c);
 void far f_15388(void far *o);
-void far loc(void);
 
 extern int16_t previous_type, particle_count;
 extern particle_t far *particle_array;

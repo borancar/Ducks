@@ -74,7 +74,11 @@ viewport_t viewport_game;        /* ds:0x172d - the in-game scenes' clip */
 viewport_t viewport_panel;       /* ds:0x1741 - the bottom 40 rows */
 viewport_t viewport_full;        /* ds:0x1755 - everything */
 viewport_t viewport_screen;      /* ds:0x1769 - the centred 320x200 window */
-void far  *default_buffer;       /* ds:0x13f1 - what set_buffer restores */
+/* ds:0x13f1 - not a pointer but the buffer itself: every set_buffer that
+ * "restores" pushes ds and this offset, so it is the palette area everything
+ * falls back to when nobody has published a buffer of their own. 768 bytes,
+ * which is what palette_build reads out of it. */
+uint8_t    default_buffer[768];
 /* Written by set_mode_x, set_plane and page_flip, all of which are in dos_io.c,
  * so that is where these are defined. Declared here because game.c reads them:
  * show_splash centres its rect with screen_x0, particles plots through `plot`. */
@@ -157,6 +161,37 @@ uint8_t  g_18f5, g_1fd3;        /* both byte-sized on every access */
 int16_t  g_201c;                /* compared with jle, so signed */
 uint16_t g_2036;                /* compared with jb, so unsigned */
 int16_t  g_21a3;
+
+/* ---------------------------------------------------- the second, larger font
+ *
+ * The banners - PRESENTS, UNREGISTERED, EPISODE COMPLETED! - are not drawn with
+ * the glyph font. They come from a sprite set, 47 sprites in the egg's 'S' block
+ * 1, and a character reaches its sprite through charmap rather than by its own
+ * code: charmap is built from a string that lists the characters in sprite order.
+ *
+ * A sprite's bytes are not colours either. The low nibble is a priority and the
+ * drawer keeps whichever pixel has the greater one, which is what lets these
+ * letters be kerned so tightly that their boxes overlap by a quarter of their
+ * width without one letter's outline eating into the previous letter's face.
+ */
+
+uint8_t charmap[256];            /* 0x17c1 - character -> sprite index */
+
+/* d+0x21f8. The order the sprites are in. 27 is '?', which is what an unlisted
+ * character maps to, and there is no '0' in it - see below. */
+static const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ/?:-_ !'123,987465`.x";
+
+/* 0x04cba */
+void far build_charmap(void)
+{
+    int16_t i;
+
+    for (i = 0; i < 0x100; i++)
+        charmap[i] = 0x1b;                       /* everything is '?' */
+    for (i = 0; charset[i]; i++)
+        charmap[(uint8_t) charset[i]] = (uint8_t) i;
+    charmap['0'] = charmap['O'];                 /* 0x04cfc: a zero is an O */
+}
 
 /* ------------------------------------------------ 0x051b7: close_egg_files */
 void far close_egg_files(void)
@@ -244,6 +279,61 @@ int16_t far resource_load(desc_t far *desc, uint8_t type, uint8_t index,
     return resource_load_full(desc, 1, type, index, pal_at, arg18, arg1a);
 }
 
+/* 0x06110. The pixels for one sprite, w*h of them. */
+void far sprite_alloc(sprite_t far *s)
+{
+    s->pixels = malloc((size_t) s->w * s->h);
+    if (!s->pixels)
+        fatal(out_of_memory, NULL);
+}
+
+/* --------------------------------------------- 0x0615a: sprite_set_load
+ *
+ * A whole set: a big-endian count, then each sprite as width, height, origin x,
+ * origin y and its pixels, then a palette slice - a count, a first index, and
+ * three bytes each - written into the current buffer.
+ *
+ * The two nested loops in the original count to width*height while the
+ * destination pointer runs straight through the buffer, so their nesting says
+ * nothing about the layout; only the drawer does, and it walks rows.
+ *
+ * It looks in the shared egg first and only then in the one the caller names.
+ */
+void far sprite_set_load(uint8_t index, uint8_t type, table_t far *table,
+                         int16_t egg)
+{
+    int16_t i, n, first;
+
+    if (!egg_find_block(type, index, 0xff) && !egg_find_block(type, index, egg))
+        fatal("Sprite section missing", NULL);    /* ds:0x22d4 */
+
+    table->count = egg_read_word(egg_stream);
+    table->base  = malloc((size_t) table->count * sizeof(sprite_t));
+    if (!table->base)
+        fatal(out_of_memory, NULL);
+
+    for (i = 0; i < table->count; i++) {
+        sprite_t far *s = &table->base[i];
+        int32_t       k, pixels;
+
+        s->w = egg_read_byte(egg_stream);
+        s->h = egg_read_byte(egg_stream);
+        sprite_alloc(s);
+        s->ox = egg_read_byte(egg_stream);
+        s->oy = egg_read_byte(egg_stream);
+
+        pixels = (int32_t) s->w * s->h;
+        for (k = 0; k < pixels; k++)
+            s->pixels[k] = egg_read_byte(egg_stream);
+    }
+
+    n     = egg_read_byte(egg_stream);
+    first = egg_read_byte(egg_stream) * 3;
+    for (i = 0; i < n * 3; i++)
+        ((uint8_t far *) current_buffer)[first + i] = egg_read_byte(egg_stream);
+    egg_block_end();
+}
+
 /* ------------------------------------------------------ 0x06869: input_poll
  *
  * Takes the resolution because the game keeps the cursor position itself: INT 33h
@@ -292,6 +382,54 @@ void far input_poll(int16_t w, int16_t h)
     if (mouse_y < 0)                mouse_y = 0;
 }
 
+/* -------------------------------------------------- 0x0713e: sprite_to_image
+ *
+ * One sprite into a descriptor, clipped against it. The pixel is kept only if
+ * its low nibble is at least the low nibble of what is already there, and the
+ * caller's colour is added to what gets stored - a bank in the high nibble,
+ * shifted up by the banner code before it calls in.
+ *
+ * The clipping is done by adjusting where the source starts and how much to
+ * skip at the end of each row, not by testing every pixel.
+ */
+void far sprite_to_image(int16_t x, int16_t y, sprite_t far *s,
+                         desc_t far *desc, uint8_t colour)
+{
+    int32_t at   = 0;                /* di - where we are in the sprite */
+    int16_t skip = 0;                /* [bp-4] - dropped at each row's end */
+    int16_t x1, y1, row, col;
+
+    x -= s->ox;
+    y -= s->oy;
+    x1 = x + s->w;
+    y1 = y + s->h;
+
+    if (x < 0) {                     /* off the left: start further in */
+        skip -= x;
+        at   -= x;
+        x     = 0;
+    } else if (desc->w < x1) {       /* off the right: stop short */
+        skip += x1 - desc->w;
+        x1    = desc->w;
+    }
+    if (y < 0) {                     /* off the top: skip whole rows */
+        at -= (int32_t) y * s->w;
+        y   = 0;
+    } else if (desc->h < y1) {
+        y1 = desc->h;
+    }
+
+    for (row = y; row < y1; row++) {
+        for (col = x; col < x1; col++) {
+            uint8_t c = s->pixels[at++];
+
+            if (c && (c & 0x0f) >= (desc->rows[row][col] & 0x0f))
+                desc->rows[row][col] = c + colour;
+        }
+        at += skip;
+    }
+}
+
 /* ------------------------------------------------------- 0x0881d: make_rect
  *
  * Fill a viewport from its four edges. The width and height are derived rather
@@ -312,6 +450,24 @@ void far make_rect(viewport_t far *r, int16_t top, int16_t bottom,
     r->scroll_y = 0;
     r->width    = right - left;      /* 0x0886b: cx - dx */
     r->height   = bottom - top;      /* 0x08876: di - si */
+}
+
+/* 0x08885. Sets a descriptor's size and allocates its rows. */
+void far image_alloc(desc_t far *desc, int16_t w, int16_t h)
+{
+    desc->w = w;
+    desc->h = h;
+    alloc_image(desc, 0, 0, 0, 1);                 /* 0x05388 */
+}
+
+/* 0x088b3. Frees a sprite set: every sprite's pixels, then the records. */
+void far sprite_set_free(table_t far *table)
+{
+    int16_t i;
+
+    for (i = 0; i < table->count; i++)
+        free(table->base[i].pixels);
+    free(table->base);
 }
 
 /* -------------------------------------------------- 0x093fb: load_string_table
@@ -604,6 +760,48 @@ void far draw_string(desc_t far *desc, const char far *s, int16_t x, int16_t y)
     }
 }
 
+/* -------------------------------------------------------- 0x0b5cf: draw_banner
+ *
+ * A line of the large font into a descriptor, centred. The layout is done in the
+ * planar unit rather than in pixels - a byte spans four pixels across the four
+ * planes, so a width becomes (width - origin) * 4, the spacing is subtracted in
+ * those same units, and the running position is divided by four on the way into
+ * the drawing call.
+ *
+ * The spacing arrives one greater than it is used, and the colour arrives as a
+ * bank number that is shifted into the high nibble here, so the drawing itself
+ * needs neither adjustment.
+ */
+void far draw_banner(const char far *s, table_t far *set, int16_t y,
+                     desc_t far *desc, uint8_t colour, uint8_t spacing)
+{
+    int16_t width = 0;               /* [bp-2], in the planar unit */
+    int16_t at, i;
+
+    spacing = (uint8_t) (spacing - 1);             /* 0x0b5dc */
+    colour  = (uint8_t) (colour << 4);             /* 0x0b5e4 */
+
+    for (i = y - 0x12; i < y + 6; i++)             /* the 24 rows it owns */
+        memset(desc->rows[i], 0, (size_t) desc->w);
+
+    for (i = 0; s[i]; i++) {
+        sprite_t far *g = &set->base[charmap[(uint8_t) s[i]]];
+
+        width += (g->w - g->ox) * 4 - spacing;
+    }
+
+    /* 0x0b684. Centred, still in planar units, less half the spacing so the
+     * kerning that follows the last letter does not push the line off-centre. */
+    at = ((desc->w + 4 - (width >> 2)) << 1) - (spacing >> 1);
+
+    for (i = 0; s[i]; i++) {
+        sprite_t far *g = &set->base[charmap[(uint8_t) s[i]]];
+
+        sprite_to_image(at >> 2, y, g, desc, colour);
+        at += (g->w - g->ox) * 4 - spacing;
+    }
+}
+
 /* ---------------------------------------------------- 0x0b7c3: load_text_page
  *
  * A whole page of text drawn into a descriptor: the readme sections, the
@@ -848,20 +1046,26 @@ void far cutscene_photos(void)
 
 /* ------------------------------------------------------- 0x102d7: show_splash
  *
- * (image, frames): fade an image in, hold for `frames` or until a key, fade out.
- * Holds a four-plane loop of its own. main's first call draws nothing, and that
- * is correct - the source is an allocated but empty 320x24 bitmap.
+ * (text, frames): a line of the large font faded in, held for `frames` or until
+ * a key, faded out. Holds a four-plane loop of its own.
+ *
+ * It takes a *string*, not a picture: it loads the banner sprite set, lays the
+ * line out into a 320x24 image of its own and shows that. main's first call
+ * draws nothing because the string it passes, at d+0x28ff, is empty - which is
+ * what the four blank planes seen in that frame were.
  */
-void far show_splash(void far *image, int16_t frames)
+void far show_splash(const char far *text, int16_t frames)
 {
     viewport_t  a;
     desc_t      b;
+    table_t     set;
     int16_t    si = 0, di = frames, plane;
 
     make_rect(&a, 80, 104, screen_x0, screen_x0 + 320);   /* centred */
-    b.w = 320;  b.h = 24;              /* the banner's own size */
-    f_0615a(1, 0x53, &loc, 0xff);  f_056f7(0);
-    f_0b5cf(image, &loc, 0x12, &b, 0, 0x1c);       /* decodes it into b */
+    image_alloc(&b, 320, 24);                      /* 0x08885 */
+    sprite_set_load(1, 0x53, &set, 0xff);          /* 0x0615a - the large font */
+    f_056f7(0);
+    draw_banner(text, &set, 0x12, &b, 0, 0x1c);    /* 0x0b5cf */
     clear_vram();
     fade_direction = 1;  fade_start_colour = 0;
     do {
@@ -876,7 +1080,7 @@ void far show_splash(void far *image, int16_t frames)
         page_flip();
         palette_fade_step(0);
     } while (fade_level != 0);
-    resource_release(&b);  f_088b3(&loc);
+    resource_release(&b);  sprite_set_free(&set);
 }
 
 /* ------------------------------------------------ 0x11c75: episode_end_gate
@@ -1154,6 +1358,8 @@ void far init(void)
         ((desc_t far *) init_objects[i])->h = 15;
         f_15388(init_objects[i]);
     }
+    buffer_init();                                 /* bring-up: see stubs.c */
+    build_charmap();                               /* 0x143e5 */
     font_load();                                   /* 0x143e9 - the one 'F'
                                                     * block, before anything
                                                     * has any words to draw */
