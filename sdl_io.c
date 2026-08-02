@@ -143,9 +143,16 @@ void far set_plane(uint8_t plane)
     current_plane = plane & 3;
 }
 
+/* Both pages, which is what the original does even though it looks like one
+ * screen's worth: 0xfa00 bytes with the map mask opened to all four planes is
+ * 64000 * 4 = 256,000 bytes, the whole of VRAM. Clearing only the page being
+ * drawn into leaves the other holding the last picture, and page_flip then
+ * alternates black and stale - which is exactly what a splash with no image of
+ * its own does, because it draws nothing over either. */
 void far clear_vram(void)
 {
-    memset(fb_back, 0, (size_t) screen_width * screen_height);
+    memset(page_a, 0, sizeof page_a);
+    memset(page_b, 0, sizeof page_b);
 }
 
 /* --------------------------------------------------------------- video: DAC */
