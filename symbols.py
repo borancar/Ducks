@@ -143,7 +143,11 @@ FUNCTIONS = {
     0x12951: "load_game_screen",        # code 6: LOAD SAVED GAME, listing slots
     0x13096: "register_screen",         # code 14: REGISTER DUCKS, ENTER YOUR NAME
     0x13298: "save_game_screen",        # code 5: SAVE THIS GAME, the five slots
-    0x11547: "print_newline?",          # no args, bracketing the banners
+    0x11547: "console_rule",            # a newline and eighty dashes: the rule
+                                        # between the startup screen's sections
+    0x1157A: "read_index",              # (array, start, &total, egg, store):
+                                        # the reader both the episode and the
+                                        # readme index are filled by
     0x11D54: "high_score_screen",       # both halves of it: NEW HIGH SCORE!
                                         # ENTER YOUR NAME, then DUCKS HALL OF
                                         # FAME, each seen on the stack under the
