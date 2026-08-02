@@ -81,10 +81,12 @@ worth having as source.
 | file | contents so far |
 | --- | --- |
 | [`dos.h`](dos.h) | the types and the interface both backends implement, so `game.c` does not know which it is linked against |
-| [`game.c`](game.c) | twenty-two functions: `close_egg_files`, `resource_load_full`, `resource_load`, `input_poll`, `make_rect`, `particles`, `draw_entities`, `show_resource_loop`, `draw_number`, `egg_load_all`, `show_resource`, `draw_number2`, `cutscene_welcome_home`, `cutscene_photos`, `show_splash`, `episode_end_gate`, `menu_screen_driver`, `game_main`, `scan_save_slots`, `save_settings`, `init`, `main` |
+| [`game.c`](game.c) | 96 functions - `main` and `init`, the resource and string loaders, the two fonts, the whole menu system and every screen it reaches, the save format, the hall of fame, and the first pieces of the gameplay. Naming them all here would rot; they are in address order in the file and in `symbols.py` |
 | [`dos_io.c`](dos_io.c) | nineteen functions: `set_bios_mode`, mode, planes, DAC, page flip, the three INT 33h wrappers, and every drawing primitive the native port replaced - `clear_vram`, `plot_pixel` and its stride-90 twin, `palette_fade_step`, `blit_rows`, `blit_rows_masked`, `compose_layer`, `compose_scroll`, `draw_sprite`, `outline_sprite`. No TODOs left in this file |
 | [`sound.c`](sound.c) | the sound module, code segments 0x1462 and 0x149e: the id-to-sample map, the eight-voice table, and the mixer. A sample lives in extended memory in the original and in a `malloc` here, which is the only difference that matters - the game asks about sounds by id either way |
-| [`sdl_io.c`](sdl_io.c) | the same interface on SDL3: a linear framebuffer, an SDL palette, a 70 Hz deadline in place of the retrace spin, and SDL events counted into the INT 33h wrappers' shape. **Compiles** - `cc -c sdl_io.c $(pkg-config --cflags sdl3)` |
+| [`sdl_io.c`](sdl_io.c) | the same interface on SDL3: a linear framebuffer, an SDL palette, a 70 Hz deadline in place of the retrace spin, SDL events counted into the INT 33h wrappers' shape, the mouse capture, and the audio device the mixer feeds |
+| [`egg.c`](egg.c) | the egg reader: the directory, `egg_find_block`, the chunk decoder and the shifted-string reader. The port maps the file and walks it with a cursor where the original seeks a `FILE *`, which is why the readers take a stream and treat NULL as the egg |
+| [`stubs.c`](stubs.c) | what is left: 25 declarations, and the list is the to-do list in dependency order. `in_game_frame` is the large one, deliberately a no-op that reports "the run ended" |
 
 `game.c` keeps its functions in **address order**, which within a module is the
 order the compiler emits them and therefore the order they were defined in - a
@@ -94,8 +96,10 @@ the address space, which is a reminder that this split is ours and the original
 had one module here, or several we cannot see.
 
 Still missing and worth adding as they are read: the in-game frame at `0x0d7ee`
-with the four plane loops inside it, the other four cutscene screens, and
-`high_score_screen`.
+with two of the four plane loops inside it, the 44 routines under it that are not
+ported yet, and the four remaining cutscene screens.
+[in-game-frame](../docs/notes/in-game-frame.md) has the shape of that work and
+the order to take it.
 
 **Where a body came from native.py rather than from the disassembly, the comment
 says so.** Those natives are byte-compared against the original on every call, so
@@ -178,13 +182,19 @@ cd reconstruct && make        # -> ./ducks, against SDL3
 make run
 ```
 
-`game.c` + `sdl_io.c` + `stubs.c`. Link `dos_io.c` in place of `sdl_io.c` and the
-same game would talk to a VGA - that swap is the whole point of the split, and the
-fact that it compiles either way is the first real check that the line was drawn
-in the right place.
+`game.c` + `sdl_io.c` + `stubs.c` + `egg.c` + `sound.c`. Link `dos_io.c` in place
+of `sdl_io.c` and the same game would talk to a VGA - that swap is the whole point
+of the split, and the fact that it compiles either way is the first real check
+that the line was drawn in the right place.
 
-**It is not the game yet.** Most of the segment is unread, and `stubs.c` is the
-list of what. `in_game_frame` is deliberately a no-op returning "the run ended",
+`make lib` builds the same sources as `libducks.so`, so a harness can call one
+function out of the port and compare it against the guest's own bytes under
+Unicorn - see `test_toollist.py`. The emulator stays outside the port and the two
+do not share memory: `far` is nothing here and a pointer is eight bytes, so only
+`viewport_t` has the same layout on both sides.
+
+**It is not the game yet.** About a third of the segment is unread, and `stubs.c`
+is the list of what. `in_game_frame` is deliberately a no-op returning "the run ended",
 so `game_main`'s inner loop falls through to the screens either side of it - the
 menus are what this is for at the moment, not the gameplay.
 
@@ -212,6 +222,10 @@ only offered while a game is in progress, so it needs gameplay to reach honestly
 Leave the menu alone for a while and the hall of fame comes up on its own, read
 out of `settings.dat` at startup and written back on the way out.
 
-The menus are complete: the sliders, REGISTER DUCKS and the hall of fame all
-work, and every action code `game_main` switches on now reaches something real
-except the ones that lead into the game itself.
+The menus are complete - the sliders, REGISTER DUCKS and the hall of fame all
+work, and every action code `game_main` switches on reaches something real except
+the ones that lead into the game itself. That state is tagged `menu-done`.
+
+Sound works: 87 samples by id out of the egg's `0x58` blocks, eight voices, and
+the original's additive mixer feeding an SDL device at the rate the game asks
+for.
