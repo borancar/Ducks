@@ -86,7 +86,7 @@ worth having as source.
 | [`sound.c`](sound.c) | the sound module, code segments 0x1462 and 0x149e: the id-to-sample map, the eight-voice table, and the mixer. A sample lives in extended memory in the original and in a `malloc` here, which is the only difference that matters - the game asks about sounds by id either way |
 | [`sdl_io.c`](sdl_io.c) | the same interface on SDL3: a linear framebuffer, an SDL palette, a 70 Hz deadline in place of the retrace spin, SDL events counted into the INT 33h wrappers' shape, the mouse capture, and the audio device the mixer feeds |
 | [`egg.c`](egg.c) | the egg reader: the directory, `egg_find_block`, the chunk decoder and the shifted-string reader. The port maps the file and walks it with a cursor where the original seeks a `FILE *`, which is why the readers take a stream and treat NULL as the egg |
-| [`stubs.c`](stubs.c) | what is left: 25 declarations, and the list is the to-do list in dependency order. `in_game_frame` is the large one, deliberately a no-op that reports "the run ended" |
+| [`stubs.c`](stubs.c) | what is left: 25 declarations, and the list is the to-do list in dependency order. `run_level` is the large one, deliberately a no-op that reports "the run ended" |
 
 `game.c` keeps its functions in **address order**, which within a module is the
 order the compiler emits them and therefore the order they were defined in - a
@@ -98,7 +98,7 @@ had one module here, or several we cannot see.
 Still missing and worth adding as they are read: the in-game frame at `0x0d7ee`
 with two of the four plane loops inside it, the 44 routines under it that are not
 ported yet, and the four remaining cutscene screens.
-[in-game-frame](../docs/notes/in-game-frame.md) has the shape of that work and
+[run_level](../docs/notes/run-level.md) has the shape of that work and
 the order to take it.
 
 **Where a body came from native.py rather than from the disassembly, the comment
@@ -194,7 +194,7 @@ do not share memory: `far` is nothing here and a pointer is eight bytes, so only
 `viewport_t` has the same layout on both sides.
 
 **It is not the game yet.** About a third of the segment is unread, and `stubs.c`
-is the list of what. `in_game_frame` is deliberately a no-op returning "the run ended",
+is the list of what. `run_level` is deliberately a no-op returning "the run ended",
 so `game_main`'s inner loop falls through to the screens either side of it - the
 menus are what this is for at the moment, not the gameplay.
 

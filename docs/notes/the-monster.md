@@ -18,8 +18,8 @@ gives this:
 | 487 | | scene 0's count drops 2 → 1; the record is gone |
 
 It happened twice in one run. The second kill, at clock 825, emptied scene 0 —
-which is one of `in_game_frame`'s four endings, so **the monster can end a
-level**.
+which is one of `run_level()`'s four endings, so **the monster can finish the
+level by itself**.
 
 ## The states are data, not code
 
@@ -41,7 +41,7 @@ saying what follows what. Whatever decides to *enter* `0x46` is elsewhere and
 still unread.
 
 `0x39` and `0x4b` have bit 2 set in `type_flags`, which
-[in-game-frame](in-game-frame.md) records as "has a mirrored script in the next
+[run_level](run-level.md) records as "has a mirrored script in the next
 slot" — so their facings come from the flag, while `0x46`/`0x47` are authored as
 two separate types. Two mechanisms for the same idea, in one actor.
 

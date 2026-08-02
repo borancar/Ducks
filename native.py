@@ -4475,7 +4475,7 @@ def native_scene_keep_positions(m, args):
     """0x0979f: remember where every entity in a scene was.
 
     Each record keeps its position twice - the live one at +0x00/+0x04 and a copy
-    at +0x0c/+0x10 - and this makes the copy. in_game_frame calls it on five of
+    at +0x0c/+0x10 - and this makes the copy. level calls it on five of
     the six scenes before anything moves, so what is at +0x0c is where the entity
     was when the frame began.
 
@@ -4611,7 +4611,7 @@ def native_entity_set_type(m, args):
 
     The guard is the point: type at +0x25 and frame at +0x1f, and setting the
     same type twice has to leave the frame alone or nothing would ever animate.
-    in_game_frame calls it once a frame on the duck.
+    level calls it once a frame on the duck.
     """
     off, seg, kind = struct.unpack("<HHh", m.uc.mem_read(args, 6))
     e = seg * 16 + off
@@ -4671,7 +4671,7 @@ def native_cursor_to_centre(m, args):
 def native_bg_scroll_reset(m, args):
     """0x0d6c3: start the background where it belongs and say which way it drifts.
 
-    in_game_frame's only caller. The level carries one byte at [0x202c] and it is
+    level's only caller. The level carries one byte at [0x202c] and it is
     two base-3 digits: the remainder gives the horizontal drift and the quotient
     the vertical, each of them 1 - digit, so each axis is one of +1, 0 or -1.
 
@@ -4833,7 +4833,7 @@ def native_scroll_axis_snap(m, args):
         scroll_axis_snap(long focus, long extent, long far *pos, int16_t span)
 
     scroll_axis_toward without the easing: *pos = clamp(focus - extent/2, 0,
-    span), and no mask, because there is nothing to converge to. in_game_frame
+    span), and no mask, because there is nothing to converge to. level
     calls it twice immediately after cursor_to_centre, which is how a level
     starts with the view already around the cursor rather than sliding to it.
 
@@ -5045,7 +5045,7 @@ NATIVE_TABLE = [
 # tool_events sat here written and unregistered for a day, on the belief that it
 # ran once at level start and no snapshot could reach it. Wrong twice over: it
 # runs every frame, and what no snapshot reached was the demo path, because
-# in_game_frame(1) is the only caller. Three demo captures fire it ~690 times
+# run_level(1) is the only caller. Three demo captures fire it ~690 times
 # each.
 
 # Enabled only with --native-sound. The whole family must go together: the game

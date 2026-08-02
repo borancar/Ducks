@@ -5,7 +5,7 @@
 the original on a real call, in a real state, and it needs no invented anything.
 What it cannot do is reach a case the run never takes. Loading the level 80
 snapshot and running twelve seconds calls three of the thirty routines under
-`in_game_frame`, and the one branch of `scroll_follow` it does take is a camera
+`run_level()`, and the one branch of `scroll_follow` it does take is a camera
 that has already converged - every call is a no-op, so the comparison holds no
 matter what the native does with the other axis. That is exactly the shape of a
 verification that passes while proving nothing.

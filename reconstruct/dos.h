@@ -321,7 +321,7 @@ int16_t far resource_load_full(desc_t far *desc, int16_t allocate,
                                uint8_t type, uint8_t index, int16_t pal_at,
                                int16_t bias_zero, int16_t row, int16_t opaque,
                                int16_t egg, int16_t arg1a);
-int16_t far episode_end_gate(int16_t level, int16_t egg);
+int16_t far episode_end_gate(int16_t number, int16_t egg);
 item_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b);
 
 /* ------------------------------------------------------------- the menus
@@ -397,7 +397,7 @@ uint8_t inp(uint16_t port);
 void far delay(int16_t ms);
 
 /* stubs.c, until each is read out - see that file for what they are */
-int16_t far in_game_frame(int16_t arg);
+int16_t far run_level(int16_t arg);
 item_t far *far run_screen(menu_t far *menu, void far *a, int16_t b);
 int16_t far egg_find_block(uint8_t type, uint8_t index, int16_t arg);
 int16_t far egg_read_word(void far *s);

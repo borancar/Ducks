@@ -1,4 +1,4 @@
-"""Walk the call graph under in_game_frame and report what does I/O.
+"""Walk the call graph under run_level() and report what does I/O.
 
 Per function: disassemble its extent (with the 8087 emulator's INT 34h..3Bh put
 back, or capstone desyncs), and record port I/O, software interrupts and far
@@ -62,7 +62,7 @@ while todo:
     todo.extend(calls)
 
 rows.sort()
-print("functions reachable from in_game_frame: %d" % len(rows))
+print("functions reachable from run_level(): %d" % len(rows))
 nport = nint = 0
 for a, ports, ints, fars in rows:
     if ports or ints:

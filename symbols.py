@@ -106,6 +106,11 @@ FUNCTIONS = {
     0x0A3A7: "scene_swap_pair",          # native
     0x0600D: "scroll_follow",            # native
     0x0B0C5: "palette_apply_gamma",      # native
+    0x0D7EE: "run_level",                # 4287 bytes, and not a frame: two
+                                        # thirds of it is one loop, so it is the
+                                        # whole of playing a level and returns
+                                        # when the level is over. One argument,
+                                        # non-zero for a demo
     0x0D4C2: "tool_events",              # native
     0x0D55D: "tool_list_has",            # native
     0x0D591: "tool_list_any_flagged",    # native
@@ -363,7 +368,7 @@ VARIABLES = {
                                         # test it. --no-demo works by setting it,
                                         # which also disables the PLAYBACKTIME
                                         # cheat, since that is guarded on it too
-    0x1798: "level_running",            # in_game_frame loops while this is set
+    0x1798: "level_running",            # level loops while this is set
     0x178C: "tool_scene",               # the two-entity scene the tool cursor is
     0x201A: "level_clock",              # frames since the level started; both
                                         # event tables compare against it

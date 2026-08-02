@@ -1,8 +1,13 @@
-# in_game_frame, and the shape of the gameplay
+# run_level(), and the shape of the gameplay
 
 **Started 2026-08-02**, immediately after the `menu-done` tag. Nothing here is
 ported yet; this is what the first read established, so the next one does not
 have to start from the top.
+
+**Renamed 2026-08-03**, from `in_game_frame`, once reading it end to end showed
+it is not a frame — see [the map](#the-map). `level` was the first choice and
+lasted an hour: it collided with the common noun everywhere the prose needed it,
+and shadowed a parameter in `episode_end_gate`, which is now `number`.
 
 ## It is not one function
 
@@ -101,7 +106,7 @@ they identify it:
 `image_clear`, `tool_events`. Nineteen more have all their callees native and
 are ready.
 
-**2026-08-03: three demo captures changed what is reachable.** `in_game_frame(1)`
+**2026-08-03: three demo captures changed what is reachable.** `run_level(1)`
 is only ever called from the menu's idle timeout and the PLAYBACKTIME picker, so
 until there were snapshots of one, every `[bp+6]` branch was dead to `--verify` -
 and so was `tool_events`, which had sat written and unregistered on the belief
@@ -172,7 +177,7 @@ proportions are the first thing worth knowing:
 
 The back edge is the `jmp` at `0x0e7d7`, taken while `[0x1798]` is set. So
 **two-thirds of the largest function in the segment is one loop**, and the name
-`in_game_frame` is wrong by a level: it is not the frame, it is the whole of
+`in_game_frame` was wrong by a level: it is not the frame, it is the whole of
 playing a level, and it returns when the level is over.
 
 ### It takes one argument, and the argument is "this is a demo"
@@ -237,7 +242,7 @@ each takes a pair of strings out of `menu_text` at `0x1894:0`:
 | `0x0e156` | the flock | `0x07bb2` per entity of scene 1, summing x and y of everything but the hero; two `__ldiv`s make the average, and `[0xdab]` is whether it is right of the cursor - which is what chose the cursor's sprite above |
 | `0x0e234` | log | the hero's byte at `+0x14`, when it changes inside 0..1 |
 | `0x0e2c9` | retire | `0x0d715` on three scenes, `0x0981b` on all six |
-| `0x0e346` | level | `0x0d4fc`, then `0x0993b` |
+| `0x0e346` | level update | `0x0d4fc`, then `0x0993b` |
 | `0x0e34e` | camera | the cursor is copied into entity `[0xd9b]`, then `scroll_follow` on whichever of the two the argument picked, with a 20-frame hold in `[bp-0x28]` |
 | `0x0e42d` | animate | `animate_scene` on all six, plus the tool scene when there is one, then `0x0a956` |
 | `0x0e485` | counters | the score chases `[0x2036]` by a quarter of the gap plus one a frame, so it rolls rather than jumps; both counters light a six-frame redraw flag |
@@ -274,7 +279,7 @@ that first is what stops the rest being guesswork:
 2. **`0x0d0c8`** (937 bytes) and **`0x0cf07`** (449) — what the events do.
 3. The HUD group, `0x0d5c5` (254 bytes) and `0x0d6c3`/`0x0d715`, which draw the
    panel; `draw_number2` beside them is already ported.
-4. `in_game_frame` itself last, when its callees exist.
+4. `run_level()` itself last, when its callees exist.
 
 Two of the four plane loops live inside `0x0d7ee`, so
 [open-function-attribution](open-function-attribution.md) and the plane-loop

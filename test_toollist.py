@@ -16,7 +16,7 @@ layout, and sets the same inputs on the library's globals in the library's
 layout. Only the answers are compared.
 
 Both functions are pure reads over the list, so nothing has to be answered while
-they run - see docs/notes/in-game-frame.md on why that is true of most of the
+they run - see docs/notes/run-level.md on why that is true of most of the
 gameplay.
 
     make -C reconstruct lib && venv/bin/python test_toollist.py

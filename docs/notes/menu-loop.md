@@ -151,7 +151,7 @@ void far game_main(menu_t far *menu)      /* main passes ds:0x1916, the main men
                     break;
                 }
 
-                if (!in_game_frame(0)) {               /* 0x1387e: lost the game */
+                if (!run_level(0)) {               /* 0x1387e: lost the game */
                     [0x21a3] = 0;
                     if (![0x50b]) {
                         --lives;                        /* [0x2034] */
