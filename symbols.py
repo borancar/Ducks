@@ -262,14 +262,27 @@ FUNCTIONS = {
     0x141FE: "init",                    # the whole startup: banner, objects,
                                         # hardware detection, key wait
     0x144D7: "main",                    # the frame the runtime calls
-    0x146CD: "release_sounds?",         # stop_sound_by_id(0..4) if sound_state,
+    0x14628: "sound_load",              # (id, scale, egg): egg block 0x58, a
+                                        # length word and that many signed
+                                        # bytes, scaled by scale/32 on the way
+                                        # in. id -> slot at d+0x298c
+    0x146CD: "release_sounds",          # stop_sound_by_id(0..4) if sound_state,
                                         # then pops a stack at [0x290b]/[0x298b]
                                         # through 0x15138. Called four times
                                         # inside game_main, not only at exit.
                                         # Was guessed as game_main from position
                                         # alone; the game is inside game_main
-    0x14750: "sound_play?",             # gated on sound_state; ids below 0x96;
-                                        # calls 0x14628(id, 0x20, 0xff)
+    0x14750: "sound_play",              # (id, voice): gated on sound_state; ids
+                                        # below 0x96; loads at unity volume.
+                                        # A voice other than 1 stops itself
+                                        # first, and 4 loops
+    0x147C5: "sound_play_loop",         # (id, scale, egg): the ambience, on
+                                        # voice 0, looping, at the caller's
+                                        # volume
+    0x14F07: "sample_load",             # into XMS, through a 2 KB staging
+                                        # buffer; the scaling is here
+    0x157C1: "sound_gather",            # 256 accumulator words through the clip
+                                        # table into the DMA buffer
     0x148A2: "detect_soundblaster",     # the sound check; probes the DSP
     0x14974: "detect_hardware",         # sound, then XMS, then prints
     0x149EA: "dsp_write",               # polls 0x22c, writes the byte

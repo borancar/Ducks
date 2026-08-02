@@ -66,15 +66,18 @@ void far buffer_init(void)                { current_buffer = default_buffer; }
 
 /* ------------------------------------------------------------- the sound */
 
-void far sound_play_guarded(int16_t id, int16_t mode) { (void) id; (void) mode; }
-void far release_sounds(void)             { }
-void far sound_init(int16_t rate)         { (void) rate; }
 
 /* --------------------------------------------------------------- startup */
 
 void far install_int23(void far *h)       { (void) h; }
 void far ctrl_break_handler(void)         { }
-int16_t far detect_hardware(void)         { return 0; }
+/* 0x14974. The original's is the Sound Blaster probe - reset the DSP at the
+ * base address BLASTER names, and then the XMS check that prints "Free XMS
+ * memory: %uk". Its answer gates AUDIO SETTINGS and whether sound_init runs.
+ *
+ * Here the only question is whether a device opens, and sound_init answers that
+ * by leaving sound_state clear when it does not. So this says yes and lets it. */
+int16_t far detect_hardware(void)         { return 1; }
 
 /* The original opens its eggs during startup and builds an index over them -
  * 0x11657, which prints "Using file EGGS\\MAIN.EGG - 303 slices". Until that is
@@ -134,10 +137,6 @@ void far fatal(const char far *msg, const char far *arg)
 
 int16_t far f_1102a(int16_t a)            { (void) a; return 0; }
 void far f_11bee(void far *name, int16_t egg) { (void) name; (void) egg; }
-void far f_147c5(int16_t a, int16_t b, int16_t c)
-{
-    (void) a; (void) b; (void) c;
-}
 int16_t far f_14e88(void far *fp)         { (void) fp; return 0; }
 void far f_15388(void far *o)             { (void) o; }
 
