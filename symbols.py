@@ -148,6 +148,22 @@ FUNCTIONS = {
     0x1157A: "read_index",              # (array, start, &total, egg, store):
                                         # the reader both the episode and the
                                         # readme index are filled by
+    0x0B9FC: "show_attract_screen",   # the hall of fame, and what the menu
+                                        # shows when it is left alone
+    0x11D1B: "score_set",              # one row of the board
+    0x12DFB: "high_score_name",        # NEW HIGH SCORE!, then name_entry
+    0x0F55C: "menus_after_game",       # undoes menus_resume
+    0x13DFB: "load_settings",          # the other half of save_settings, and
+                                        # what fills the hall of fame
+    0x13CCD: "load_eggs_ini",          # the [EGGS] section of EGGS.INI
+    0x0B9FC: "show_attract_screen",     # the hall of fame, and what the menu
+                                        # shows when it is left alone
+    0x11D1B: "score_set",               # one row of the board
+    0x12DFB: "high_score_name",         # NEW HIGH SCORE!, then name_entry
+    0x0F55C: "menus_after_game",        # undoes menus_resume
+    0x13DFB: "load_settings",           # the other half of save_settings, and
+                                        # what fills the hall of fame
+    0x13CCD: "load_eggs_ini",           # the [EGGS] section of EGGS.INI
     0x11D54: "high_score_screen",       # both halves of it: NEW HIGH SCORE!
                                         # ENTER YOUR NAME, then DUCKS HALL OF
                                         # FAME, each seen on the stack under the
