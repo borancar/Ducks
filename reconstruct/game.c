@@ -1509,14 +1509,20 @@ item_t far *far run_screen(menu_t far *menu, void far *chosen, int16_t owns)
      * draw_banner's `colour` is a bank number shifted into the high nibble:
      * entries 0-15 as loaded for the selected item, 16-31 at half brightness for
      * an ordinary one, and 32-47 red only and a third brighter for a title. The
-     * red is the i % 3 test - component 0 of each entry survives and the other
-     * two are multiplied by zero.
+     * red is the i % 3 test: component 0 of each entry survives, and in the
+     * original the other two are multiplied by zero rather than skipped.
      *
-     * Genuine floating point in the original, through the 8087 emulator. */
+     * The multiply is a double, and a double here is a double - the original
+     * reaches it through Borland's 8087 emulator, which is only interesting when
+     * reading the disassembly: the emulator patches each ESC opcode into an
+     * INT 34h..3Bh, so this loop decodes as `int 0x3b` and garbage unless those
+     * are turned back into D8..DF first.
+     *
+     * The long cast is not decoration. 255 * 1.3 is 331, and the original
+     * converts to a long and stores the low byte, so a bright component wraps. */
     for (i = 0; i < 0x30; i++) {
         pal[i + 0x30] = (uint8_t) (pal[i] >> 1);
-        pal[i + 0x60] = (uint8_t) (int32_t)
-                        ((i % 3 == 0 ? 1 : 0) * (pal[i] * 1.3));
+        pal[i + 0x60] = (i % 3 == 0) ? (uint8_t) (int32_t) (pal[i] * 1.3) : 0;
     }
     palette_set_black(0);                          /* 0x0c800 */
     load_background(menu->background, 0xff);       /* 0x0c815 */
