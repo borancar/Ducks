@@ -106,7 +106,7 @@ FUNCTIONS = {
     0x0B9EA: "set_buffer",              # stores a far pointer into [0x1721]
     0x0BB3B: "draw_number",             # native
     0x0C0C2: "egg_load_one?",           # called per egg file with (0, type, i)
-    0x0C156: "egg_load_pass_0x48",      # loops every open egg for type 0x48
+    0x0C156: "egg_load_all",            # loops every open egg for type 0x48
     0x0C1AD: "show_resource",           # (type 0x4d, index, frames, 0xff):
                                         # load, display through 0x0b52f, release
     0x0D757: "draw_number2",            # native

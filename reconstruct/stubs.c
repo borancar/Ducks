@@ -90,7 +90,7 @@ void egg_bringup_open(void)
     n = egg_open(path);
     printf("Using file %s - %d slices\n", path, n);
 
-    /* The count the original keeps at [0x20ad], which egg_load_pass_0x48 loops
+    /* The count the original keeps at [0x20ad], which egg_load_all loops
      * over. One egg here. Without this the pass has nothing to iterate and the
      * version page never draws - which is exactly what it did.
      *

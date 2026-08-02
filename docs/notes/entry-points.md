@@ -133,7 +133,7 @@ that both rules are right is `install_int23` landing on its already-known
 0x14516  call  scan_save_slots       ()
 --- the intro: two screen players, interleaved with sounds ------------
 0x14520  call  show_splash           (ds:0x28ff, 100)
-0x14527  call  egg_load_pass_0x48    ()
+0x14527  call  egg_load_all          ()
 0x1452f  call  sound_play_guarded    (0x2b, 1)
 0x1453f  call  show_resource         (0x4d, 5,     50, 0xff)   <- Hungry Software logo
 0x1455c  call  show_splash           (es:[bx+0x9c], 100)
@@ -175,7 +175,7 @@ the four planes offline.
 | | call | what is on it |
 | --- | --- | --- |
 | (1) | `show_splash(ds:0x28ff, 100)` | **nothing.** 0 non-zero pixels |
-| (*) | `egg_load_pass_0x48` | version and credits; **waits for a key** |
+| (*) | `egg_load_all` | version and credits; **waits for a key** |
 | (2) | `show_resource(0x4d, 5, 50)` | the Hungry Software fractal logo |
 | (3) | `show_splash(es:[bx+0x9c], 100)` | `PRESENTS` |
 | (4) | `show_resource(0x4d, 8, 100)` | the title: Tim Furnish's DUCKS Version 1.2 |
@@ -193,7 +193,7 @@ shape distinguishes nothing, and the same slot with a real source draws a word.
 In a sequence that runs *[blank]* → logo → `PRESENTS` → title, screen (1) sits
 exactly where a publisher or distributor name would go, and this build has none.
 
-**`egg_load_pass_0x48` is a screen, not only a loader.** The version and credits
+**`egg_load_all` is a screen, not only a loader.** The version and credits
 page is drawn from inside it, through `show_resource_loop`, and it holds until a
 key. That is the wait which read as a hang in an earlier session and has needed a
 keypress at this point in every run since.
@@ -428,7 +428,7 @@ is what a text banner looks like here, and it distinguishes nothing. See
 Either way the count changes. `main` makes nine calls that display something, but
 the first draws nothing, so there are at most eight things to see.
 
-### egg_load_pass_0x48 draws the version screen; 0x4d:5 is the logo
+### egg_load_all draws the version screen; 0x4d:5 is the logo
 
 **Seen 2026-07-29**, by breaking at `0x0b142` — the instruction inside
 `palette_fade_step` reached once per fade, immediately after `palette_upload`
@@ -441,11 +441,11 @@ wrong.** The stack at the break says otherwise:
 ```
 frame 0: ret -> image 0x0b5c2   show_resource_loop's palette_fade_step call
 frame 1: ret -> image 0x0c133   in egg_load_one
-frame 2: ret -> image 0x0c189   in egg_load_pass_0x48
+frame 2: ret -> image 0x0c189   in egg_load_all
 frame 3: ret -> image 0x1452a   in main   <- main's call at 0x14527
 ```
 
-`egg_load_pass_0x48` is not only a loader: it displays this screen through
+`egg_load_all` is not only a loader: it displays this screen through
 `show_resource_loop` and holds it until a key. That is the wait which looked like
 a hang in an earlier session, and which has needed a keypress at this point in
 every run since. `show_resource(0x4d, 5)` is main's *next* call, at `0x1453f`,
