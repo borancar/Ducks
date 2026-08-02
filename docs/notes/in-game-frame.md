@@ -90,6 +90,60 @@ they identify it:
 
 `[0x201a]` is what both compare against and is presumably the level clock.
 
+## What has moved, and how it was checked
+
+**2026-08-02, the same day.** Thirteen of the ninety-one are Python natives in
+`native.py` now, taken innermost first: `scene_keep_positions`,
+`scroll_axis_toward`, `scroll_axis_snap`, `scroll_follow`, `entity_set_type`,
+`scene_swap_pair`, `egg_block_end`, `rle_reset`, `set_buffer`,
+`cursor_to_centre`, `bg_scroll_reset`, `palette_apply_gamma`,
+`build_washed_ramp`, `tool_list_has`, `tool_list_any_flagged`, `text_width`,
+`image_clear`. Nineteen more have all their callees native and are ready.
+
+**A snapshot cannot check most of them.** Twelve seconds of `--verify` on the
+level 80 snapshot is thirteen frames, and of the thirty routines that were ready
+at the start it called three. Everything that runs while something is *loading* -
+which is most of this list - is never reached at all, because every snapshot is
+of a screen that has already settled.
+
+Worse, one of the three was passing vacuously. Level 80 is 320 wide in a 320-wide
+view and the duck does not move when nothing is driving it, so the camera has
+converged and every call to `scroll_follow` is a no-op: feeding it the y
+coordinate where x belonged changed nothing. That is the shape of a verification
+that holds no matter what the code does.
+
+So `test_gameplay.py` is the other half, and the two are complementary:
+
+| | `native.py --verify` | `test_gameplay.py` |
+| --- | --- | --- |
+| state | real, from a snapshot | made up |
+| coverage | whatever the run happens to do | every branch, by construction |
+| what it proves | the native is right *here* | the two agree *generally* |
+
+It writes the arguments where a call would have left them, runs the native, puts
+the memory back, runs the guest's own body from the same state with the native
+table unhooked, and compares. Nothing is asserted about the right answer - only
+that the two agree, which is all that can be checked without a second reading to
+be wrong in the same way.
+
+It earned its keep on the first run. `scroll_axis_toward`'s rounding mask is
+**not** `(1 << shift) - 1`: the guest computes `2 << (shift - 1)` in 16 bits with
+the count in `cl`, so a shift of 0 - which is what the variable is initialised to
+- asks for `2 << 255`, the hardware masks the count to 31, the result is 0, and
+the decrement leaves 0xffff. Level 80 uses shift 2, where the two agree.
+
+Two things had to be declared per native rather than blanket, both for the same
+reason - what is right for a drawing routine is wrong for a gameplay one:
+
+- **`VERIFY_REGIONS`**, what to watch besides the planes, *given the call's own
+  arguments*. A scene's entities are `farmalloc`'d, so watching DGROUP finds
+  nothing; comparing all 2 MB would cost half a gigabyte a second at these call
+  rates.
+- **`VERIFY_RETURNS`**, whether the return value can be compared. Three of these
+  write nothing at all and answer in AX. The input shims cannot be compared this
+  way at all: the native answers from a queue it has already emptied, and the
+  original then goes to the hardware and quite properly gets a different answer.
+
 ## The order to take it
 
 The event tables and the tool list are filled by the level loader, so reading
