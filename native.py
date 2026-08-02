@@ -183,6 +183,10 @@ class Native(VgaDos):
         self.verify_calls = 0
         self.verify_bad = 0
         self.verify_pending = 0
+        # The native whose original body is running right now, if any, and what
+        # that body was seen to reach. See _verify_native.
+        self.verify_body = None
+        self.verify_shadow = defaultdict(set)
         super().__init__(*a, **kw)
         self.image_base = self.load_seg * 16
         self.dgroup_base = self.image_base + DGROUP_IMAGE_OFF
@@ -1772,6 +1776,11 @@ class Native(VgaDos):
             return
         name, handler, kind = entry
         self.native_calls[name] += 1
+        # A native reached while another native's ORIGINAL body is being replayed
+        # for comparison is not part of the answer under test: it is the same
+        # Python running on both sides, so whatever it does agrees with itself.
+        if self.verify_body and self.verify_body != name:
+            self.verify_shadow[self.verify_body].add(name)
         # Kept for the iret guard: which natives ran inside an interrupt handler
         # is exactly what a stack imbalance would be traced through.
         self.native_ring.append(name)
@@ -1912,6 +1921,7 @@ class Native(VgaDos):
             if addr2 != ret_lin:
                 return
             uc2.hook_del(state["h"])
+            self.verify_body = None
             diffs = 0
             first = None
             for pi in range(4):
@@ -1960,6 +1970,7 @@ class Native(VgaDos):
         except Exception:
             pass
         self.verify_pending += 1
+        self.verify_body = name
         # Fall through: do NOT skip the body, the real code must run.
 
     # ------------------------------------------------------------- utilities
@@ -6242,6 +6253,12 @@ def main():
     if m.verify:
         att = m.verify_pending
         pct = 100.0 * m.verify_calls / att if att else 0.0
+        for who in sorted(m.verify_shadow):
+            shadow = ",".join(sorted(m.verify_shadow[who]))
+            print(f"  ^ SHADOWED: natives that ran while {who}'s original body "
+                  f"was replayed: {shadow}. Any the body itself calls is the "
+                  f"same Python on both sides and verified against itself; "
+                  f"--skip-natives hands one back to the guest")
         print(f"  verify          : {m.verify_calls} of {att} attempted "
               f"({pct:.0f}% actually compared), {m.verify_bad} MISMATCHED")
         if m.verify_calls < att:

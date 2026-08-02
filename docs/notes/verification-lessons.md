@@ -37,6 +37,40 @@ measurement first — here the disassembly was right every time. And say
 "unverified" rather than "verified" for a path with zero recorded executions:
 `0 mismatches` on code that never ran means nothing.
 
+## A verification can compare a native against itself
+
+**2026-08-03.** `--verify` runs the native, restores, lets *the original body*
+run, and compares. But the original body is guest code, and guest code calls
+other routines — some of which are natives too. When it does, the dispatcher
+services them, and that side of the comparison is Python as well.
+
+`draw_entities` compared clean over **9,864 calls with its sprite outline writing
+0xff instead of 0**. The outline is reached two ways: inline from
+`draw_entities`, and as the native for `0x065f1` that the guest's own body calls
+— one implementation behind both. Sabotage it and both sides move together.
+Removing an entire outline direction was equally invisible. Nothing in the output
+suggested the comparison was hollow; it reported 2.6 GB of planes compared.
+
+Handing the inner routine back with `--skip-natives outline_sprite` makes the
+guest run its own code, and then the same sabotage reports
+`native=0xff real=0x00` immediately — and unmodified, 7,728 calls compare clean.
+That is the first real verification the outline has ever had.
+
+So `--verify` now records which natives ran while a body was being replayed and
+says so. It is not proof of circularity — the sound mixer fires from an interrupt
+inside that window without being part of the body — but it names what to check.
+Across the four demo captures it flags `draw_entities` ← `draw_sprite`,
+`outline_sprite`; `draw_number` ← `draw_sprite`; `mouse_motion` ← `int86`. All
+of those had been reading as verified.
+
+`test_gameplay.py` never had this problem: it unhooks the whole native table
+around the guest call, which is the same fix made unconditional.
+
+**How to apply.** A leaf native — one whose original body calls nothing that is
+itself native — is safely compared. Anything above a leaf is not, until the
+natives underneath it are skipped. Check the SHADOWED line before believing a
+clean run.
+
 ## Verification that works here
 
 - `--verify --verify-only <names>` byte-compares a native against the original

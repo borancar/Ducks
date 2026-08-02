@@ -207,6 +207,15 @@ def main():
     if m.verify:
         print(f"  [verify] {m.verify_calls} compared, {m.verify_bad} "
               f"mismatched, {m.verify_declined} declined")
+        for who in sorted(m.verify_shadow):
+            shadow = ",".join(sorted(m.verify_shadow[who]))
+            print(f"  [verify] SHADOWED: while {who}'s original body was being "
+                  f"replayed, these natives also ran: {shadow}")
+            print(f"  [verify]   any of them the body itself calls is the same "
+                  f"Python on both sides and verified against itself; "
+                  f"--skip-natives <name> hands one back to the guest. "
+                  f"(Interrupt-driven ones - the sound mixer - land in this "
+                  f"window without being part of the body.)")
         if m.verify_bad:
             print("  FAIL: a native disagreed with the code it replaces")
             rc = 1
