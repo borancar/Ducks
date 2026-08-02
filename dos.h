@@ -286,6 +286,8 @@ void far sprite_set_load(uint8_t index, uint8_t type, table_t far *table,
 void far sprite_set_free(table_t far *table);
 void far sprite_to_image(int16_t x, int16_t y, sprite_t far *s,
                          desc_t far *desc, uint8_t colour);
+void far sprite_to_image_plain(int16_t x, int16_t y, sprite_t far *s,
+                               desc_t far *desc);
 void far image_alloc(desc_t far *desc, int16_t w, int16_t h);
 void far draw_banner(const char far *s, table_t far *set, int16_t y,
                      desc_t far *desc, uint8_t colour, uint8_t spacing);

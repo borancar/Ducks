@@ -274,9 +274,13 @@ uint8_t  g_18f5;                /* byte-sized on every access */
 /* 0x1fd3. The scale sound_load multiplies every sample byte by, out of 32, and
  * the only thing the ambience is ever loaded with - so this is AMBIENCE VOLUME.
  * That is what it is used as and where it is kept, beside game_speed and gamma
- * in the three bytes settings.dat carries; the slider that writes it is the
- * screen at 0x0c4f0, which is not read, so nothing here has watched it change. */
+ * in the three bytes settings.dat carries, and the slider at 0x0c4f0 writes it,
+ * indexed by the item's param - which the AUDIO SETTINGS entry gives as 0. The
+ * image starts it at 12. */
 uint8_t  ambience_volume = 12;
+int16_t  slider_x;              /* 0x176d - where a slider's trough starts; 0 */
+int16_t  bar_type_off = 4;      /* 0x2179 - the entity type of a dark block */
+int16_t  bar_type_on  = 18;     /* 0x217b - and of a lit one */
 int16_t  g_201c;                /* compared with jle, so signed */
 uint16_t g_2036;                /* compared with jb, so unsigned */
 int16_t  g_21a3;
@@ -684,6 +688,47 @@ void far entity_set_type(entity_t far *e, int16_t type)
     if (e->type != type) {                         /* +0x25, a word */
         e->type  = type;
         e->frame = 0;                              /* +0x1f */
+    }
+}
+
+/* 0x0739c. sprite_to_image without the colour or the priority nibble: the same
+ * clipping, and a pixel that is not zero simply replaces what is there. The
+ * slider's trough is drawn with this. */
+void far sprite_to_image_plain(int16_t x, int16_t y, sprite_t far *s,
+                               desc_t far *desc)
+{
+    int32_t at = 0;
+    int16_t skip = 0;
+    int16_t x1, y1, row, col;
+
+    x -= s->ox;
+    y -= s->oy;
+    x1 = x + s->w;
+    y1 = y + s->h;
+
+    if (x < 0) {
+        skip -= x;
+        at   -= x;
+        x     = 0;
+    } else if (desc->w < x1) {
+        skip += x1 - desc->w;
+        x1    = desc->w;
+    }
+    if (y < 0) {
+        at -= (int32_t) y * s->w;
+        y   = 0;
+    } else if (desc->h < y1) {
+        y1 = desc->h;
+    }
+
+    for (row = y; row < y1; row++) {
+        for (col = x; col < x1; col++) {
+            uint8_t c = s->pixels[at++];
+
+            if (c)
+                desc->rows[row][col] = c;
+        }
+        at += skip;
     }
 }
 
@@ -1531,17 +1576,93 @@ int16_t far typed_push(char far *buf, uint8_t ch)
     return matched;
 }
 
-/* 0x0c4f0. The slider an item with action 0x11 opens: GAME SPEED, AMBIENCE
- * VOLUME, GAMMA CORRECT.
+/* --------------------------------------------- 0x0c4f0: the slider
  *
- * TODO 0x0c4f0-0x0c715: a screen of its own, with its own frame loop. It clears
- * a 32-byte bar, draws 38 tiles of it through 0x0739c, writes the label with
- * 0x06dbc, and then reads the mouse against the item's setting. Left out so the
- * menu itself can be exercised; choosing one of the three does nothing.
+ * What an item with action 0x11 opens: GAME SPEED, AMBIENCE VOLUME, GAMMA
+ * CORRECT. It is not a screen of its own - the menu stays where it is, a trough
+ * is drawn into the backdrop under the item, and 32 blocks are added to a scene
+ * of their own and lit up to the value.
+ *
+ * The value is held in the mouse: it goes in as x * 4 and comes back out as
+ * x / 4, and input_poll(0x80, 1) is what clamps it to 0..31. So dragging the
+ * mouse moves the slider, and left and right nudge it by one.
+ *
+ * Which of the three it is comes from the item's param, and the original
+ * indexes d+0x1fd3 with it because the three are adjacent there. They are three
+ * variables here, so this picks between them by name.
+ *
+ * How it ends depends on how it began. Opened with a button already down - a
+ * click on the item - it runs until that button comes up. Opened from the
+ * keyboard it runs until SPACE, ENTER or any button.
  */
+static uint8_t *slider_value(uint8_t param)
+{
+    switch (param) {                               /* d+0x1fd3 + param */
+    case 0:  return &ambience_volume;
+    case 1:  return &game_speed;
+    default: return &gamma_level;
+    }
+}
+
 void far slider_screen(item_t far *it, int16_t y)
 {
-    (void) it; (void) y;
+    scene_t  scene;                                /* [bp-0x1a] */
+    uint8_t *value = slider_value(it->param);
+    int16_t  held    = button_b_down;              /* [bp-4] */
+    int16_t  running = 1;                          /* [bp-6] */
+    int16_t  type[2];                              /* [bp-0xa], [bp-8] */
+    uint8_t  i;
+    int16_t  plane;
+
+    type[0] = bar_type_off;
+    type[1] = bar_type_on;
+    scene_alloc(&scene, 0x20);
+
+    /* The trough: 38 sprites, and the one at each end is a different piece. */
+    for (i = 0; i < 0x26; i++)
+        sprite_to_image_plain(i * 8 + slider_x + 9, y,
+                              &sprite_table.base[0x103 - (i == 0)
+                                                       + (i == 0x25)],
+                              &backdrop);
+
+    /* The 32 blocks, as entities so they animate. Their type is set every frame
+     * below; type 0 here is what scene_add leaves them as. */
+    for (i = 0; i < 0x20; i++)
+        scene_add(&scene, i * 9 + slider_x + 0x14, y + 0x12, 0, 5);
+
+    mouse_x = *value * 4;
+
+    while (running) {
+        if (last_key == 0x14d)                     /* right */
+            mouse_x += 4;
+        if (last_key == 0x14b)                     /* left */
+            mouse_x -= 4;
+        input_poll(0x80, 1);                       /* and the clamp is the point */
+        *value = (uint8_t) (mouse_x >> 2);
+
+        for (i = 0; i < 0x20; i++)
+            entity_set_type(&scene.entities[i], type[*value > i]);
+
+        animate_scene(&scene);
+        for (plane = 0; plane < 4; plane++) {
+            set_plane((uint8_t) plane);
+            compose_layer();
+            draw_entities(&scene, viewport_full, 0);
+        }
+        page_flip();
+
+        if (held)
+            running = button_b_down;
+        else
+            running = !(last_key == 0x20 || last_key == 0x0d || g_18e5);
+
+        /* GAMMA CORRECT is the one that shows while it is being moved: the
+         * palette is rebuilt and then handed straight over, which is what
+         * palette_fade_step's argument is for. */
+        if (it->param == 2)
+            palette_build();
+        palette_fade_step(1);
+    }
 }
 
 /* ------------------------------------------------------- 0x0c716: run_screen
