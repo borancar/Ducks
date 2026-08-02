@@ -1004,12 +1004,7 @@ void far show_attract_screen(int16_t frames)
 
     text_colour[0] = 1;
     for (i = 0; i < 10; i++) {
-        /* A row whose name was never set. The original draws it anyway - a far
-         * NULL there reads the interrupt table rather than faulting - and on a
-         * machine with a settings.dat it never happens. */
-        const char far *name = score_table[i].name ? score_table[i].name : "";
-
-        draw_string(&page, name, 0x2d, y);
+        draw_string(&page, score_table[i].name, 0x2d, y);
         sprintf(number, "%u", score_table[i].score);
         draw_string(&page, number, 0x113 - text_width(number), y);
         y += (i == 0 ? 1 : 0) * 4 + 0x0c;
@@ -3369,11 +3364,7 @@ void far save_settings(void)
     }
     for (i = 0; i < 10; i++) {                     /* the hall of fame */
         write_word(score_table[i].score, fp);
-        /* A row that was never set. The original writes it as it stands - a far
-         * NULL there is read as a string out of the interrupt table rather than
-         * faulting - and with a settings.dat to load it never happens. Here it
-         * has to be something, and an empty row reads back as one. */
-        write_string(fp, score_table[i].name ? score_table[i].name : "");
+        write_string(fp, score_table[i].name);
         write_word(score_table[i].serial, fp);
     }
     fclose(fp);
@@ -3399,6 +3390,12 @@ void far init(void)
         f_15388(init_objects[i]);
     }
     buffer_init();                                 /* bring-up: see stubs.c */
+    /* 0x142bb. The board starts full: ten rows of TIM FURNISH, 10000 down to
+     * 1000. This runs before the file is read, so a settings.dat replaces it and
+     * a machine without one still has a hall of fame to show. */
+    for (i = 0; i < 10; i++)
+        score_set((int16_t) ((10 - i) * 1000), "TIM FURNISH", i);  /* d+0x2842 */
+
     load_settings();                               /* 0x1432c - the settings and
                                                     * the hall of fame */
     build_charmap();                               /* 0x143e5 */
