@@ -12,9 +12,40 @@ not be enough to port it, and porting it first would mean guessing at the
 structures its callees index.
 
 The far calls out of it are worth noting separately: `0x1462:0x1a5` and
-`0x1462:0x215` are the sound module, `0:0x147d` is `rand` and is called eleven
-times, and one call is **indirect through `[0x53e]`** — a function pointer that
-nothing has yet been seen to set.
+`0x1462:0x215` are the sound module, and `0:0x147d` is `rand`, called eleven
+times here and twenty-five across the whole graph.
+
+~~One call is indirect through `[0x53e]`, and nothing has been seen to set it.~~
+**Wrong, corrected the same day.** `[0x53e]` is `plot`, which `set_mode_x` points
+at `plot_pixel` or its stride-90 twin — it is in `dos_io.c` with that comment
+already. Asserted from one call site without grepping for the address.
+
+## It does no I/O
+
+**Walked 2026-08-02.** Ninety-one functions are reachable from `0x0d7ee`. Between
+them they make **fifteen port accesses and no software interrupts at all**, and
+every one of those accesses is in a routine that is already ported:
+
+| | |
+| --- | --- |
+| `clear_vram` `0x04d2a` | 1 |
+| `page_flip` `0x04d4b` | 4 |
+| `palette_upload` `0x056d2` | 2 |
+| `set_plane` `0x057ee` | 2 |
+| `palette_fade_step` `0x0b10b` | 6 |
+
+So the gameplay proper — the other eighty-six — touches nothing but memory and
+the Borland runtime. That is what makes taking it **piece-wise under Unicorn**
+practical: a function can be run in the guest against a snapshot and against the
+C reconstruction from the same state, and the two compared, with nothing to
+answer but the runtime far calls. `native.py --verify-only` already does exactly
+that for the plane loops.
+
+The runtime calls that would need answering, by how often they appear across the
+graph: `rand` (25), `free` (20), `fgetc` (17), the struct-push helper (11),
+`malloc` (9). The rest are arithmetic, `memcpy`/`memset`, the string routines and
+`sprintf` — all pure. `rand` is the only one that has to be pinned for a
+comparison to mean anything.
 
 ## The prologue
 
