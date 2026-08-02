@@ -47,7 +47,6 @@ void far cutscene_night_monster(void)     { }
 
 /* ------------------------------------------------------------ the screens */
 
-void far register_screen(void)            { }
 
 /* ------------------------------------------------------------- the eggs */
 
@@ -139,14 +138,6 @@ int16_t far f_1102a(int16_t a)            { (void) a; return 0; }
 void far f_11bee(void far *name, int16_t egg) { (void) name; (void) egg; }
 int16_t far f_14e88(void far *fp)         { (void) fp; return 0; }
 void far f_15388(void far *o)             { (void) o; }
-
-/* 0x12edf. Checks a registration name against its key. load_settings calls it
- * with the pair it just read and 0 for the third argument; register_screen calls
- * it with what the user typed. Not read, so a loaded settings.dat is trusted. */
-void far f_12edf(char far *name, char far *key, int16_t arg)
-{
-    (void) name; (void) key; (void) arg;
-}
 
 /* The palette the DAC loops upload, and the washed copy the blink alternates
  * with: 0x10e1 and 0x0dad. palette_build fills the first; nothing fills the

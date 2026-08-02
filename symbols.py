@@ -141,6 +141,9 @@ FUNCTIONS = {
     # game_main's switch table at 0x13a70 dispatches the menu's action code to
     # these. Each was caught at its entry by choosing the item that reaches it.
     0x12951: "load_game_screen",        # code 6: LOAD SAVED GAME, listing slots
+    0x12EDF: "check_registration",      # hashes the name over the 27-letter
+                                        # alphabet at d+0x21b0; the key is the
+                                        # result as six digits
     0x13096: "register_screen",         # code 14: REGISTER DUCKS, ENTER YOUR NAME
     0x13298: "save_game_screen",        # code 5: SAVE THIS GAME, the five slots
     0x11547: "console_rule",            # a newline and eighty dashes: the rule
