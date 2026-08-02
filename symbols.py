@@ -357,6 +357,11 @@ VARIABLES = {
                                         # writes it
     0x0D63: "scenes",                   # six scene_t, twelve bytes each: 0xd63,
                                         # 0xd6f, 0xd7b, 0xd87, 0xd93, 0xd9f
+    0x2177: "game_in_progress",         # menus_resume sets it, menus_after_game
+                                        # clears it, run_screen and game_main
+                                        # test it. --no-demo works by setting it,
+                                        # which also disables the PLAYBACKTIME
+                                        # cheat, since that is guarded on it too
     0x1798: "level_running",            # in_game_frame loops while this is set
     0x178C: "tool_scene",               # the two-entity scene the tool cursor is
     0x201A: "level_clock",              # frames since the level started; both

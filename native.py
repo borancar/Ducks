@@ -802,15 +802,24 @@ class Native(VgaDos):
             for b in bad:
                 print(f"  [snow]   {b}")
 
-    MENU_IDLE_SUPPRESS = 0x2177   # DGROUP; non-zero stops the menu timing out
+    # DGROUP. menus_resume sets it, menus_after_game clears it, and run_screen
+    # and game_main both test it: it means a game is in progress. Suppressing the
+    # idle timeout is a consequence, not the meaning - which is also why the
+    # demo-picker cheat is guarded on it.
+    GAME_IN_PROGRESS = 0x2177
 
     def install_no_demo(self):
         """Stop the main menu timing out into a demo level or the Hall of Fame.
 
-        0x0c9d6 compares the idle frame count against 500 and 0x0c9db then tests
-        [0x2177], skipping the timeout when it is non-zero - which is what
-        hovering a menu item was already known to do. Setting it holds the menu
+        By telling the game a game is already in progress. 0x0c9d6 compares the
+        idle frame count against 500 and 0x0c9db then tests [0x2177], skipping
+        the timeout when it is non-zero, so setting it holds the menu
         indefinitely.
+
+        It is a lie, and it costs more than the timeout: the demo-picker cheat
+        (PLAYBACKTIME, cheat 8) is guarded on the same word, so --no-demo also
+        makes that do nothing. Silently - the cheat registers and the picker
+        never opens.
 
         Deliberately data and not a code patch. Patching the handler instead was
         tried first and cost three rounds: forcing the chooser to zero produced a
@@ -819,7 +828,7 @@ class Native(VgaDos):
         the fade is the menu returning rather than the caller acting.
         """
         self.want_no_demo = True
-        self.write(self.dgroup_base + self.MENU_IDLE_SUPPRESS, b"\x01\x00")
+        self.write(self.dgroup_base + self.GAME_IN_PROGRESS, b"\x01\x00")
         print("  [menu] idle timeout suppressed: no demo level, no attract "
               "screen. --demo restores it")
 
@@ -832,6 +841,12 @@ class Native(VgaDos):
         the patch existed carries the original bytes. Without this,
         `replay.py --snow-nops` against any older snapshot quietly ran with the
         waits back in place.
+
+        Nothing is undone here, and game_in_progress is the reason. Clearing it
+        on restore would fix a snapshot that carries --no-demo's lie and break
+        one taken at the PLAY menu with a game paused behind it, and the two look
+        identical from here. It is dealt with where the information still exists,
+        at the capture - see _capture.
         """
         if getattr(self, "want_snow_nops", False):
             self.install_snow_nops()
@@ -3493,6 +3508,34 @@ def _pace_flip(m):
         m.flip_due = now + period
 
 
+def _capture(m, path, note):
+    """snapshot.save, with --no-demo's lie taken back out of guest memory.
+
+    --no-demo sets game_in_progress and re-asserts it every display frame,
+    because the guest's own startup would otherwise clear it. Writing the machine
+    out with it set bakes it into the file, and a later run cannot tell it from a
+    genuinely paused game: snapshots/main-menu.snap carries it, which is why the
+    menu restored from it had no idle timeout and would not open the demo picker.
+    Two ways into a demo, both dead, and nothing said so.
+
+    Cleared here rather than on restore because this is the last point where it
+    is still known to be ours. What is lost is a real paused game captured under
+    --no-demo, which the per-frame re-assert has already overwritten and which no
+    amount of care here could recover - so the note says the bit was not
+    captured rather than pretending it was.
+    """
+    at = m.dgroup_base + m.GAME_IN_PROGRESS
+    if not getattr(m, "want_no_demo", False):
+        return snapshot.save(m, path, note=note)
+
+    m.write(at, b"\x00\x00")
+    try:
+        return snapshot.save(
+            m, path, note=note + " [--no-demo: game_in_progress not captured]")
+    finally:
+        m.write(at, b"\x01\x00")
+
+
 def _take_requested_snapshot(m):
     """Write a pending capture. Only called from the top of the flip.
 
@@ -3503,8 +3546,8 @@ def _take_requested_snapshot(m):
     never was.
     """
     note, m.snapshot_requested = m.snapshot_requested, None
-    p = snapshot.save(m, snapshot.next_path(
-        getattr(m, "snapshot_dir", snapshot.SNAP_DIR)), note=note)
+    p = _capture(m, snapshot.next_path(
+        getattr(m, "snapshot_dir", snapshot.SNAP_DIR)), note)
     print(f"  [snap] wrote {p} ({os.path.getsize(p) / 1e6:.1f} MB, "
           f"frame {getattr(m, 'frames', 0)}, mode {m.mode:#04x}, {note})")
     return p
@@ -5872,7 +5915,7 @@ def step_frame(m, addr, args, img):
         # word, so a cold boot would clear it and the menu would demo anyway -
         # which is exactly how the first version of --no-demo failed. One
         # two-byte write per display frame.
-        m.write(m.dgroup_base + m.MENU_IDLE_SUPPRESS, b"\x01\x00")
+        m.write(m.dgroup_base + m.GAME_IN_PROGRESS, b"\x01\x00")
     # Re-read: a `step` or `until` over the socket has just moved CS:IP, and
     # resuming from the address the loop was holding would jump back.
     addr = m._reg(UC_X86_REG_CS) * 16 + m._reg(UC_X86_REG_IP)
@@ -5925,7 +5968,7 @@ def take_snapshot(m, args, note):
     no native handler is part-way through reading its arguments off the live
     stack frame. snapshot.py checks the tag word and says so if it is not.
     """
-    p = snapshot.save(m, snapshot.next_path(args.snapshot_dir), note=note)
+    p = _capture(m, snapshot.next_path(args.snapshot_dir), note)
     print(f"  [snap] wrote {p} ({os.path.getsize(p) / 1e6:.1f} MB, "
           f"frame {getattr(m, 'frames', 0)}, mode {m.mode:#04x}, {note})")
     return p
