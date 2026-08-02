@@ -259,6 +259,15 @@ void far page_flip(void)
     flip_phase = (flip_phase + 1) % 10;    /* [0xd61] */
 }
 
+/* --------------------------------------------------------------- keyboard
+ *
+ * input_poll ends with these two, and under DOS they are simply the runtime's -
+ * kbhit at 0:0x29fc and getch at 0:0x2814. They are here rather than left
+ * implicit because a port has to replace them along with everything else.
+ */
+int16_t far key_pending(void)  { return (int16_t) kbhit(); }
+int16_t far key_read(void)     { return (int16_t) getch(); }
+
 /* ------------------------------------------------------------------- mouse
  *
  * There is no INT 33h instruction anywhere in the image: Borland's int86 patches

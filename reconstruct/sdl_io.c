@@ -432,6 +432,40 @@ void far compose_scroll(int16_t scroll_x, int16_t scroll_y)
 static int16_t press_count[3], release_count[3];
 static int16_t rel_x, rel_y;
 
+/* The keyboard, as the runtime's kbhit and getch see it: a queue rather than a
+ * single variable, because a key with no ASCII is two reads and the second one
+ * has to still be there when input_poll asks for it. */
+#define KEY_QUEUE 64
+static int16_t key_queue[KEY_QUEUE];
+static int     key_head, key_tail;
+
+void key_push(int16_t k)
+{
+    int next = (key_tail + 1) % KEY_QUEUE;
+
+    if (next != key_head) {                 /* a full queue drops the key, which
+                                             * is what the BIOS buffer did */
+        key_queue[key_tail] = k;
+        key_tail = next;
+    }
+}
+
+int16_t far key_pending(void)               /* 0:0x29fc */
+{
+    return key_head != key_tail;
+}
+
+int16_t far key_read(void)                  /* 0:0x2814 */
+{
+    int16_t k;
+
+    if (key_head == key_tail)
+        return 0;
+    k = key_queue[key_head];
+    key_head = (key_head + 1) % KEY_QUEUE;
+    return k;
+}
+
 /* Pump SDL's queue into the counters the three wrappers below hand back. Call it
  * once a frame; the game polls the wrappers many times per frame and expects each
  * to consume what it reports. */
@@ -449,16 +483,16 @@ void sdl_pump_input(void)
             exit(0);
             break;
         case SDL_EVENT_KEY_DOWN:
-            /* last_key is what init spins on and what every fade tests to cut a
-             * splash short. The original holds the ASCII of the key; anything
-             * without one still has to register, so unprintables land as 1. */
-            if (e.key.key == SDLK_ESCAPE)       last_key = 0x1b;
-            else if (e.key.key == SDLK_RETURN)  last_key = 0x0d;
-            else if (e.key.key == SDLK_SPACE)   last_key = 0x20;
-            else if (e.key.key == SDLK_UP)      last_key = 0x148;
-            else if (e.key.key == SDLK_DOWN)    last_key = 0x150;
-            else if (e.key.key < 0x80)          last_key = (int16_t) e.key.key;
-            else                                last_key = 1;
+            /* Into the queue, in the shape the BIOS hands them over: an ASCII
+             * code, or a zero followed by a scan code for the keys that have no
+             * ASCII. input_poll is what turns the second form into 0x1xx. */
+            if (e.key.key == SDLK_UP)           { key_push(0); key_push(0x48); }
+            else if (e.key.key == SDLK_DOWN)    { key_push(0); key_push(0x50); }
+            else if (e.key.key == SDLK_LEFT)    { key_push(0); key_push(0x4b); }
+            else if (e.key.key == SDLK_RIGHT)   { key_push(0); key_push(0x4d); }
+            else if (e.key.key == SDLK_ESCAPE)  key_push(0x1b);
+            else if (e.key.key == SDLK_RETURN)  key_push(0x0d);
+            else if (e.key.key < 0x80)          key_push((int16_t) e.key.key);
             break;
         case SDL_EVENT_MOUSE_MOTION:
             rel_x += (int16_t) e.motion.xrel;
