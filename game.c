@@ -2839,7 +2839,10 @@ void far add_save_slots(menu_t far *m, int16_t for_saving)
         save_name[4] = (char) ('0' + i);
         fp = fopen(save_name, "rb");
         if (fp) {
-            while (fgetc(fp))                      /* past "Ducks Saved Game.." */
+            while (fgetc(fp) > 0)                  /* past "Ducks Saved Game..",
+                                                    * and see load_settings on
+                                                    * why the end of the file
+                                                    * counts as well as the NUL */
                 ;
             label = egg_read_string(fp);
             menu_add_action(m, label, action, &menu_always, (uint8_t) i);
@@ -3104,7 +3107,7 @@ int16_t far load_game_screen(void)
     char far   *id;
     char far   *name;
     int16_t     loaded = 0, v12 = 0;
-    uint8_t     c;
+    int         c;
 
     menu_reset(&m);
     menu_add_title(&m, menu_text[34]);             /* "LOAD SAVED GAME" */
@@ -3123,11 +3126,9 @@ int16_t far load_game_screen(void)
 
     /* The header doubles as a version stamp: a '2' anywhere in it means the file
      * has the extra field v1.2 added at the end. */
-    do {
-        c = (uint8_t) fgetc(fp);
+    while ((c = fgetc(fp)) > 0)
         if (c == '2')
             v12 = 1;
-    } while (c);
 
     free(egg_read_string(fp));                     /* the slot's name, shown in
                                                     * the menu and not needed
@@ -3267,11 +3268,23 @@ int16_t far load_settings(void)
     if (!fp)
         return 0;
 
-    do {
-        n = fgetc(fp);
+    /* Read to the end of the leading string. fgetc gives -1 at the end of the
+     * file and the original keeps it in a byte, where it is 0xff and not zero -
+     * so on a file that ends there the original spins here forever, and on one
+     * that ends later it reads -1 into every field after it.
+     *
+     * A file with no header is treated as no file. That is not in the original,
+     * and the reason it has to be here is worth stating: -1 in button_map sends
+     * item_label at extra_text[5] instead of one of [6] to [8], and that string
+     * is longer than the room menu_add reserved for it, so the menus corrupt the
+     * heap before anything gets as far as a window. */
+    while ((n = fgetc(fp)) > 0)
         if (n == '!')
             old = 0;
-    } while ((uint8_t) n);
+    if (n < 0) {
+        fclose(fp);
+        return 0;
+    }
     if (old)
         printf("Old %s format! Converting file...\n\n", settings_name);
 
