@@ -183,7 +183,10 @@ uint8_t    g_2038;               /* 0x2038 - how many demos to choose from;
                                   * byte, high half zeroed */
 
 /* strings and buffers */
-char       save_name[];          /* 0x21a5 - the template "GAME-.SG" */
+/* 0x21a5. Not five constants: one template, with the digit patched into offset
+ * 4 before each open. Defined without its contents here, which gave it one byte
+ * and made every one of those patches a write past the end of it. */
+char       save_name[] = "GAME-.SG";
 char far  *settings_name;        /* 0x21d2 - "settings.dat" */
 uint8_t    g_28ff[1];            /* 0x28ff - main's first splash source */
 void far  *buf_200f, *buf_203b, *buf_203f, *buf_2043;  /* freed per demo */
