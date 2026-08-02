@@ -4417,6 +4417,133 @@ def native_scene_keep_positions(m, args):
     return None
 
 
+def native_scroll_axis(m, args):
+    """0x05f7f: ease one axis of the scroll toward where it should be.
+
+        scroll_axis_toward(long focus, long half, long far *pos, int16_t span)
+
+    The caller (0x0600d) does this twice, x then y, with the view's half width
+    and the room left to scroll: the target is `focus - half`, the left edge
+    that would centre what is being followed, and the result is clamped into
+    [0, span] so the view never leaves the level.
+
+    It does not jump there - it moves a fraction of the way each frame:
+
+        *pos += (target - *pos) >> shift
+
+    with the shift a byte at d+0x18f5. That is the whole of the camera's lag.
+
+    The mask is what makes it arrive. A right shift of a small difference is
+    zero, so plain easing would stop short and stay there; adding (1 << shift) - 1
+    to both the target and the clamp keeps the difference nonzero until the view
+    is actually at the edge, and the same mask on the limit means the clamp
+    admits that overshoot rather than fighting it.
+
+    All of it is 32-bit and signed, including the shift - the guest reaches for
+    the runtime's signed long shift at 0:0x1128 rather than doing it inline.
+    """
+    focus, half, off, seg, span = struct.unpack(
+        "<iiHHh", m.uc.mem_read(args, 14))
+    return _scroll_axis(m, focus, half, seg * 16 + off, span)
+
+
+def _scroll_axis(m, focus, half, p, span):
+    """The body of 0x05f7f, so scroll_follow can do both axes without a call.
+
+    Returns DECLINE for a shift of 16 or more. The runtime's long shift takes a
+    different path there and the mask stops being (1 << shift) - 1 in ways that
+    depend on how the hardware masks a shift count; the game has only ever been
+    seen using 0 to 5, so the case is left to the original rather than modelled.
+    """
+    shift = m.uc.mem_read(m.dgroup_base + 0x18F5, 1)[0]
+    if shift >= 16:
+        return DECLINE
+
+    # Not (1 << shift) - 1. The guest computes it as `2 << (shift - 1)` in 16
+    # bits with the count in cl, so a shift of 0 - which is what the variable
+    # starts as - asks for `2 << 255`, the hardware masks that to 31, and the
+    # result is 0. The decrement then makes the mask 0xffff, i.e. -1, not 0.
+    mask = _sign16(((2 << ((shift - 1) & 0x1F)) - 1) & 0xFFFF)
+
+    limit = _sign16((span + mask) & 0xFFFF)
+    target = _sign32(focus - (half - mask))
+    if limit < target:
+        target = limit
+    elif target < 0:
+        target = 0
+
+    was = struct.unpack("<i", m.uc.mem_read(p, 4))[0]
+    m.uc.mem_write(p, struct.pack("<i", _sign32(was + ((target - was) >> shift))))
+    return None
+
+
+def native_scroll_follow(m, args):
+    """0x0600d: put the view where it should be for a point being followed.
+
+        scroll_follow(long x, long y)
+
+    Two ways of doing it, chosen by a flag at d+0x4fa that a level event toggles
+    (0x0cf07 does `flag = !flag` and nothing else writes it):
+
+    smooth - each axis eased toward centring the point, clamped to the level,
+             which is scroll_axis_toward above; or
+
+    window - the view does not move at all while the point is inside it, and is
+             pushed by exactly as much as the point leaves by when it is not:
+
+                 if (x < scroll_x)            scroll_x = x;
+                 if (x - scroll_x >= view_w)  scroll_x = x - view_w + 1;
+
+             The +1 is what makes the two bounds consistent: it leaves the point
+             on the last column of the view rather than the first one past it.
+
+    The flag starts at 1, so smooth is the normal case and the window is what a
+    level has to ask for. No snapshot takes the window branch, so --verify never
+    compares it; test_gameplay.py does, by setting the flag itself.
+
+    The scroll position is two longs at d+0x1739 and d+0x173d; the view size is
+    two words at d+0x1735, and the level size two at d+0x1701.
+    """
+    d = m.dgroup_base
+    x, y = struct.unpack("<ii", m.uc.mem_read(args, 8))
+    vw, vh = struct.unpack("<hh", m.uc.mem_read(d + 0x1735, 4))
+
+    if struct.unpack("<h", m.uc.mem_read(d + 0x04FA, 2))[0]:
+        ww, wh = struct.unpack("<hh", m.uc.mem_read(d + 0x1701, 4))
+        if _scroll_axis(m, x, vw >> 1, d + 0x1739, ww - vw) is DECLINE:
+            return DECLINE
+        return _scroll_axis(m, y, vh >> 1, d + 0x173D, wh - vh)
+
+    sx, sy = struct.unpack("<ii", m.uc.mem_read(d + 0x1739, 8))
+    if x < sx:
+        sx = x
+    if y < sy:
+        sy = y
+    if _sign32(x - sx) >= vw:
+        sx = _sign32(x - vw + 1)
+    if _sign32(y - sy) >= vh:
+        sy = _sign32(y - vh + 1)
+    m.uc.mem_write(d + 0x1739, struct.pack("<ii", sx, sy))
+    return None
+
+
+def native_entity_set_type(m, args):
+    """0x078d4: give an entity a type, and only reset its animation if it changed.
+
+        entity_set_type(entity_t far *e, int16_t type)
+
+    The guard is the point: type at +0x25 and frame at +0x1f, and setting the
+    same type twice has to leave the frame alone or nothing would ever animate.
+    in_game_frame calls it once a frame on the duck.
+    """
+    off, seg, kind = struct.unpack("<HHh", m.uc.mem_read(args, 6))
+    e = seg * 16 + off
+    if struct.unpack("<h", m.uc.mem_read(e + 0x25, 2))[0] != kind:
+        m.uc.mem_write(e + 0x25, struct.pack("<h", kind))
+        m.uc.mem_write(e + 0x1F, b"\x00\x00")
+    return None
+
+
 def native_tool_events(m, args):
     """0x0d4c2: the level's scheduled tool changes. Takes no arguments.
 
@@ -4445,8 +4572,34 @@ def native_tool_events(m, args):
     return None
 
 
+def _sign16(v):
+    return v - 0x10000 if v & 0x8000 else v
+
+
+def _sign32(v):
+    v &= 0xFFFFFFFF
+    return v - 0x100000000 if v & 0x80000000 else v
+
+
 def _watch_dgroup(m, args):
     return [(m.dgroup_base, 0x10000)]
+
+
+def _watch_scroll(m, args):
+    """Both scroll longs, at d+0x1739."""
+    return [(m.dgroup_base + 0x1739, 8)]
+
+
+def _watch_entity(m, args):
+    """The one entity the first argument points at."""
+    off, seg = struct.unpack("<HH", m.uc.mem_read(args, 4))
+    return [(seg * 16 + off, 0x29)]
+
+
+def _watch_scroll_pos(m, args):
+    """The one long the third argument points at."""
+    off, seg = struct.unpack("<HH", m.uc.mem_read(args + 8, 4))
+    return [(seg * 16 + off, 4)]
 
 
 def _watch_scene_entities(m, args):
@@ -4463,6 +4616,9 @@ def _watch_scene_entities(m, args):
 VERIFY_REGIONS = {
     "tool_events": _watch_dgroup,
     "scene_keep_positions": _watch_scene_entities,
+    "scroll_axis_toward": _watch_scroll_pos,
+    "scroll_follow": _watch_scroll,
+    "entity_set_type": _watch_entity,
 }
 
 NATIVE_TABLE = [
@@ -4481,6 +4637,9 @@ NATIVE_TABLE = [
     (0x0AB09, "particles", native_particles, "far"),
     (0x157C1, "sound_gather", native_sound_gather, "far"),
     (0x0979F, "scene_keep_positions", native_scene_keep_positions, "far"),
+    (0x05F7F, "scroll_axis_toward", native_scroll_axis, "far"),
+    (0x0600D, "scroll_follow", native_scroll_follow, "far"),
+    (0x078D4, "entity_set_type", native_entity_set_type, "far"),
 ]
 
 # Written but not enabled: 0x0d4c2 is called once as a level starts, and every

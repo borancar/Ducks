@@ -98,6 +98,9 @@ FUNCTIONS = {
     0x06D84: "draw_string",             # (desc, str, x, y): glyph_to_image
                                         # per character, advancing by its return
     0x0876A: "build_washed_ramp",       # v*0.75+64 into [0x0dad]
+    0x05F7F: "scroll_axis_toward",      # native
+    0x0600D: "scroll_follow",            # native
+    0x078D4: "entity_set_type",          # native
     0x0979F: "scene_keep_positions",    # native. Copies each entity's
                                         # position to +0x0c/+0x10, so what is
                                         # there is where it was when the frame
@@ -338,6 +341,17 @@ def describe(off):
 # memory. Mixing the two is the mistake documented in
 # docs/notes/address-spaces.md.
 VARIABLES = {
+    0x04FA: "scroll_smooth",            # 1 = ease the view toward the followed
+                                        # point, 0 = only move it when the point
+                                        # would leave. Starts 1; a level event
+                                        # (0x0cf07) toggles it and nothing else
+                                        # writes it
+    0x1701: "level_w",                  # the level's size in pixels, two words
+    0x1735: "view_w",                   # the view's, two words at 0x1735/0x1737
+    0x1739: "scroll_x",                 # two longs, 0x1739 and 0x173d
+    0x18F5: "scroll_shift",             # how much of the way to the target the
+                                        # view moves each frame, as a right shift
+
     # Text. A glyph's pixels are 0 transparent, 1 fill, 2 outline, and both
     # glyph drawers look the value up as [colour_base + value] - so 1 reads
     # 0x54c and 2 reads 0x54d. The screens set these two bytes around a page and
