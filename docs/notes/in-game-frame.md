@@ -144,6 +144,111 @@ reason - what is right for a drawing routine is wrong for a gameplay one:
   way at all: the native answers from a queue it has already emptied, and the
   original then goes to the hardware and quite properly gets a different answer.
 
+## The map
+
+**Read out end to end, 2026-08-03.** Two long jumps cut it in three, and the
+proportions are the first thing worth knowing:
+
+| | | |
+| --- | --- | --- |
+| `0x0d7ee`–`0x0dcc6` | 1,241 bytes | set the level up, once |
+| `0x0dcc9`–`0x0e7d7` | **2,830 bytes** | the frame, over and over |
+| `0x0e7da`–`0x0e8ac` | 211 bytes | tear it down and say what happened |
+
+The back edge is the `jmp` at `0x0e7d7`, taken while `[0x1798]` is set. So
+**two-thirds of the largest function in the segment is one loop**, and the name
+`in_game_frame` is wrong by a level: it is not the frame, it is the whole of
+playing a level, and it returns when the level is over.
+
+### It takes one argument, and the argument is "this is a demo"
+
+`[bp+6]`, read at seven places, and every one of them picks between a level that
+is driving itself and a level someone is playing:
+
+| | `[bp+6] != 0` — demo | `== 0` — played |
+| --- | --- | --- |
+| the tool | `0x0d4c2`, the level's own table | `0x0cf07`, the input |
+| the event | `0x0d471`, the second table | `0x0d0c8(cursor)`, when `[0x18e1]` |
+| the camera | the followed entity, or the flock's average | the cursor |
+| scene 4 (`d+0xd93`) | not drawn | drawn |
+| `0x07bb2` | gets it as its third argument | |
+
+Returns `[0x200d] == 2`.
+
+### Setting up
+
+The prologue's locals say what a level is measured in: two HUD columns from the
+video mode (`[0x4fe] * 0x14 + 0x135`, and five past it), the displayed score
+starting at `[0x2036]`, the displayed duck count at `[0x2007]`, and a sparkle
+seed of `rand() & 0x3ff`.
+
+Then, in order: the level's sprite set (`0x0615a`, block type `0x43`); carry
+`[0x1ffc]` into `[0x1ffe]` and clear it; **`srand([0x2039])`**; `clear_vram`; the
+status panel as resource `0x4d`:`0x21`; `0x0d5c5` to build the HUD; the tool
+selection reset to entry 0; a two-entity scene at `d+0x178c` for the tool
+cursor; three overlay images through `0x0881d`, whose countdowns live at
+`d+0x2154`; the "you have got X" message if the tool list is not empty; two
+page-flips of a four-plane loop drawing the intro panel; `bg_scroll_reset`; the
+clock zeroed and `[0x2003]` set to `0x1b`; two tool queries deciding `[0x2009]`
+and `[0x200b]`; a far allocation of `(scene0.count + [0x18d1]) * 0x28 * 16`
+bytes at `[0x18c1]`; `cursor_to_centre` and two `scroll_axis_snap`s; and the
+ambience if `[0x1fd3]` and `[0x2015]`.
+
+**`srand([0x2039])` is the one to notice.** The level carries its own seed, and
+it is set once here, immediately before a loop that calls `rand()` eleven times a
+frame - for the sparkle, for the ambient quack, for where a duck appears. That is
+what makes a recorded demo replay identically: nothing about the randomness is
+random across runs, and a demo needs only the input, not the outcomes. It also
+means anything compared against the guest has to be compared from the *same*
+seed, which `--verify` gets for free by sharing the machine.
+
+### The frame
+
+Roughly in order. The four `0x0a410` calls are the four ways a level ends, and
+each takes a pair of strings out of `menu_text` at `0x1894:0`:
+
+| at | | |
+| --- | --- | --- |
+| `0x0dcc9` | clock | `rand() & 0x7f == 0` plays a quack; `[0x201a]++` |
+| `0x0dce6` | spawns | a duck into scene 0 while the hero is type `0x4f`; a thing into scene 2 while the tool is `0x50`, with a random ±1 in its byte at `-0x15` |
+| `0x0dd83` | countdown | `[0x2005]` down to zero, then sound `0x26` and entity `[0xd7f]` becomes type `0x4b` |
+| `0x0ddbc` | script | the table at `[0x2043]`, three bytes a record, advanced when `rec[0]` is the clock; `[0x2100] = rec[2] - 5` |
+| `0x0ddfe` | timer | `[0x2003]` down one per `[0x2001]` frames; sound `0x1c` at zero |
+| `0x0de40` | input | `input_poll(level_w, level_h)`, then `0x078a6` |
+| `0x0de79` | tool | the demo/played split, then the cursor entity at `[0xd9b]` becomes `[0xdab] + 0x2a` if the tool is flagged and `0x14` if not - or `0x16` while `[0x1fd8]`/`[0x1fda]`, which also puts the selection back |
+| `0x0df5d` | **the four endings** | hero gone and `[0x2009]` → `+0x130`; hero gone, `[0xda1]` clear and `[0x200b]` → `+0x134`; `[0x2013] > [0x2007]` → `+0x138`; `[0x2018]` → `+0x13c` |
+| `0x0e088` | tool change | logged through `fprintf` when `[0x51d]`, then `[0x178a] = [bp-0x12] * 2 + 3` and sound 3 |
+| `0x0e11b` | positions | `scene_keep_positions` on five of the six scenes, then `0x0970c` |
+| `0x0e156` | the flock | `0x07bb2` per entity of scene 1, summing x and y of everything but the hero; two `__ldiv`s make the average, and `[0xdab]` is whether it is right of the cursor - which is what chose the cursor's sprite above |
+| `0x0e234` | log | the hero's byte at `+0x14`, when it changes inside 0..1 |
+| `0x0e2c9` | retire | `0x0d715` on three scenes, `0x0981b` on all six |
+| `0x0e346` | level | `0x0d4fc`, then `0x0993b` |
+| `0x0e34e` | camera | the cursor is copied into entity `[0xd9b]`, then `scroll_follow` on whichever of the two the argument picked, with a 20-frame hold in `[bp-0x28]` |
+| `0x0e42d` | animate | `animate_scene` on all six, plus the tool scene when there is one, then `0x0a956` |
+| `0x0e485` | counters | the score chases `[0x2036]` by a quarter of the gap plus one a frame, so it rolls rather than jumps; both counters light a six-frame redraw flag |
+| `0x0e4b4` | **frame skip** | `[bp-0x20] ^= 1`, and on the off beat with `[bp-0x12]` set, everything below is skipped |
+| `0x0e4e3` | **the plane loop** | four passes: `compose_scroll`, `particles`, `draw_entities` on five scenes with a 20-byte viewport pushed by value, scene 4 when played and the tool scene, the three overlays through `blit_rows_masked` while their timers last, `draw_number` for each lit counter, and a run of `plot` for the timer bar |
+| `0x0e673` | sparkle | one pixel of `0x6f` down a column at the seed, which then walks ±1 - or is redrawn from `rand() & 0x3ff` every 32nd frame |
+| `0x0e71a` | flip | `page_flip` |
+| `0x0e71e` | tool arrival | `[0x178a]` reaching 1 announces the tool and parks its two entities at `[0x1788] * 16 + 0x82` |
+| `0x0e7b1` | fade | `palette_fade_step(0)`, two counters down, and round again while `[0x1798]` |
+
+### Tearing down
+
+Free the sprite set (`0x088b3`), the level (`0x09329`), the pair table and the
+tool scene; put the text colours back. If `[0x1ffc]` says the level was
+completed, either jump to `[0x2102]` or load and show resource `0x41`:`[0x2032]`
+— the between-levels cutscene — and set `[0x1ffe]`. Close the log. Return.
+
+### The runtime it leans on
+
+`0:0x146c` **srand** and `0:0x147d` **rand** (the 0x015a4e35 LCG); `0:0x11cc`,
+the helper that copies a struct onto the stack, which is how the 20-byte
+viewport reaches `draw_entities`; `0:0x1059` `__ldiv`; `0:0x13f2` and `0:0xedb`,
+the far allocator and its free; `0:0x33cb` `fprintf` and `0:0x3007` `fclose`,
+which only run when `[0x51d]` is set — there is a play log, and nothing has been
+seen to turn it on.
+
 ## The order to take it
 
 The event tables and the tool list are filled by the level loader, so reading
