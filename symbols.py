@@ -98,9 +98,13 @@ FUNCTIONS = {
     0x06D84: "draw_string",             # (desc, str, x, y): glyph_to_image
                                         # per character, advancing by its return
     0x0876A: "build_washed_ramp",       # v*0.75+64 into [0x0dad]
+    0x0537D: "egg_block_end",           # native
+    0x0580B: "rle_reset",                # native
     0x05F7F: "scroll_axis_toward",      # native
     0x0600D: "scroll_follow",            # native
     0x078D4: "entity_set_type",          # native
+    0x0B0C5: "palette_apply_gamma",      # native
+    0x0D6C3: "bg_scroll_reset",          # native
     0x0979F: "scene_keep_positions",    # native. Copies each entity's
                                         # position to +0x0c/+0x10, so what is
                                         # there is where it was when the frame
@@ -346,6 +350,16 @@ VARIABLES = {
                                         # would leave. Starts 1; a level event
                                         # (0x0cf07) toggles it and nothing else
                                         # writes it
+    0x1717: "bg_w",                     # the background tile's size, two words.
+                                        # load_background derives wrap_x/wrap_y
+                                        # from these by subtracting one
+    0x202C: "bg_drift",                 # one byte the level carries, two base-3
+                                        # digits: 1 - digit is the drift on each
+                                        # axis, so each is +1, 0 or -1
+    0x20B6: "egg_block_open",           # non-zero while a block is being read;
+                                        # egg_find_block will not open another
+    0x20CE: "rle_left",                 # a long: bytes still to come from the
+                                        # run the resource reader is in
     0x1701: "level_w",                  # the level's size in pixels, two words
     0x1735: "view_w",                   # the view's, two words at 0x1735/0x1737
     0x1739: "scroll_x",                 # two longs, 0x1739 and 0x173d

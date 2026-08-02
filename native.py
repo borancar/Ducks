@@ -4544,6 +4544,113 @@ def native_entity_set_type(m, args):
     return None
 
 
+def _cdiv(a, b):
+    """C's division, which truncates toward zero where Python's floors."""
+    q = abs(a) // abs(b)
+    return -q if (a < 0) != (b < 0) else q
+
+
+def native_egg_block_end(m, args):
+    """0x0537d: the current egg block is finished with.
+
+    Eleven bytes: [0x20b6] goes back to zero. egg_find_block sets it when it
+    finds a block and refuses to look for another while it is set, so this is
+    what lets the next resource be loaded.
+    """
+    m.uc.mem_write(m.dgroup_base + 0x20B6, b"\x00\x00")
+    return None
+
+
+def native_rle_reset(m, args):
+    """0x0580b: forget any run left over from the last resource.
+
+    The pair at [0x20ce] is a 32-bit count of bytes still to come from the
+    current run; the reader at 0x0581c refills it from the stream when it
+    reaches zero. Zeroing both is how resource_load_full starts a new one.
+    """
+    m.uc.mem_write(m.dgroup_base + 0x20CE, b"\x00\x00\x00\x00")
+    return None
+
+
+def native_set_buffer(m, args):
+    """0x0b9ea: point current_buffer at something. One far pointer, copied."""
+    m.uc.mem_write(m.dgroup_base + 0x1721, bytes(m.uc.mem_read(args, 4)))
+    return None
+
+
+def native_cursor_to_centre(m, args):
+    """0x0c20e: put the cursor in the middle of an image.
+
+    The two cursor coordinates are longs (0x18d3 and 0x18d7) and the halves are
+    unsigned shifts of the image's width and height, so the high words are
+    written as zero rather than sign-extended.
+    """
+    off, seg = struct.unpack("<HH", m.uc.mem_read(args, 4))
+    w, h = struct.unpack("<HH", m.uc.mem_read(seg * 16 + off + 0x0C, 4))
+    m.uc.mem_write(m.dgroup_base + 0x18D3, struct.pack("<II", w >> 1, h >> 1))
+    return None
+
+
+def native_bg_scroll_reset(m, args):
+    """0x0d6c3: start the background where it belongs and say which way it drifts.
+
+    in_game_frame's only caller. The level carries one byte at [0x202c] and it is
+    two base-3 digits: the remainder gives the horizontal drift and the quotient
+    the vertical, each of them 1 - digit, so each axis is one of +1, 0 or -1.
+
+    The step is kept as an unsigned byte, so -1 has to become the tile's size
+    minus one - which is why it is written as `(size + step) % size` rather than
+    stored signed. The remainder is taken with an unsigned 16-bit divide of a
+    value that has already wrapped, so it is reproduced that way and not as a
+    mathematical modulus.
+
+    Both scroll offsets go back to zero at the same time: a level starts with the
+    background where the artist drew it.
+
+    Declines on a zero tile size, which would be a divide fault in the original.
+    """
+    d = m.dgroup_base
+    t = m.uc.mem_read(d + 0x202C, 1)[0]
+    if t & 0x80:
+        t -= 256
+    bw, bh = struct.unpack("<HH", m.uc.mem_read(d + 0x1717, 4))
+    if not bw or not bh:
+        return DECLINE
+
+    m.uc.mem_write(d + 0x177F, b"\x00")
+    m.uc.mem_write(d + 0x1781,
+                   bytes([((bh + 1 - _cdiv(t, 3)) & 0xFFFF) % bh & 0xFF]))
+    m.uc.mem_write(d + 0x177E, b"\x00")
+    m.uc.mem_write(d + 0x1780,
+                   bytes([((bw + 1 - (t - _cdiv(t, 3) * 3)) & 0xFFFF)
+                          % bw & 0xFF]))
+    return None
+
+
+def native_palette_apply_gamma(m, args):
+    """0x0b0c5: build the palette that goes to the DAC from the one on file.
+
+    768 entries, each scaled by (gamma + 6) / 19 and clipped at 255 - so gamma 13
+    is the identity, below it dims and above it brightens until everything
+    saturates. A level event steps the byte at [0x1fd5] up to 0x1f and back down,
+    which is how a level flashes.
+
+    The source is current_buffer, wherever set_buffer last pointed it, and the
+    result is palette_stored at d+0x10e1, which is what palette_upload writes out.
+    """
+    d = m.dgroup_base
+    off, seg = struct.unpack("<HH", m.uc.mem_read(d + 0x1721, 4))
+    src = bytes(m.uc.mem_read(seg * 16 + off, 0x300))
+    scale = m.uc.mem_read(d + 0x1FD5, 1)[0] + 6
+
+    out = bytearray(0x300)
+    for i in range(0x300):
+        v = _cdiv(_sign16((src[i] * scale) & 0xFFFF), 0x13)
+        out[i] = 0xFF if v > 0xFF else v & 0xFF
+    m.uc.mem_write(d + 0x10E1, bytes(out))
+    return None
+
+
 def native_tool_events(m, args):
     """0x0d4c2: the level's scheduled tool changes. Takes no arguments.
 
@@ -4585,6 +4692,11 @@ def _watch_dgroup(m, args):
     return [(m.dgroup_base, 0x10000)]
 
 
+def _watch(off, n):
+    """The commonest case: a fixed run of DGROUP, the same every call."""
+    return lambda m, args: [(m.dgroup_base + off, n)]
+
+
 def _watch_scroll(m, args):
     """Both scroll longs, at d+0x1739."""
     return [(m.dgroup_base + 0x1739, 8)]
@@ -4618,6 +4730,12 @@ VERIFY_REGIONS = {
     "scene_keep_positions": _watch_scene_entities,
     "scroll_axis_toward": _watch_scroll_pos,
     "scroll_follow": _watch_scroll,
+    "egg_block_end": _watch(0x20B6, 2),
+    "rle_reset": _watch(0x20CE, 4),
+    "set_buffer": _watch(0x1721, 4),
+    "cursor_to_centre": _watch(0x18D3, 8),
+    "bg_scroll_reset": _watch(0x177E, 4),
+    "palette_apply_gamma": _watch(0x10E1, 0x300),
     "entity_set_type": _watch_entity,
 }
 
@@ -4640,6 +4758,12 @@ NATIVE_TABLE = [
     (0x05F7F, "scroll_axis_toward", native_scroll_axis, "far"),
     (0x0600D, "scroll_follow", native_scroll_follow, "far"),
     (0x078D4, "entity_set_type", native_entity_set_type, "far"),
+    (0x0537D, "egg_block_end", native_egg_block_end, "far"),
+    (0x0580B, "rle_reset", native_rle_reset, "far"),
+    (0x0B9EA, "set_buffer", native_set_buffer, "far"),
+    (0x0C20E, "cursor_to_centre", native_cursor_to_centre, "far"),
+    (0x0D6C3, "bg_scroll_reset", native_bg_scroll_reset, "far"),
+    (0x0B0C5, "palette_apply_gamma", native_palette_apply_gamma, "far"),
 ]
 
 # Written but not enabled: 0x0d4c2 is called once as a level starts, and every

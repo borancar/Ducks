@@ -155,7 +155,59 @@ def case_entity_set_type(m, rng):
     return 0x078D4, frame, [(e, 0x29)], "entity_set_type"
 
 
-CASES = [case_scroll, case_scroll_axis, case_entity_set_type]
+def case_egg_block_end(m, rng):
+    d = m.dgroup_base
+    m.uc.mem_write(d + 0x20B6, struct.pack("<H", rng.randrange(0, 0x10000)))
+    return 0x0537D, b"", [(d + 0x20B6, 2)], "egg_block_end"
+
+
+def case_rle_reset(m, rng):
+    d = m.dgroup_base
+    m.uc.mem_write(d + 0x20CE, rng.randbytes(4))
+    return 0x0580B, b"", [(d + 0x20CE, 4)], "rle_reset"
+
+
+def case_set_buffer(m, rng):
+    frame = struct.pack("<HH", rng.randrange(0, 0x10000),
+                        rng.randrange(0, 0x10000))
+    return 0x0B9EA, frame, [(m.dgroup_base + 0x1721, 4)], "set_buffer"
+
+
+def case_cursor_to_centre(m, rng):
+    im = SCRATCH_SEG * 16
+    m.uc.mem_write(im + 0x0C, struct.pack("<HH", rng.randrange(0, 0x10000),
+                                          rng.randrange(0, 0x10000)))
+    frame = struct.pack("<HH", 0, SCRATCH_SEG)
+    return 0x0C20E, frame, [(m.dgroup_base + 0x18D3, 8)], "cursor_to_centre"
+
+
+def case_bg_scroll_reset(m, rng):
+    """The whole range of the level's byte, not just 0..8.
+
+    Only 0..8 is meaningful - two base-3 digits - but nothing checks that, and a
+    negative one divides the other way round, so the guest is the authority on
+    what the rest does.
+    """
+    d = m.dgroup_base
+    m.uc.mem_write(d + 0x202C, bytes([rng.randrange(0, 256)]))
+    m.uc.mem_write(d + 0x1717, struct.pack("<HH", rng.randrange(1, 640),
+                                           rng.randrange(1, 480)))
+    m.uc.mem_write(d + 0x177E, rng.randbytes(4))
+    return 0x0D6C3, b"", [(d + 0x177E, 4)], "bg_scroll_reset"
+
+
+def case_palette_apply_gamma(m, rng):
+    d = m.dgroup_base
+    m.uc.mem_write(SCRATCH_SEG * 16, rng.randbytes(0x300))
+    m.uc.mem_write(d + 0x1721, struct.pack("<HH", 0, SCRATCH_SEG))
+    m.uc.mem_write(d + 0x1FD5, bytes([rng.randrange(0, 0x20)]))
+    return 0x0B0C5, b"", [(d + 0x10E1, 0x300)], "palette_apply_gamma"
+
+
+CASES = [case_scroll, case_scroll_axis, case_entity_set_type,
+         case_egg_block_end, case_rle_reset, case_set_buffer,
+         case_cursor_to_centre, case_bg_scroll_reset,
+         case_palette_apply_gamma]
 
 
 def main():
