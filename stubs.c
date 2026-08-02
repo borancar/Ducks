@@ -138,7 +138,6 @@ void far set_text_colour(int16_t c)       { (void) c; }
 /* ------------------------------------------------ unnamed, by image offset */
 
 void far f_04dcd(int16_t n)               { (void) n; }
-void far f_056f7(int16_t n)               { (void) n; }
 void far f_0615a(int16_t a, int16_t b, void far *c, int16_t d)
 {
     (void) a; (void) b; (void) c; (void) d;
@@ -170,19 +169,9 @@ void far f_147c5(int16_t a, int16_t b, int16_t c)
 int16_t far f_14e88(void far *fp)         { (void) fp; return 0; }
 void far f_15388(void far *o)             { (void) o; }
 
-/* The palette the game keeps and the DAC loops upload, and the washed copy the
- * blink alternates with. Both are DGROUP arrays in the original - 0x10e1 and
- * 0x0dad - and both are filled by resource_load, which is why they are here and
- * not in game.c: nothing writes them yet. */
+/* The palette the DAC loops upload, and the washed copy the blink alternates
+ * with: 0x10e1 and 0x0dad. palette_build fills the first; nothing fills the
+ * second yet. */
 uint8_t palette_stored[768];
 uint8_t palette_washed[48];
 
-/* 0x0b0c5. Reads through the current buffer - `les bx, [0x1721]` - and builds the
- * palette the DAC loops upload. Enough of it here to see a picture: copy what
- * resource_load just wrote into the buffer across to palette_stored. The real one
- * applies gamma and the washed ramp on the way. */
-void far palette_build(void)
-{
-    if (current_buffer)
-        memcpy(palette_stored, current_buffer, sizeof palette_stored);
-}
