@@ -59,3 +59,4 @@ control.sock
 # reconstruct/ build output
 reconstruct/*.o
 reconstruct/ducks
+reconstruct/libducks.so

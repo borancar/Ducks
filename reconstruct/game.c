@@ -1920,6 +1920,41 @@ item_t far *far run_screen(menu_t far *menu, void far *chosen, int16_t owns)
     return &menu->item[sel];                       /* 0x0ce15 */
 }
 
+/* ============================================ the tool list, d+0x1782
+ *
+ * What the player can place, and which of them is selected. The array holds
+ * entity types - 0x0d591 tests its entries against the same per-type flag table
+ * load_animations fills, which is what identifies them.
+ * ======================================================================== */
+
+int16_t far *tool_list;          /* 0x1782 */
+int16_t      tool_type;          /* 0x1786 - the selected entry, copied out */
+uint8_t      tool_at;            /* 0x1788 - which one */
+uint8_t      tool_count;         /* 0x178b */
+
+/* 0x0d55d. Is `type` one of them? The loop does not stop when it finds one - it
+ * walks the whole list and remembers. */
+int16_t far tool_list_has(int16_t type)
+{
+    int16_t i, found = 0;
+
+    for (i = 0; tool_count > i; i++)
+        if (tool_list[i] == type)
+            found = 1;
+    return found;
+}
+
+/* 0x0d591. Does any of them have bit 1 set in its type flags? Same shape. */
+int16_t far tool_list_any_flagged(void)
+{
+    int16_t i, found = 0;
+
+    for (i = 0; tool_count > i; i++)
+        if (type_flags[tool_list[i]] & 2)
+            found = 1;
+    return found;
+}
+
 /* 0x0d757. The HUD's number drawer. Same digit layout as draw_number - glyph
  * 0x71 plus the digit, 12 pixels apart, least significant first, no leading-zero
  * suppression - but with the clip, sprite table and colour fixed, and glyph 0x70

@@ -13,6 +13,7 @@ CFLAGS  ?= -std=c99 -Wall -Wextra -O1 $(shell pkg-config --cflags sdl3)
 LDLIBS  ?= $(shell pkg-config --libs sdl3)
 
 OBJS = game.o sdl_io.o stubs.o egg.o sound.o
+SRCS = game.c sdl_io.c stubs.c egg.c sound.c
 
 ducks: $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) $(LDLIBS) -o $@
@@ -23,7 +24,17 @@ ducks: $(OBJS)
 run: ducks
 	./ducks
 
-clean:
-	rm -f $(OBJS) ducks
+# The same code as a shared library, so a harness can call one function of it and
+# compare against the guest's own bytes under Unicorn - see test_toollist.py.
+# Nothing about the port changes for this: the emulator stays outside, and the
+# harness marshals each side's arguments, because the two do not and cannot share
+# memory (a pointer here is eight bytes and `far` is nothing).
+libducks.so: $(SRCS)
+	$(CC) $(CFLAGS) -fPIC -shared $(SRCS) $(LDLIBS) -o $@
 
-.PHONY: run clean
+lib: libducks.so
+
+clean:
+	rm -f $(OBJS) ducks libducks.so
+
+.PHONY: run clean lib
