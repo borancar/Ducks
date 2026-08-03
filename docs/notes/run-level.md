@@ -294,6 +294,35 @@ stub that silently does nothing is how a demo quietly stops matching.
 explicitly. That is not the restore-side fix that was rejected - there, our lie
 and a genuinely paused game are indistinguishable.)
 
+## 0x0993b is the collision pass
+
+**Mapped 2026-08-03.** 2,668 bytes, and two nested loops cover all but 96 of
+them - the outer from `0x09948`, the inner from `0x09984`. It is scene 0 against
+scene 2, every duck against every object, and the body is one large switch on
+the object's type.
+
+```
+for si in scene 0:                            /* d+0x0d6b */
+    if type not in (1, 2, 4, 0x40, 0x41, 0x53):  continue
+    for di in scene 2:                        /* d+0x0d83 */
+        if |s0[si].x - s2[di].x| >= anim_a[s2[di].type]:  continue
+        if |s0[si].y - s2[di].y| >= 3:                    continue
+        if s0[si].type == 0:                              continue
+        switch (s2[di].type) { ... }          /* 0x38, 0x0b, 6..0x0a, ... */
+```
+
+**`anim_a` is the collision half-width.** The table at `d+0x25a` is one of the
+six `load_animations` fills, and `dos.h` has carried "read nowhere yet" against
+it since it was written. This is where it is read: the horizontal reach of an
+object, per type. The vertical test is a constant 3, so the boxes are wide and
+flat - which is what a duck walking into something on the same row needs.
+
+Both distance tests are `cdq; xor; sub`, the compiler's absolute value.
+
+The switch is what the game's rules actually are, and it is most of the 2,668
+bytes: `entity_set_type` 20 times, `sound_play_guarded` a dozen, and `duck_dies`
+once. Reading the arms is the work; the frame around them is settled.
+
 ## The order to take it
 
 The event tables and the tool list are filled by the level loader, so reading
