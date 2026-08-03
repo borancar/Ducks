@@ -3796,3 +3796,212 @@ void far main(void)
                                               * with segment base 0, not this
                                               * segment's */
 }
+
+/* ==========================================================================
+ * run_level's leaves, 0x0580b to 0x0d6c3
+ *
+ * The innermost routines of the gameplay, transcribed from the Python natives
+ * in native.py that stand in for them. Those were byte-compared against the
+ * guest before this was written - on the level 80 and demo snapshots under
+ * --verify, and on made-up inputs in test_gameplay.py, which is what covers the
+ * branches no captured state reaches. Every one of them is a leaf: nothing they
+ * call is itself replaced, so the comparison was of their own arithmetic and
+ * not partly of itself. See docs/notes/verification-lessons.md on why that
+ * distinction matters.
+ *
+ * Nothing calls these yet. run_level is still the stub in stubs.c, because 51
+ * of the 91 routines it reaches are unwritten and its loop exits on a flag that
+ * only the unread part clears - so a skeleton of it would not play a level, it
+ * would hang. These are the bottom of that list, done first.
+ * ======================================================================== */
+
+int32_t scroll_x, scroll_y;      /* 0x1739, 0x173d - the view, in pixels */
+int16_t view_w, view_h;          /* 0x1735, 0x1737 */
+int16_t level_w, level_h;        /* 0x1701, 0x1703 */
+uint8_t scroll_shift;            /* 0x18f5 - how much of the way to the target
+                                  * the view moves each frame, as a right shift.
+                                  * The menu sets it to 5 before a demo */
+int16_t scroll_smooth;           /* 0x4fa - 1 to ease, 0 to only move the view
+                                  * when the followed point would leave it.
+                                  * Starts 1; a level event toggles it */
+int16_t bg_w, bg_h;              /* 0x1717, 0x1719 - the background tile */
+uint8_t bg_drift;                /* 0x202c - two base-3 digits the level carries */
+scene_t scenes[6];               /* 0x0d63, twelve bytes each */
+int16_t level_clock;             /* 0x201a - frames since the level started */
+uint8_t far *tool_event_table;   /* 0x203b - three bytes a record */
+uint16_t    tool_event_count;    /* 0x2047 */
+
+/* ------------------------------------------------------- 0x05f7f: one axis
+ *
+ * Ease `pos` toward centring `focus`, and clamp it into [0, span] so the view
+ * never leaves the level:
+ *
+ *     *pos += (target - *pos) >> scroll_shift;
+ *
+ * The mask is what makes it arrive. A right shift of a small difference is
+ * zero, so plain easing stops short and stays there; adding (1 << shift) - 1 to
+ * both the target and the clamp keeps the difference non-zero until the view is
+ * really at the edge, and the same mask on the limit means the clamp admits
+ * that overshoot rather than fighting it.
+ *
+ * The mask is NOT (1 << scroll_shift) - 1, and this is the one thing here that
+ * a careful reading gets wrong. The guest computes `2 << (shift - 1)` in 16
+ * bits with the count in cl, so a shift of 0 - the value the variable is
+ * initialised to - asks for `2 << 255`, the hardware masks the count to 31, the
+ * result is 0, and the decrement leaves 0xffff, i.e. -1. Reproduced here with
+ * the same masking, which is why the expression is written the long way.
+ */
+static void scroll_axis(int32_t focus, int32_t half, int32_t far *pos,
+                        int16_t span)
+{
+    int16_t mask;
+    int32_t target, limit;
+
+    /* TODO 0x05f96-0x05f9f for scroll_shift >= 16: the runtime's signed long
+     * shift at 0:0x1128 takes its other path there and the mask stops being
+     * expressible this way. Only 0 to 5 has ever been seen. */
+    if (scroll_shift >= 16)
+        return;
+
+    mask   = (int16_t) ((((uint32_t) 2u << ((scroll_shift - 1) & 0x1f)) - 1u)
+                        & 0xffffu);
+    target = focus - (half - mask);
+    limit  = (int16_t) (span + mask);
+
+    if (limit < target)
+        target = limit;
+    else if (target < 0)
+        target = 0;
+
+    /* Arithmetic, matching the guest's sar. */
+    *pos += (target - *pos) >> scroll_shift;
+}
+
+/* 0x05f15. The same without the easing, and so without a mask: there is nothing
+ * to converge to. run_level calls it twice right after cursor_to_centre, which
+ * is how a level starts with the view already around the cursor instead of
+ * sliding to it. The halving is a 32-bit sar/rcr of the caller's whole long, so
+ * a negative extent rounds toward minus infinity rather than toward zero. */
+void far scroll_axis_snap(int32_t focus, int32_t extent, int32_t far *pos,
+                          int16_t span)
+{
+    int32_t v = focus - (extent >> 1);
+
+    if (span < v)
+        v = span;
+    if (v < 0)
+        v = 0;
+    *pos = v;
+}
+
+/* 0x0600d. Put the view where it should be for the point being followed. */
+void far scroll_follow(int32_t x, int32_t y)
+{
+    if (scroll_smooth) {
+        scroll_axis(x, view_w >> 1, &scroll_x, (int16_t) (level_w - view_w));
+        scroll_axis(y, view_h >> 1, &scroll_y, (int16_t) (level_h - view_h));
+        return;
+    }
+
+    /* The view does not move while the point is inside it, and is pushed by
+     * exactly as much as the point leaves by when it is not. The +1 is what
+     * makes the two bounds consistent: it leaves the point on the last column
+     * of the view rather than the first one past it. */
+    if (x < scroll_x)
+        scroll_x = x;
+    if (y < scroll_y)
+        scroll_y = y;
+    if (x - scroll_x >= view_w)
+        scroll_x = x - view_w + 1;
+    if (y - scroll_y >= view_h)
+        scroll_y = y - view_h + 1;
+}
+
+/* 0x0979f. Remember where every entity in a scene was. run_level calls it on
+ * five of the six scenes before anything moves, so prev_x/prev_y is where the
+ * entity was when the frame began. */
+void far scene_keep_positions(scene_t far *s)
+{
+    int16_t i;
+
+    for (i = 0; i < s->count; i++) {
+        s->entities[i].prev_x = s->entities[i].x;
+        s->entities[i].prev_y = s->entities[i].y;
+    }
+}
+
+/* 0x0a3a7. Swap two entity types throughout the third scene, and leave
+ * everything else alone. It goes through entity_set_type, so each one that
+ * changes has its frame reset - and since the two types always differ, every
+ * one of them does. */
+void far scene_swap_pair(void)
+{
+    int16_t i;
+
+    for (i = 0; i < scenes[2].count; i++) {
+        entity_t far *e = &scenes[2].entities[i];
+
+        if (e->type == 0x2c)
+            entity_set_type(e, 0x2d);
+        else if (e->type == 0x2d)
+            entity_set_type(e, 0x2c);
+    }
+}
+
+/* 0x0d6c3. Start the background where it belongs and say which way it drifts.
+ *
+ * The level carries one byte and it is two base-3 digits - the remainder gives
+ * the horizontal drift and the quotient the vertical - each turned into
+ * 1 - digit, so each axis is one of +1, 0 or -1. The step is kept as an
+ * unsigned byte, which is why -1 is written as the tile's size minus one, and
+ * the remainder comes from an unsigned 16-bit divide of a value that has
+ * already wrapped, so it is written that way and not as a mathematical modulus.
+ *
+ * A zero tile size is a divide fault here exactly as it is in the original.
+ */
+void far bg_scroll_reset(void)
+{
+    int16_t d = (int8_t) bg_drift;
+
+    bg_scroll_y = 0;
+    bg_step_y   = (uint8_t) ((uint16_t) (bg_h + 1 - d / 3) % (uint16_t) bg_h);
+    bg_scroll_x = 0;
+    bg_step_x   = (uint8_t) ((uint16_t) (bg_w + 1 - d % 3) % (uint16_t) bg_w);
+}
+
+/* 0x0b0c5. Build the palette that goes to the DAC from the one on file: 768
+ * entries scaled by (gamma + 6) / 19 and clipped at 255, so gamma 13 is the
+ * identity, below it dims and above it brightens until everything saturates. A
+ * level event steps the byte up to 0x1f and back down, which is how a level
+ * flashes. The multiply is 16-bit and its low half is what is kept. */
+void far palette_apply_gamma(void)
+{
+    const uint8_t far *src = current_buffer;
+    int16_t scale = (int16_t) (gamma_level + 6);
+    int16_t i;
+
+    for (i = 0; i < 768; i++) {
+        int16_t v = (int16_t) ((int16_t) (src[i] * scale) / 19);
+
+        palette_stored[i] = (uint8_t) (v > 0xff ? 0xff : v);
+    }
+}
+
+/* 0x0d4c2. The level's scheduled tool changes: a table of three-byte records,
+ * each a time and a tool index, applied when the time matches the level clock.
+ *
+ * The loop does not stop at the first match, so two records on the same tick
+ * leave the last one selected. That is the guest's behaviour and not obviously
+ * deliberate, which is a reason to keep it rather than tidy it.
+ */
+void far tool_events(void)
+{
+    uint16_t i;
+
+    for (i = 0; i < tool_event_count; i++) {
+        const uint8_t far *rec = tool_event_table + i * 3;
+
+        if ((int16_t) (rec[0] | (rec[1] << 8)) == level_clock)
+            tool_at = rec[2];
+    }
+}
