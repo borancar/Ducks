@@ -412,11 +412,17 @@ def case_collide_scenes(m, rng):
         for i in range(n):
             blob[i * 0x29 + 0x25:i * 0x29 + 0x27] = struct.pack(
                 "<h", rng.choice(types))
-            # coincident often, just off sometimes, so both sides of the gate run
+            # Spread wide enough to straddle BOTH gates. The y range has to
+            # reach a difference of exactly 3 or the `< 3` boundary is never
+            # tested - with 60..62 the threshold could be changed to 4 and
+            # nothing noticed.
             blob[i * 0x29 + 0x00:i * 0x29 + 0x04] = struct.pack(
-                "<i", rng.randrange(40, 44))
+                "<i", rng.randrange(36, 49))
             blob[i * 0x29 + 0x04:i * 0x29 + 0x08] = struct.pack(
-                "<i", rng.randrange(60, 63))
+                "<i", rng.randrange(56, 66))
+            # f14 decides which way the swallow faces, and random bytes make
+            # `== 1` a one-in-256 event, so 0x47 was never reached.
+            blob[i * 0x29 + 0x14] = rng.choice([0, 1, 0xFF, rng.randrange(256)])
         m.uc.mem_write(SCRATCH_SEG * 16 + at, bytes(blob))
 
     put(base0, n0, DUCKS)

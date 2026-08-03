@@ -227,8 +227,9 @@ FUNCTIONS = {
                                         # particle, and the order of them is as
                                         # load-bearing as the values
     0x078F7: "duck_dies",                # (e, force, noisy). With force clear it
-                                        # does nothing unless g_509 is set, and
-                                        # a demo clears g_509
+                                        # does nothing while g_509 is set, so
+                                        # g_509 is "ducks do not die"; a demo
+                                        # clears it, which is when they do
     0x078D4: "entity_set_type",         # native. (e, type): zeroes the frame
                                         # counter
                                         # only when the type actually changes

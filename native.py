@@ -4970,7 +4970,10 @@ def _particles_spawn(m, x, y, n):
 def _duck_dies(m, e, force, noisy):
     """0x078f7 inline."""
     d = m.dgroup_base
-    if not force and not struct.unpack("<h", m.uc.mem_read(d + 0x0509, 2))[0]:
+    # Returns when force is clear AND g_509 is SET - not when both are clear.
+    # g_509 is the "ducks do not die" flag, and menu_screen_driver clears it for
+    # the duration of a demo, so a demo is where they do.
+    if not force and struct.unpack("<h", m.uc.mem_read(d + 0x0509, 2))[0]:
         return
     if struct.unpack("<h", m.uc.mem_read(e + 0x25, 2))[0] == 3:
         return
@@ -5422,16 +5425,13 @@ NATIVE_TABLE = [
     (0x0D4C2, "tool_events", native_tool_events, "far"),
     (0x06F4F, "entity_copy", native_entity_copy, "far"),
     (0x077AE, "particles_spawn", native_particles_spawn, "far"),
-]
-
-# Written, read out in full, and NOT registered: on synthetic collisions it
-# disagrees with the guest on about 15% of cases - the two sides pick different
-# arms, so something in the gate or the dispatch is still misread. It is here
-# rather than in NATIVE_TABLE so the game never runs it, and test_gameplay.py
-# reaches it through this list to keep the failure measured instead of forgotten.
-UNVERIFIED = [
     (0x0993B, "collide_scenes", native_collide_scenes, "far"),
 ]
+
+# Natives written but not registered, so the game never runs code nothing has
+# checked. test_gameplay.py still reaches them through this list, which keeps a
+# known failure measured instead of forgotten. Empty is the goal.
+UNVERIFIED = []
 
 # tool_events sat here written and unregistered for a day, on the belief that it
 # ran once at level start and no snapshot could reach it. Wrong twice over: it
