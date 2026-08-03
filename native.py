@@ -4907,6 +4907,71 @@ def native_entity_copy(m, args):
     return None
 
 
+def _guest_rand(m):
+    """The guest's rand(), reproduced rather than called.
+
+    0:0x147d is the classic Borland LCG - seed = seed * 0x015a4e35 + 1, kept as
+    a long at d+0x3006, returning bits 16..30. A native that draws random numbers
+    has to advance that seed exactly as the original would, or the guest's next
+    draw diverges and everything after it is wrong. Watching d+0x3006 in the
+    verify is what checks the count of draws as well as their values.
+    """
+    d = m.dgroup_base
+    seed = (struct.unpack("<I", m.uc.mem_read(d + 0x3006, 4))[0]
+            * 0x015A4E35 + 1) & 0xFFFFFFFF
+    m.uc.mem_write(d + 0x3006, struct.pack("<I", seed))
+    return (seed >> 16) & 0x7FFF
+
+
+def native_particles_spawn(m, args):
+    """0x077ae: throw a burst of particles out of a point.
+
+        particles_spawn(int16_t x, int16_t y, int16_t n)
+
+    The pool is the far allocation run_level makes at d+0x18c1, sized in
+    setup as (scene0.count + [0x18d1]) * 0x28 records of 16 bytes - and 0x28 is
+    exactly what one dying duck asks for, so the pool is "forty per duck".
+    [0x18cd] is how many are live and [0x18cf] the capacity; a full pool drops
+    the rest silently rather than growing.
+
+    Per particle, four draws in this order - the order matters as much as the
+    values, because the guest's next rand() must land where ours left it:
+
+        +0x00  long   x << 3, the 1/8-pixel fixed point native_particles reads
+        +0x04  long   y << 3
+        +0x08  word   (rand() & 15) - 7      sideways, either way
+        +0x0a  word   -7 - (rand() & 15)     always upward
+        +0x0c  byte   one of the eight colours at d+0x18c5
+        +0x0d  byte   (rand() & 1) + 1
+        +0x0e  word   1
+
+    The shift is 16-bit and only then sign-extended, so a coordinate past 4095
+    wraps rather than scaling.
+    """
+    d = m.dgroup_base
+    x, y, n = struct.unpack("<hhh", m.uc.mem_read(args, 6))
+    off, seg = struct.unpack("<HH", m.uc.mem_read(d + 0x18C1, 4))
+    cap = struct.unpack("<h", m.uc.mem_read(d + 0x18CF, 2))[0]
+    colours = bytes(m.uc.mem_read(d + 0x18C5, 8))
+
+    for _ in range(n):
+        cnt = struct.unpack("<h", m.uc.mem_read(d + 0x18CD, 2))[0]
+        if cnt >= cap:
+            continue
+        p = seg * 16 + ((off + cnt * 16) & 0xFFFF)
+        m.uc.mem_write(p + 0x00, struct.pack("<i", _sign16((x * 8) & 0xFFFF)))
+        m.uc.mem_write(p + 0x04, struct.pack("<i", _sign16((y * 8) & 0xFFFF)))
+        m.uc.mem_write(p + 0x08, struct.pack(
+            "<h", _sign16(((_guest_rand(m) & 0xF) + 0xFFF9) & 0xFFFF)))
+        m.uc.mem_write(p + 0x0A, struct.pack(
+            "<h", _sign16((0xFFF9 - (_guest_rand(m) & 0xF)) & 0xFFFF)))
+        m.uc.mem_write(p + 0x0C, bytes([colours[_guest_rand(m) & 7]]))
+        m.uc.mem_write(p + 0x0D, bytes([(_guest_rand(m) & 1) + 1]))
+        m.uc.mem_write(p + 0x0E, b"\x01\x00")
+        m.uc.mem_write(d + 0x18CD, struct.pack("<h", cnt + 1))
+    return None
+
+
 def native_tool_events(m, args):
     """0x0d4c2: the level's scheduled tool changes. Takes no arguments.
 
@@ -4989,6 +5054,16 @@ def _watch_scroll_pos(m, args):
     return [(seg * 16 + off, 4)]
 
 
+def _watch_particles(m, args):
+    """The pool, how many are live, and the RNG seed - the seed because the
+    number of draws is as much a part of the answer as the values."""
+    d = m.dgroup_base
+    off, seg = struct.unpack("<HH", m.uc.mem_read(d + 0x18C1, 4))
+    cap = struct.unpack("<h", m.uc.mem_read(d + 0x18CF, 2))[0]
+    return [(seg * 16, min(0x10000, off + max(0, cap) * 16)),
+            (d + 0x18CD, 2), (d + 0x3006, 4)]
+
+
 def _watch_scene_entities(m, args):
     """The scene's entity array, wherever farmalloc put it."""
     off, seg = struct.unpack("<HH", m.uc.mem_read(args, 4))
@@ -5024,6 +5099,7 @@ VERIFY_REGIONS = {
     "scroll_axis_snap": _watch_scroll_pos,
     "scene_swap_pair": _watch_swap_scene,
     "entity_copy": _watch_scene_entities,
+    "particles_spawn": _watch_particles,
     "entity_set_type": _watch_entity,
 }
 
@@ -5069,6 +5145,7 @@ NATIVE_TABLE = [
     (0x0A3A7, "scene_swap_pair", native_scene_swap_pair, "far"),
     (0x0D4C2, "tool_events", native_tool_events, "far"),
     (0x06F4F, "entity_copy", native_entity_copy, "far"),
+    (0x077AE, "particles_spawn", native_particles_spawn, "far"),
 ]
 
 # tool_events sat here written and unregistered for a day, on the belief that it

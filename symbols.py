@@ -219,6 +219,12 @@ FUNCTIONS = {
                                         # VOLUME, GAMMA CORRECT
     0x06DBC: "scene_add",               # (scene, x, y, type, param)
     0x06EE9: "scene_alloc",             # (scene, capacity): capacity * 0x29
+    0x077AE: "particles_spawn",          # native. (x, y, n): four rand draws a
+                                        # particle, and the order of them is as
+                                        # load-bearing as the values
+    0x078F7: "duck_dies",                # (e, force, noisy). With force clear it
+                                        # does nothing unless g_509 is set, and
+                                        # a demo clears g_509
     0x078D4: "entity_set_type",         # native. (e, type): zeroes the frame
                                         # counter
                                         # only when the type actually changes
@@ -375,6 +381,12 @@ VARIABLES = {
     0x178C: "tool_scene",               # the two-entity scene the tool cursor is
     0x201A: "level_clock",              # frames since the level started; both
                                         # event tables compare against it
+    0x2007: "duck_count",               # the HUD's second number, and what the
+                                        # "not enough got home" ending compares
+    0x3006: "rand_seed",                # a long. srand keeps only the low word
+    0x18C1: "particle_array",           # far pointer, farmalloc'd per level
+    0x18C5: "particle_colours",         # eight, one picked per particle
+    0x18CD: "particle_count",           # live, and 0x18cf the capacity
     0x2039: "level_seed",               # srand'd once at level start, which is
                                         # what makes a demo replay identically
     0x1717: "bg_w",                     # the background tile's size, two words.

@@ -423,7 +423,7 @@ static void fade_frame(int16_t arg)
     else
         for (i = 0; i < 0x30; i++)
             outp(0x3c9, palette_stored[0xc0 + i] >> 2); /* 0x0b202 */
-    blink_countdown = (rand() & 1) + 2;
+    blink_countdown = (game_rand() & 1) + 2;
 
     /* Not a blink at all, on a closer look: 0x0b202 writes the level's normal
      * terrain ramp and 0x0b1c9 a washed copy of it, so the whole scene lifts to a

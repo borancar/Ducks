@@ -350,7 +350,35 @@ def case_entity_copy(m, rng):
             [(SCRATCH_SEG * 16 + ents, n * 0x29)], "entity_copy")
 
 
+def case_particles_spawn(m, rng):
+    """A burst into a pool that is sometimes too small to hold it.
+
+    The seed at d+0x3006 is in the watched set, so compare() restores it before
+    the guest runs and both sides draw the same numbers - and a native that made
+    the wrong number of draws would leave the seed somewhere else and be caught
+    by that alone.
+    """
+    d = m.dgroup_base
+    cap = rng.randrange(0, 40)
+    live = rng.randrange(0, cap + 1) if cap else 0
+    pool = SCRATCH_SEG * 16
+
+    m.uc.mem_write(pool, rng.randbytes(max(1, cap) * 16))
+    m.uc.mem_write(d + 0x18C1, struct.pack("<HH", 0, SCRATCH_SEG))
+    m.uc.mem_write(d + 0x18CD, struct.pack("<h", live))
+    m.uc.mem_write(d + 0x18CF, struct.pack("<h", cap))
+    m.uc.mem_write(d + 0x18C5, rng.randbytes(8))
+    m.uc.mem_write(d + 0x3006, rng.randbytes(4))
+
+    frame = struct.pack("<hhh", rng.randrange(-300, 600),
+                        rng.randrange(-300, 600), rng.randrange(0, 45))
+    return (0x077AE, frame,
+            [(pool, max(1, cap) * 16), (d + 0x18CD, 2), (d + 0x3006, 4)],
+            "particles_spawn")
+
+
 CASES = [case_scroll, case_scroll_axis, case_entity_set_type,
+         case_particles_spawn,
          case_entity_copy,
          case_tool_events,
          case_scroll_axis_snap, case_scene_swap_pair,

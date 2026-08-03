@@ -155,8 +155,11 @@ typedef struct {
 
 typedef struct {
     int32_t x, y;               /* 1/8-pixel fixed point */
-    uint8_t colour;
-} particle_t;
+    int16_t vx, vy;             /* +0x08, +0x0a - vy is always upward */
+    uint8_t colour;             /* +0x0c */
+    uint8_t f0d;                /* +0x0d - (rand & 1) + 1 */
+    int16_t f0e;                /* +0x0e - 1 when spawned */
+} particle_t;                   /* 16 bytes, as in the original */
 
 /* ------------------------------------------------------------------ sound
  *
@@ -549,5 +552,13 @@ void far bg_scroll_reset(void);
 void far palette_apply_gamma(void);
 void far tool_events(void);
 void far entity_copy(scene_t far *s, int16_t from, int16_t to);
+int16_t far game_rand(void);
+void far game_srand(uint16_t seed);
+extern uint32_t rand_seed;               /* 0x3006 */
+extern int16_t  particle_cap;            /* 0x18cf */
+extern int16_t  duck_count;              /* 0x2007 */
+extern uint8_t  particle_colours[8];     /* 0x18c5 */
+void far particles_spawn(int16_t x, int16_t y, int16_t n);
+void far duck_dies(entity_t far *e, int16_t force, int16_t noisy);
 
 #endif /* DUCKS_DOS_H */

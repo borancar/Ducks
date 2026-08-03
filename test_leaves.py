@@ -190,8 +190,46 @@ def case_entity_copy(m, lib, rng):
     return "entity_copy", theirs, ours, f"n={n} {src}->{dst}"
 
 
+def case_particles_spawn(m, lib, rng):
+    """Both sides draw from the same seed, so the draw ORDER is checked too."""
+    d = m.dgroup_base
+    cap = rng.randrange(1, 40)
+    live = rng.randrange(0, cap + 1)
+    cols = rng.randbytes(8)
+    seed = rng.randrange(0, 1 << 32)
+    x, y, n = (rng.randrange(-300, 600), rng.randrange(-300, 600),
+               rng.randrange(0, 45))
+
+    m.uc.mem_write(SCRATCH_SEG * 16, bytes(cap * 16))
+    m.uc.mem_write(d + 0x18C1, struct.pack("<HH", 0, SCRATCH_SEG))
+    m.uc.mem_write(d + 0x18CD, struct.pack("<h", live))
+    m.uc.mem_write(d + 0x18CF, struct.pack("<h", cap))
+    m.uc.mem_write(d + 0x18C5, cols)
+    m.uc.mem_write(d + 0x3006, struct.pack("<I", seed))
+    m.uc.mem_write(ARGS_SEG * 16, struct.pack("<hhh", x, y, n))
+    m.natives[0x077AE][1](m, ARGS_SEG * 16)
+    theirs = (bytes(m.uc.mem_read(SCRATCH_SEG * 16, cap * 16))
+              + bytes(m.uc.mem_read(d + 0x18CD, 2))
+              + bytes(m.uc.mem_read(d + 0x3006, 4)))
+
+    pool = (ctypes.c_uint8 * (cap * 16))()
+    ctypes.c_void_p.in_dll(lib, "particle_array").value = ctypes.addressof(pool)
+    i16(lib, "particle_count").value = live
+    i16(lib, "particle_cap").value = cap
+    ctypes.memmove(ctypes.addressof(ctypes.c_uint8.in_dll(
+        lib, "particle_colours")), cols, 8)
+    ctypes.c_uint32.in_dll(lib, "rand_seed").value = seed
+    lib.particles_spawn(ctypes.c_int16(x), ctypes.c_int16(y),
+                        ctypes.c_int16(n))
+    ours = (bytes(pool)
+            + struct.pack("<h", i16(lib, "particle_count").value)
+            + struct.pack("<I", ctypes.c_uint32.in_dll(lib,
+                                                       "rand_seed").value))
+    return "particles_spawn", theirs, ours, f"cap={cap} live={live} n={n}"
+
+
 CASES = [case_scroll_follow, case_scroll_axis_snap, case_bg_scroll_reset,
-         case_palette_apply_gamma, case_entity_copy]
+         case_palette_apply_gamma, case_entity_copy, case_particles_spawn]
 
 
 def main():
