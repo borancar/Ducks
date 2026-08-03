@@ -633,20 +633,20 @@ void far compose_layer(void)
  * and the phase is re-masked to 0x1f **every row**, so it is not an arithmetic
  * progression and cannot be flattened to `table[(phase + row * step) & 0x1f]`.
  */
-void far compose_scroll(int16_t scroll_x, int16_t scroll_y)
+void far compose_scroll(int16_t sx, int16_t sy)
 {
     int16_t row, x, phase = warp_phase;
 
     for (row = 0; row < layer_height; row++) {
-        int16_t dx = scroll_x;
+        int16_t dx = sx;
 
         if (background_warp) {                 /* [0x2022] */
             dx += warp_table[phase & 0x1f];
             phase = (phase + warp_step) & 0x1f;   /* re-masked every row */
         }
         {
-            uint8_t far *fg  = fg_rows[(row + scroll_y) & wrap_y];
-            uint8_t far *bg  = bg_rows[(row + scroll_y) & wrap_y];
+            uint8_t far *fg  = fg_rows[(row + sy) & wrap_y];
+            uint8_t far *bg  = bg_rows[(row + sy) & wrap_y];
             uint8_t far *dst = &((uint8_t far *) vram)[row * 80 + dest_row];
             for (x = current_plane; x < layer_width; x += 4) {
                 uint8_t px = fg[(x + dx) & wrap_x];

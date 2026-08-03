@@ -128,7 +128,10 @@ typedef struct {
  * both of them for the frame counter and the type. */
 typedef struct {
     int32_t x, y;               /* +0x00, +0x04 */
-    uint8_t unread[0x0c];       /* +0x08 - never touched by anything read yet */
+    uint8_t unread[4];          /* +0x08 - never touched by anything read yet */
+    int32_t prev_x, prev_y;     /* +0x0c, +0x10 - where it was when the frame
+                                 *         began. scene_keep_positions copies
+                                 *         x and y here before anything moves */
     int8_t  f14;                /* +0x14 - which way the entity faces: every
                                  *         read of it is a byte load and a cbw,
                                  *         and draw_entities tests it for < 0 */
@@ -240,7 +243,7 @@ void far plot_pixel_wide(int16_t x, int16_t y, uint8_t colour);
 void far blit_rows(desc_t far *desc, viewport_t rect, int16_t srcrow);
 void far blit_rows_masked(desc_t far *desc, viewport_t rect, int16_t srcrow);
 void far compose_layer(void);
-void far compose_scroll(int16_t scroll_x, int16_t scroll_y);
+void far compose_scroll(int16_t sx, int16_t sy);
 void far draw_sprite(int16_t far *index, int16_t x, int32_t y,
                      table_t far *table, viewport_t far *clip, uint8_t colour);
 void far outline_sprite(int16_t far *index, int16_t x, int16_t y,
@@ -523,5 +526,27 @@ void far make_rect(viewport_t far *r, int16_t top, int16_t bottom,
 void far palette_build(void);
 void far palette_set_black(uint8_t index);
 extern uint8_t gamma_level;
+
+/* run_level's leaves - game.c, at the bottom. Nothing calls them yet. */
+extern int32_t scroll_x, scroll_y;       /* 0x1739, 0x173d */
+extern int16_t view_w, view_h;           /* 0x1735, 0x1737 */
+extern int16_t level_w, level_h;         /* 0x1701, 0x1703 */
+extern uint8_t scroll_shift;             /* 0x18f5 */
+extern int16_t scroll_smooth;            /* 0x4fa */
+extern int16_t bg_w, bg_h;               /* 0x1717, 0x1719 */
+extern uint8_t bg_drift;                 /* 0x202c */
+extern scene_t scenes[6];                /* 0x0d63 */
+extern int16_t level_clock;              /* 0x201a */
+extern uint8_t far *tool_event_table;    /* 0x203b */
+extern uint16_t    tool_event_count;     /* 0x2047 */
+
+void far scroll_axis_snap(int32_t focus, int32_t extent, int32_t far *pos,
+                          int16_t span);
+void far scroll_follow(int32_t x, int32_t y);
+void far scene_keep_positions(scene_t far *s);
+void far scene_swap_pair(void);
+void far bg_scroll_reset(void);
+void far palette_apply_gamma(void);
+void far tool_events(void);
 
 #endif /* DUCKS_DOS_H */

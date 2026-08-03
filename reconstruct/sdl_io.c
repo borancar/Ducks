@@ -492,9 +492,9 @@ void far compose_layer(void)
             dst[x] = fg[x] ? fg[x] : bg[x & wrap_x];
     }
 }
-void far compose_scroll(int16_t scroll_x, int16_t scroll_y)
+void far compose_scroll(int16_t sx, int16_t sy)
 {
-    (void) scroll_x; (void) scroll_y;
+    (void) sx; (void) sy;
 }
 
 /* ------------------------------------------------------------------- audio
