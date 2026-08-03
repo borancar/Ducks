@@ -4028,3 +4028,94 @@ void far entity_copy(scene_t far *s, int16_t from, int16_t to)
     b->type  = a->type;
     b->param = a->param;
 }
+
+/* ------------------------------------------------ 0:0x146c and 0:0x147d
+ *
+ * The runtime's own generator, written out rather than handed to the host's.
+ * That is not tidiness: run_level draws from it eleven times a frame, and a
+ * level is srand'd from a seed it carries, which is the whole reason a recorded
+ * demo replays identically. A demo run against libc's rand() would diverge on
+ * the first duck.
+ *
+ * Borland's is the usual LCG with the seed as a long at d+0x3006, initialised
+ * to 1, returning bits 16..30. srand keeps only the low word - it zeroes the
+ * high one rather than sign-extending.
+ */
+uint32_t rand_seed = 1;          /* 0x3006 */
+
+int16_t far game_rand(void)
+{
+    rand_seed = rand_seed * 0x015a4e35u + 1u;
+    return (int16_t) ((rand_seed >> 16) & 0x7fff);
+}
+
+void far game_srand(uint16_t seed)
+{
+    rand_seed = seed;
+}
+
+/* --------------------------------------------------- 0x077ae: the particles
+ *
+ * The pool is the far allocation run_level makes in its setup, sized
+ * (scene0.count + [0x18d1]) * 0x28 records - and 0x28 is exactly what one dying
+ * duck asks for, so it is "forty per duck". A full pool drops the rest silently
+ * rather than growing.
+ *
+ * Four draws per particle and the ORDER is as load-bearing as the values: the
+ * generator is shared with everything else in the frame, so a draw too few or
+ * in the wrong place moves every later duck and quack.
+ *
+ * The shift is 16-bit and only then widened, so a coordinate past 4095 wraps
+ * rather than scaling. Reproduced with the cast.
+ */
+int16_t          particle_cap;       /* 0x18cf */
+int16_t          duck_count;         /* 0x2007 - what the HUD's second number
+                                      * shows, and what the "not enough got
+                                      * home" ending compares against */
+uint8_t          particle_colours[8]; /* 0x18c5 */
+
+void far particles_spawn(int16_t x, int16_t y, int16_t n)
+{
+    int16_t i;
+
+    for (i = 0; i < n; i++) {
+        particle_t far *p;
+
+        if (particle_count >= particle_cap)
+            continue;
+        p = &particle_array[particle_count];
+
+        p->x      = (int16_t) (x * 8);
+        p->y      = (int16_t) (y * 8);
+        p->vx     = (int16_t) ((game_rand() & 15) - 7);
+        p->vy     = (int16_t) (-7 - (game_rand() & 15));
+        p->colour = particle_colours[game_rand() & 7];
+        p->f0d    = (uint8_t) ((game_rand() & 1) + 1);
+        p->f0e    = 1;
+        particle_count++;
+    }
+}
+
+/* -------------------------------------------------------- 0x078f7: a duck dies
+ *
+ * The first test is the interesting one: with `force` clear it does nothing at
+ * all unless g_509 is set, and menu_screen_driver clears g_509 for the duration
+ * of a demo. So a demo's ducks only die when something asks for it explicitly.
+ *
+ * Type 3 is dead. Note that this is not how the monster kills - that sets the
+ * type to 0 and lets the retire pass drop the record; see docs/notes/the-monster.md.
+ */
+void far duck_dies(entity_t far *e, int16_t force, int16_t noisy)
+{
+    if (!force && !g_509)
+        return;
+    if (e->type == 3)
+        return;
+
+    duck_count--;
+    if (noisy)
+        sound_play_guarded(5, 1);
+    entity_set_type(e, 3);
+    e->f14 = 0;
+    particles_spawn((int16_t) e->x, (int16_t) e->y, 0x28);
+}
