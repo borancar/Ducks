@@ -4359,3 +4359,53 @@ void far collide_scenes(void)
         }
     }
 }
+
+/* ------------------------------------------------- 0x0a410: the message ticker
+ *
+ * Three slots of one line each, newest at the bottom, a hundred frames apiece.
+ * run_level's plane loop blits them through blit_rows_masked while their
+ * countdowns last, which is what the three overlay images built in its setup are
+ * for. Every one of the four ways a level can end posts one of these.
+ *
+ * Posting shuffles slots 1 and 2 down into 0 and 1 and reuses slot 0's image for
+ * the new line - so the images rotate rather than being reallocated. Only the
+ * `right` edge of each viewport travels with the shuffle, because that is the
+ * only part that depends on the text: it is set from text_width below.
+ *
+ * A null format does nothing at all, which is how a caller says "no message".
+ */
+/* The play area's edges, which native_particles reads as the clip for every
+ * particle and which the ticker measures its line against. */
+int16_t      view_top, view_bottom;  /* 0x172d, 0x172f */
+int16_t      view_left, view_right;  /* 0x1731, 0x1733 */
+
+desc_t far  *message_image[3];   /* 0x210c */
+viewport_t   message_rect[3];    /* 0x2118 */
+uint8_t      message_time[3];    /* 0x2154 */
+
+void far message_post(const char far *fmt, const char far *arg)
+{
+    char        line[0x6a];
+    desc_t far *reused;
+    int16_t     i;
+
+    if (!fmt)
+        return;
+    if (arg)
+        sprintf(line, "%s %s", fmt, arg);
+    else
+        sprintf(line, "%s", fmt);
+
+    reused = message_image[0];
+    for (i = 0; i < 2; i++) {
+        message_image[i]      = message_image[i + 1];
+        message_rect[i].right = message_rect[i + 1].right;
+        message_time[i]       = message_time[i + 1];
+    }
+    message_time[2]  = 0x64;
+    message_image[2] = reused;
+
+    image_clear(reused, 0);
+    draw_string(reused, line, 0, 0);
+    message_rect[2].right = (int16_t) (text_width(line) + view_left + 4);
+}

@@ -572,4 +572,13 @@ extern int16_t g_1ff2, g_1ff4, eaten_countdown, eaten_index;
 extern uint8_t anim_a[112];
 void far collide_scenes(void);
 
+extern int16_t view_top, view_bottom;    /* 0x172d, 0x172f */
+extern int16_t view_left, view_right;    /* 0x1731, 0x1733 */
+
+/* 0x0a410, game.c - the three-slot message ticker */
+extern desc_t far  *message_image[3];    /* 0x210c */
+extern viewport_t   message_rect[3];     /* 0x2118 */
+extern uint8_t      message_time[3];     /* 0x2154 */
+void far message_post(const char far *fmt, const char far *arg);
+
 #endif /* DUCKS_DOS_H */
