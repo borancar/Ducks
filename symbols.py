@@ -222,6 +222,9 @@ FUNCTIONS = {
     0x078D4: "entity_set_type",         # native. (e, type): zeroes the frame
                                         # counter
                                         # only when the type actually changes
+    0x06F4F: "entity_copy",             # native. (scene, from, to): eleven
+                                        # fields, and not +0x08..0x13, so the
+                                        # destination keeps its own prev_x/y
     0x06A49: "image_clear",             # native. (desc, value), a row at a time
     0x087BC: "load_background",         # (index, egg): the tile behind a menu,
                                         # palette at entry 64, then the wrap masks

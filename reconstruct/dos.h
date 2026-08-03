@@ -548,5 +548,6 @@ void far scene_swap_pair(void);
 void far bg_scroll_reset(void);
 void far palette_apply_gamma(void);
 void far tool_events(void);
+void far entity_copy(scene_t far *s, int16_t from, int16_t to);
 
 #endif /* DUCKS_DOS_H */

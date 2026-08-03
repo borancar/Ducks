@@ -4880,6 +4880,33 @@ def native_scene_swap_pair(m, args):
     return None
 
 
+def native_entity_copy(m, args):
+    """0x06f4f: copy one entity of a scene over another.
+
+        entity_copy(scene_t far *s, int16_t from, int16_t to)
+
+    Eleven fields, field by field rather than as a block, and the gaps are the
+    point: +0x08 to +0x13 is not copied, and that is where prev_x and prev_y
+    live. So an entity moved this way keeps the destination's idea of where it
+    was last frame, not the source's.
+
+    +0x19 to +0x1e is not copied either. Nothing has read those yet.
+
+    Runs in all four demo captures.
+    """
+    off, seg, src, dst = struct.unpack("<HHhh", m.uc.mem_read(args, 8))
+    eoff, eseg = struct.unpack("<HH", m.uc.mem_read(seg * 16 + off + 8, 4))
+    base = eseg * 16
+    a = base + ((eoff + src * 0x29) & 0xFFFF)
+    b = base + ((eoff + dst * 0x29) & 0xFFFF)
+
+    for at, n in ((0x00, 4), (0x04, 4), (0x14, 1), (0x21, 2), (0x16, 1),
+                  (0x15, 1), (0x1F, 2), (0x23, 2), (0x27, 2), (0x25, 2),
+                  (0x17, 2)):
+        m.uc.mem_write(b + at, bytes(m.uc.mem_read(a + at, n)))
+    return None
+
+
 def native_tool_events(m, args):
     """0x0d4c2: the level's scheduled tool changes. Takes no arguments.
 
@@ -4996,6 +5023,7 @@ VERIFY_REGIONS = {
     "image_clear": _watch_image_rows,
     "scroll_axis_snap": _watch_scroll_pos,
     "scene_swap_pair": _watch_swap_scene,
+    "entity_copy": _watch_scene_entities,
     "entity_set_type": _watch_entity,
 }
 
@@ -5040,6 +5068,7 @@ NATIVE_TABLE = [
     (0x05F15, "scroll_axis_snap", native_scroll_axis_snap, "far"),
     (0x0A3A7, "scene_swap_pair", native_scene_swap_pair, "far"),
     (0x0D4C2, "tool_events", native_tool_events, "far"),
+    (0x06F4F, "entity_copy", native_entity_copy, "far"),
 ]
 
 # tool_events sat here written and unregistered for a day, on the belief that it

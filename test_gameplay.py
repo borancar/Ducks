@@ -331,7 +331,27 @@ def case_tool_events(m, rng):
     return 0x0D4C2, b"", [(d + 0x1788, 1)], "tool_events"
 
 
+def case_entity_copy(m, rng):
+    """entity_copy(scene, from, to) over a scene of random bytes.
+
+    Random bytes rather than plausible entities on purpose: the fields it does
+    NOT copy are the interesting part, and only junk in them shows that the gaps
+    are really gaps. Copying an entity onto itself is included.
+    """
+    n = rng.randrange(1, 10)
+    hdr = SCRATCH_SEG * 16
+    ents = 0x100
+    m.uc.mem_write(hdr, struct.pack("<hhhhHH", n, n, 0, 0, ents, SCRATCH_SEG))
+    m.uc.mem_write(SCRATCH_SEG * 16 + ents, rng.randbytes(n * 0x29))
+    src = rng.randrange(0, n)
+    dst = rng.choice([src, rng.randrange(0, n)])
+    frame = struct.pack("<HHhh", 0, SCRATCH_SEG, src, dst)
+    return (0x06F4F, frame,
+            [(SCRATCH_SEG * 16 + ents, n * 0x29)], "entity_copy")
+
+
 CASES = [case_scroll, case_scroll_axis, case_entity_set_type,
+         case_entity_copy,
          case_tool_events,
          case_scroll_axis_snap, case_scene_swap_pair,
          case_tool_list_has, case_tool_list_any_flagged, case_text_width,

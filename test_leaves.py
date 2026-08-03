@@ -131,8 +131,67 @@ def case_palette_apply_gamma(m, lib, rng):
     return "palette_apply_gamma", theirs, ours, f"gamma={g}"
 
 
+class Entity(ctypes.Structure):
+    """The port's entity_t. Not the guest's: `far` is nothing here and the
+    compiler pads, so this is 42 bytes where the original is 41. That is why
+    every comparison below is field by field and not a memcmp."""
+    _fields_ = [("x", ctypes.c_int32), ("y", ctypes.c_int32),
+                ("unread", ctypes.c_uint8 * 4),
+                ("prev_x", ctypes.c_int32), ("prev_y", ctypes.c_int32),
+                ("f14", ctypes.c_int8), ("f15", ctypes.c_uint8),
+                ("f16", ctypes.c_uint8), ("param", ctypes.c_int16),
+                ("unread2", ctypes.c_uint8 * 6), ("frame", ctypes.c_int16),
+                ("f21", ctypes.c_int16), ("f23", ctypes.c_int16),
+                ("type", ctypes.c_int16), ("f27", ctypes.c_int16)]
+
+
+class Scene(ctypes.Structure):
+    _fields_ = [("capacity", ctypes.c_int16), ("count", ctypes.c_int16),
+                ("flag", ctypes.c_int16), ("unread6", ctypes.c_int16),
+                ("entities", ctypes.POINTER(Entity))]
+
+
+# guest offset, ctypes name, struct code - every field either side touches
+FIELDS = [(0x00, "x", "<i"), (0x04, "y", "<i"), (0x08, None, None),
+          (0x0C, "prev_x", "<i"), (0x10, "prev_y", "<i"),
+          (0x14, "f14", "<b"), (0x15, "f15", "<B"), (0x16, "f16", "<B"),
+          (0x17, "param", "<h"), (0x1F, "frame", "<h"), (0x21, "f21", "<h"),
+          (0x23, "f23", "<h"), (0x25, "type", "<h"), (0x27, "f27", "<h")]
+
+
+def case_entity_copy(m, lib, rng):
+    n = rng.randrange(1, 8)
+    src, dst = rng.randrange(0, n), rng.randrange(0, n)
+    blob = rng.randbytes(n * 0x29)
+
+    hdr, ents = SCRATCH_SEG * 16, 0x100
+    m.uc.mem_write(hdr, struct.pack("<hhhhHH", n, n, 0, 0, ents, SCRATCH_SEG))
+    m.uc.mem_write(SCRATCH_SEG * 16 + ents, blob)
+    m.uc.mem_write(ARGS_SEG * 16, struct.pack("<HHhh", 0, SCRATCH_SEG, src, dst))
+    m.natives[0x06F4F][1](m, ARGS_SEG * 16)
+    theirs = []
+    for i in range(n):
+        e = SCRATCH_SEG * 16 + ents + i * 0x29
+        theirs += [struct.unpack(f, m.uc.mem_read(e + o, struct.calcsize(f)))[0]
+                   for o, nm, f in FIELDS if nm]
+
+    arr = (Entity * n)()
+    for i in range(n):
+        for o, nm, f in FIELDS:
+            if nm:
+                setattr(arr[i], nm,
+                        struct.unpack(f, blob[i * 0x29 + o:
+                                              i * 0x29 + o
+                                              + struct.calcsize(f)])[0])
+    sc = Scene(n, n, 0, 0, arr)
+    lib.entity_copy(ctypes.byref(sc), ctypes.c_int16(src), ctypes.c_int16(dst))
+    ours = [getattr(arr[i], nm) for i in range(n) for o, nm, f in FIELDS if nm]
+
+    return "entity_copy", theirs, ours, f"n={n} {src}->{dst}"
+
+
 CASES = [case_scroll_follow, case_scroll_axis_snap, case_bg_scroll_reset,
-         case_palette_apply_gamma]
+         case_palette_apply_gamma, case_entity_copy]
 
 
 def main():
