@@ -177,7 +177,9 @@ int16_t    save_serial;          /* 0x2053 - which save is the newest: written
  * where settings begins, which is what fixes the length at 112.
  */
 int16_t far *anim_script[112];   /* 0x009a - a sprite index per step, 999 ends */
-uint8_t      anim_a[112];        /* 0x025a - read nowhere yet */
+uint8_t      anim_a[112];        /* 0x025a - an object's collision reach
+                                  * in x. 0x0993b tests |dx| against it,
+                                  * with |dy| against a constant 3 */
 uint8_t      anim_b[112];        /* 0x02c9 */
 uint8_t      anim_c[112];        /* 0x0338 */
 uint8_t      type_flags[112];    /* 0x03a7 - bit 2 says the type has a mirrored
