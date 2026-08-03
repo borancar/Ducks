@@ -4121,3 +4121,237 @@ void far duck_dies(entity_t far *e, int16_t force, int16_t noisy)
     e->f14 = 0;
     particles_spawn((int16_t) e->x, (int16_t) e->y, 0x28);
 }
+
+/* ======================================================================
+ * 0x0993b: the collision pass
+ *
+ * Scene 0 against scene 2 - every duck against every object - and the switch
+ * below is where most of the game's rules live. 2,668 bytes in the original,
+ * two nested loops covering all but 96 of them.
+ *
+ * The gate is two absolute-value tests: |dx| against anim_a[object type], the
+ * per-type table load_animations fills, and |dy| against a constant 3. So the
+ * boxes are wide and flat, which is what a duck walking into something on the
+ * same row needs. Only six duck types take part, and a duck whose type is
+ * already 0 is skipped - that is the retire convention, the same one the
+ * monster kill relies on.
+ *
+ * The dispatch is two jump tables in the code segment (cs:0x56bb for 0x39..0x59
+ * and cs:0x56fd for 6..0x0a) plus a chain of compares. Twenty-one of the
+ * thirty-three table slots go straight to the next iteration, so the switch
+ * below lists only the arms that do something.
+ *
+ * UNVERIFIED, and nothing calls it yet. The Python twin in native.py disagrees
+ * with the guest on about 15% of synthetic collisions - the two pick different
+ * arms, so something in the gate or the dispatch is still misread - and this C
+ * was written from the same reading. Do not trust it until native.py's
+ * UNVERIFIED entry comes off that list.
+ * ====================================================================== */
+
+int16_t score;                   /* 0x2036 */
+int16_t quota_left;              /* 0x2013 - the "not enough got home" counter */
+int16_t combo_hi, combo_lo;      /* 0x1ff6, 0x1ff8 - the score bonus decays out
+                                  * of these two; both are also ticked down once
+                                  * a frame by run_level */
+int16_t g_1ff2, g_1ff4;          /* what type 0x37 stashes */
+int16_t eaten_countdown;         /* 0x2005 */
+int16_t eaten_index;             /* 0xd7f - which object of scene 2 did it */
+
+static int16_t iabs(int32_t v)   { return (int16_t) (v < 0 ? -v : v); }
+
+/* The bonus both "carried home" arms add. */
+static int16_t carry_bonus(void)
+{
+    return (int16_t) ((combo_lo >> 4) + (combo_hi >> 8) + 5);
+}
+
+void far collide_scenes(void)
+{
+    int16_t si, di;
+
+    for (si = 0; si < scenes[0].count; si++) {
+        entity_t far *d = &scenes[0].entities[si];
+
+        if (d->type != 1 && d->type != 2 && d->type != 4 &&
+            d->type != 0x40 && d->type != 0x41 && d->type != 0x53)
+            continue;
+
+        for (di = 0; di < scenes[2].count; di++) {
+            entity_t far *o = &scenes[2].entities[di];
+
+            if (iabs(d->x - o->x) >= anim_a[o->type])
+                continue;
+            if (iabs(d->y - o->y) >= 3)
+                continue;
+            if (d->type == 0)          /* already retired this frame */
+                continue;
+
+            switch (o->type) {
+            case 0x51:                                  /* 0x09a98 */
+                entity_set_type(d, 0x52);
+                /* face away from it, one step per eight pixels */
+                if (d->x > o->x)
+                    d->f14 = (int8_t) (((d->x - o->x) >> 3) + 1);
+                else
+                    d->f14 = (int8_t) (-(((o->x - d->x) >> 3) + 1));
+                sound_play_guarded(4, 1);
+                break;
+
+            case 0x2e:                                  /* 0x09b87 */
+                if (d->type == 1) {
+                    sound_play_guarded(0x0d, 1);
+                    entity_set_type(o, 0x2f);
+                    score += 0x14;
+                }
+                break;
+
+            case 6: case 7: case 8: case 9: case 0x0a:  /* 0x09bc9 - got home */
+                if (d->type == 1)
+                    break;
+                duck_count--;
+                quota_left--;
+                entity_set_type(d, 0);
+                d->y = -40;
+                entity_set_type(o, 0x1a);
+                o->param--;
+                sound_play_guarded(4, 1);
+                score += carry_bonus();
+                combo_lo = 0xa0;
+                break;
+
+            case 0x48:                                  /* 0x09c72 */
+                if (d->type == 1)
+                    break;
+                sound_play_guarded(0x1f, 1);
+                entity_set_type(o, 0x49);
+                entity_set_type(d, 0x4a);
+                d->param = 0;
+                d->f15   = 0xfc;
+                d->y     = o->y;
+                d->x     = o->x;
+                score   += 0x1e;
+                break;
+
+            case 0x1f:                                  /* 0x09d51 */
+                if (d->type == 1 || d->f14 == 0)
+                    break;
+                entity_set_type(d, 0);
+                entity_set_type(o, 0x1e);
+                o->f14 = (int8_t) (d->f14 > 0 ? 1 : -1);
+                o->f15 = 0xff;
+                sound_play_guarded(0x14, 1);
+                score += 0x14;
+                break;
+
+            case 0x0b: case 0x58:                       /* 0x09e07 */
+                duck_dies(d, 0, 1);
+                break;
+
+            case 0x4d:                                  /* 0x09e27 */
+                if (d->type == 1) {
+                    entity_set_type(d, 0x4e);
+                    sound_play_guarded(0x2a, 1);
+                }
+                break;
+
+            case 0x39: case 0x4b:                       /* 0x09e64 - eaten */
+                if (g_509)
+                    break;
+                entity_set_type(d, 0);
+                duck_count--;
+                /* 0x46 and 0x47 are the same eleven-frame swallow, mirrored;
+                 * which one is the object's facing. See the-monster.md. */
+                entity_set_type(o, (int16_t) (0x46 + (o->f14 == 1)));
+                sound_play_guarded(0x1d, 1);
+                eaten_countdown = 0x32;
+                eaten_index     = di;
+                break;
+
+            case 0x2d:                                  /* 0x09eda */
+                if (g_509)
+                    break;
+                sound_play_guarded(0x0f, 1);
+                entity_set_type(d, 0x35);
+                d->f15 = 0xfb;
+                duck_count--;
+                break;
+
+            case 0x22:                                  /* 0x09f20 */
+                if (d->type == 1)
+                    break;
+                entity_set_type(d, 0x24);
+                entity_set_type(o, 0x23);
+                o->f23 = 0;
+                break;
+
+            case 0x37:                                  /* 0x09fae */
+                if (d->type != 1)
+                    break;
+                d->x    = o->x;
+                /* the NEXT record's x and y, read straight past this one */
+                g_1ff2  = (int16_t) o[1].x;
+                g_1ff4  = (int16_t) o[1].y;
+                entity_set_type(d, 0x20);
+                sound_play_guarded(0x0a, 1);
+                break;
+
+            case 0x38:                                  /* 0x0a04a */
+                if (d->type == 1)
+                    entity_set_type(o, 0x3b);
+                break;
+
+            case 0x42: {                                /* 0x0a07c */
+                int16_t at;
+
+                if (g_509)
+                    break;
+                entity_set_type(d, 0);
+                duck_count--;
+                at = scenes[1].count;
+                if (scene_add(&scenes[1], (int16_t) d->x,
+                              (int16_t) (d->y - 10), 0x43, 0)) {
+                    scenes[1].entities[at].f15 =
+                        (uint8_t) (0xfb - (game_rand() & 3));
+                    scenes[1].entities[at].f14 =
+                        (int8_t) (((game_rand() & 1) << 1) - 1);
+                }
+                sound_play_guarded(0x1e, 1);
+                break;
+            }
+
+            case 0x3c:                                  /* 0x0a12f */
+                if (d->type == 0x40 || d->type == 0x41)
+                    break;
+                d->y = o->y;
+                d->x = o->x;
+                entity_set_type(o, 0x3e);
+                entity_set_type(d, (int16_t) (d->type == 1 ? 0x33 : 0x41));
+                sound_play_guarded(0x1b, 1);
+                d->f15 = 0xf9;
+                d->f21 = 0;
+                break;
+
+            case 0x3d:                                  /* 0x0a243 */
+                entity_set_type(o, 0x3f);
+                entity_set_type(d, (int16_t) (d->type == 1 ? 0x1c : 0x40));
+                sound_play_guarded(0x1b, 1);
+                d->f15 = 0xf9;
+                d->f21 = 0;
+                break;
+
+            case 0x4f:                                  /* 0x0a2dc */
+                duck_count--;
+                quota_left--;
+                entity_set_type(d, 0);
+                d->y = -40;
+                sound_play_guarded(0x14, 1);
+                score += carry_bonus();
+                combo_lo = 0xa0;
+                break;
+
+            default:
+                break;
+            }
+        }
+    }
+}

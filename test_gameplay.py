@@ -39,12 +39,13 @@ from unicorn.x86_const import (UC_X86_REG_AX, UC_X86_REG_CS, UC_X86_REG_DS,
                                UC_X86_REG_SS)
 
 import native
-from native import DECLINE, Native
+from native import DECLINE, Native, UNVERIFIED
 
 STACK_SEG = 0x3000               # scratch, well clear of the loaded image
 ARGS_SEG = 0x3800                # where the made-up call frame is put
 SCRATCH_SEG = 0x4000             # entities and other things pointed at
 RET = 0x30000 + 0x200            # a HLT the call returns to
+GAME_SEG = 0x4CA0                # the game code segment, in image offsets
 
 
 def guest_call(m, off, frame):
@@ -61,7 +62,14 @@ def guest_call(m, off, frame):
                    struct.pack("<HH", RET & 0xF, RET >> 4) + frame)
     m.uc.reg_write(UC_X86_REG_SS, ss)
     m.uc.reg_write(UC_X86_REG_SP, sp)
-    m.uc.reg_write(UC_X86_REG_CS, m.load_seg)
+    # CS has to be the routine's OWN segment, not the image's. Setting it to
+    # load_seg leaves every IP-relative branch consistent - which is why it went
+    # unnoticed through eleven routines - but collide_scenes dispatches through
+    # `jmp word cs:[bx + 0x56bb]`, and a CS-relative table only resolves if CS is
+    # the segment those offsets are relative to. With the wrong base it jumped to
+    # 0x3304:0xcf50 and faulted.
+    seg_base = GAME_SEG if off >= GAME_SEG else 0
+    m.uc.reg_write(UC_X86_REG_CS, (m.image_base + seg_base) >> 4)
     m.uc.reg_write(UC_X86_REG_DS, m.dgroup_base >> 4)
     m.uc.reg_write(UC_X86_REG_ES, m.dgroup_base >> 4)
     saved, m.natives = m.natives, {}
@@ -76,7 +84,10 @@ def compare(m, off, name, frame, watch, label):
     m.uc.mem_write(ARGS_SEG * 16, frame)
     before = [bytes(m.uc.mem_read(a, n)) for a, n in watch]
 
-    _, handler, _ = m.natives[off]
+    entry = m.natives.get(off)
+    if entry is None:                       # see native.py's UNVERIFIED
+        entry = next((e[1:] for e in UNVERIFIED if e[0] == off))
+    _, handler, _ = entry
     outcome = handler(m, ARGS_SEG * 16)
     if outcome is DECLINE:
         for (a, _), b in zip(watch, before):
@@ -377,7 +388,72 @@ def case_particles_spawn(m, rng):
             "particles_spawn")
 
 
+ARM_TYPES = [0x51, 0x2E, 6, 7, 0x0A, 0x48, 0x1F, 0x0B, 0x58, 0x4D, 0x39,
+             0x4B, 0x2D, 0x22, 0x37, 0x38, 0x3C, 0x3D, 0x4F, 0x11, 0x60]
+DUCKS = [1, 2, 4, 0x40, 0x41, 0x53]
+
+
+def case_collide_scenes(m, rng):
+    """Ducks placed ON objects, so the arms actually run.
+
+    Eight seconds of a demo calls this nine times and fires no arm at all - the
+    ducks are never close enough - so the run-time verify covers the gate and
+    nothing else. Here the positions are chosen to collide.
+
+    Type 0x42 is in the pool on purpose: it makes the native decline, and a
+    decline that is not exercised is a decline nobody has checked.
+    """
+    d = m.dgroup_base
+    n0, n2 = rng.randrange(1, 4), rng.randrange(1, 4)
+    base0, base2, base1 = 0x100, 0x400, 0x700
+
+    def put(at, n, types):
+        blob = bytearray(rng.randbytes(n * 0x29))
+        for i in range(n):
+            blob[i * 0x29 + 0x25:i * 0x29 + 0x27] = struct.pack(
+                "<h", rng.choice(types))
+            # coincident often, just off sometimes, so both sides of the gate run
+            blob[i * 0x29 + 0x00:i * 0x29 + 0x04] = struct.pack(
+                "<i", rng.randrange(40, 44))
+            blob[i * 0x29 + 0x04:i * 0x29 + 0x08] = struct.pack(
+                "<i", rng.randrange(60, 63))
+        m.uc.mem_write(SCRATCH_SEG * 16 + at, bytes(blob))
+
+    put(base0, n0, DUCKS)
+    put(base2, n2, ARM_TYPES + [0x42])
+    m.uc.mem_write(SCRATCH_SEG * 16 + base1, bytes(8 * 0x29))
+    for hdr, at, n in ((0x0D63, base0, n0), (0x0D6F, base1, 0),
+                       (0x0D7B, base2, n2)):
+        m.uc.mem_write(d + hdr,
+                       struct.pack("<hhhhHH", 8, n, 0, 0, at, SCRATCH_SEG))
+
+    m.uc.mem_write(d + 0x025A, bytes([rng.randrange(0, 12)
+                                      for _ in range(112)]))
+    m.uc.mem_write(d + 0x0509, struct.pack("<h", rng.randrange(0, 2)))
+    for at in (0x0D7F, 0x2005, 0x2007, 0x2013, 0x2036):
+        m.uc.mem_write(d + at, rng.randbytes(2))
+    m.uc.mem_write(d + 0x1FF2, rng.randbytes(8))
+    m.uc.mem_write(d + 0x3006, rng.randbytes(4))
+    # a particle pool for the duck_dies arms to fill
+    pool, cap = SCRATCH_SEG * 16 + 0x1000, 64
+    m.uc.mem_write(pool, bytes(cap * 16))
+    m.uc.mem_write(d + 0x18C1, struct.pack("<HH", 0x1000, SCRATCH_SEG))
+    m.uc.mem_write(d + 0x18CD, struct.pack("<h", 0))
+    m.uc.mem_write(d + 0x18CF, struct.pack("<h", cap))
+    m.uc.mem_write(d + 0x18C5, rng.randbytes(8))
+
+    watch = [(SCRATCH_SEG * 16 + base0, n0 * 0x29),
+             (SCRATCH_SEG * 16 + base2, n2 * 0x29),
+             (SCRATCH_SEG * 16 + base1, 8 * 0x29),
+             (d + 0x0D63, 36), (d + 0x0D7F, 2), (d + 0x1FF2, 8),
+             (d + 0x2005, 2), (d + 0x2007, 2), (d + 0x2013, 2),
+             (d + 0x2036, 2), (d + 0x3006, 4), (d + 0x18CD, 2),
+             (pool, cap * 16)]
+    return 0x0993B, b"", watch, "collide_scenes"
+
+
 CASES = [case_scroll, case_scroll_axis, case_entity_set_type,
+         case_collide_scenes,
          case_particles_spawn,
          case_entity_copy,
          case_tool_events,
@@ -395,6 +471,7 @@ def main():
 
     bad = declined = 0
     counts = {}
+    bad_by = {}
     for _ in range(300):
         for make in CASES:
             off, frame, watch, label = make(m, rng)
@@ -404,14 +481,21 @@ def main():
                 declined += 1
             elif why:
                 bad += 1
+                bad_by[label] = bad_by.get(label, 0) + 1
                 if bad < 8:
                     print("  MISMATCH " + why)
 
+    known = {n for _, n, _, _ in UNVERIFIED}
     for label in sorted(counts):
-        print(f"  {label:<22} {counts[label]} cases")
+        n_bad = bad_by.get(label, 0)
+        note = f"   {n_bad} DIFFER" if n_bad else ""
+        if n_bad and label in known:
+            note += "  <- known; see native.py UNVERIFIED"
+        print(f"  {label:<22} {counts[label]} cases{note}")
+    hard = sum(v for k, v in bad_by.items() if k not in known)
     print(f"{sum(counts.values())} comparisons, {declined} declined, "
-          f"{bad} differ")
-    return 1 if bad else 0
+          f"{bad} differ ({hard} in routines claimed verified)")
+    return 1 if hard else 0
 
 
 if __name__ == "__main__":

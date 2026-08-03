@@ -187,6 +187,8 @@ class Native(VgaDos):
         # that body was seen to reach. See _verify_native.
         self.verify_body = None
         self.verify_shadow = defaultdict(set)
+        # Sounds a native asked for and did not play - see _sound_note.
+        self.noted_sounds = []
         super().__init__(*a, **kw)
         self.image_base = self.load_seg * 16
         self.dgroup_base = self.image_base + DGROUP_IMAGE_OFF
@@ -4923,6 +4925,66 @@ def _guest_rand(m):
     return (seed >> 16) & 0x7FFF
 
 
+def _sound_note(m, sid, voice):
+    """A native cannot raise a sound from inside a hook, and we do not need one.
+
+    Recorded instead of played, so the count is visible rather than the absence
+    being silent. Sound state is deliberately outside every watched region, so
+    this does not affect any comparison - which is the whole reason it is safe.
+    """
+    m.native_calls["sound(noted)"] += 1
+    m.noted_sounds.append((sid, voice))
+
+
+def _entity_set_type(m, e, kind):
+    """0x078d4 inline: the frame only resets when the type actually changes."""
+    if struct.unpack("<h", m.uc.mem_read(e + 0x25, 2))[0] != kind:
+        m.uc.mem_write(e + 0x25, struct.pack("<h", kind))
+        m.uc.mem_write(e + 0x1F, b"\x00\x00")
+
+
+def _particles_spawn(m, x, y, n):
+    """0x077ae inline - see native_particles_spawn for the reading."""
+    d = m.dgroup_base
+    off, seg = struct.unpack("<HH", m.uc.mem_read(d + 0x18C1, 4))
+    cap = struct.unpack("<h", m.uc.mem_read(d + 0x18CF, 2))[0]
+    colours = bytes(m.uc.mem_read(d + 0x18C5, 8))
+
+    for _ in range(n):
+        cnt = struct.unpack("<h", m.uc.mem_read(d + 0x18CD, 2))[0]
+        if cnt >= cap:
+            continue
+        p = seg * 16 + ((off + cnt * 16) & 0xFFFF)
+        m.uc.mem_write(p + 0x00, struct.pack("<i", _sign16((x * 8) & 0xFFFF)))
+        m.uc.mem_write(p + 0x04, struct.pack("<i", _sign16((y * 8) & 0xFFFF)))
+        m.uc.mem_write(p + 0x08, struct.pack(
+            "<h", _sign16(((_guest_rand(m) & 0xF) + 0xFFF9) & 0xFFFF)))
+        m.uc.mem_write(p + 0x0A, struct.pack(
+            "<h", _sign16((0xFFF9 - (_guest_rand(m) & 0xF)) & 0xFFFF)))
+        m.uc.mem_write(p + 0x0C, bytes([colours[_guest_rand(m) & 7]]))
+        m.uc.mem_write(p + 0x0D, bytes([(_guest_rand(m) & 1) + 1]))
+        m.uc.mem_write(p + 0x0E, b"\x01\x00")
+        m.uc.mem_write(d + 0x18CD, struct.pack("<h", cnt + 1))
+
+
+def _duck_dies(m, e, force, noisy):
+    """0x078f7 inline."""
+    d = m.dgroup_base
+    if not force and not struct.unpack("<h", m.uc.mem_read(d + 0x0509, 2))[0]:
+        return
+    if struct.unpack("<h", m.uc.mem_read(e + 0x25, 2))[0] == 3:
+        return
+    n = struct.unpack("<h", m.uc.mem_read(d + 0x2007, 2))[0]
+    m.uc.mem_write(d + 0x2007, struct.pack("<h", _sign16((n - 1) & 0xFFFF)))
+    if noisy:
+        _sound_note(m, 5, 1)
+    _entity_set_type(m, e, 3)
+    m.uc.mem_write(e + 0x14, b"\x00")
+    x, y = struct.unpack("<hh", m.uc.mem_read(e + 0x00, 2)
+                         + m.uc.mem_read(e + 0x04, 2))
+    _particles_spawn(m, x, y, 0x28)
+
+
 def native_particles_spawn(m, args):
     """0x077ae: throw a burst of particles out of a point.
 
@@ -4969,6 +5031,196 @@ def native_particles_spawn(m, args):
         m.uc.mem_write(p + 0x0D, bytes([(_guest_rand(m) & 1) + 1]))
         m.uc.mem_write(p + 0x0E, b"\x01\x00")
         m.uc.mem_write(d + 0x18CD, struct.pack("<h", cnt + 1))
+    return None
+
+
+DUCK_TYPES = (1, 2, 4, 0x40, 0x41, 0x53)
+
+
+def native_collide_scenes(m, args):
+    """0x0993b: scene 0 against scene 2, and the switch is the game's rules.
+
+    Two nested loops over all but 96 of its 2,668 bytes. The gate is |dx|
+    against anim_a[object type] - the per-type table at d+0x25a that dos.h has
+    carried "read nowhere yet" against since it was written - and |dy| against a
+    constant 3. Wide flat boxes, which is what a duck walking into something on
+    the same row needs.
+
+    The dispatch is two jump tables in the code segment, cs:0x56bb for types
+    0x39..0x59 and cs:0x56fd for 6..0x0a, plus a compare chain. Twenty-one of
+    the thirty-three table slots fall through to the next object, so only the
+    arms that do something appear below.
+
+    Sounds are noted, not played - see _sound_note. entity_set_type, duck_dies
+    and particles_spawn are done inline, so verifying this needs
+    --skip-natives entity_set_type,duck_dies,particles_spawn or it compares
+    those parts against itself.
+    """
+    d = m.dgroup_base
+    i16 = lambda a: struct.unpack("<h", m.uc.mem_read(a, 2))[0]
+    i32 = lambda a: struct.unpack("<i", m.uc.mem_read(a, 4))[0]
+    put16 = lambda a, v: m.uc.mem_write(a, struct.pack("<h", _sign16(v & 0xFFFF)))
+    put32 = lambda a, v: m.uc.mem_write(a, struct.pack("<i", _sign32(v)))
+    add16 = lambda a, v: put16(a, i16(a) + v)
+
+    def ents(base):
+        off, seg = struct.unpack("<HH", m.uc.mem_read(base + 8, 4))
+        return lambda i: seg * 16 + ((off + i * 0x29) & 0xFFFF)
+
+    s0, s2 = ents(d + 0x0D63), ents(d + 0x0D7B)
+    anim_a = bytes(m.uc.mem_read(d + 0x025A, 112))
+    n0, n2 = i16(d + 0x0D65), i16(d + 0x0D7D)
+
+    # One arm - object type 0x42 - spawns into scene 1 through scene_add, which
+    # is 301 bytes and unread. Declined before anything is written rather than
+    # part way through: a decline after a mutation would leave the original body
+    # to apply it a second time.
+    for di in range(n2):
+        if i16(s2(di) + 0x25) == 0x42:
+            return DECLINE
+
+    def bonus():
+        return ((i16(d + 0x1FF8) >> 4) + (i16(d + 0x1FF6) >> 8) + 5)
+
+    for si in range(n0):
+        e = s0(si)
+        if i16(e + 0x25) not in DUCK_TYPES:
+            continue
+
+        for di in range(n2):
+            o = s2(di)
+            ot = i16(o + 0x25)
+            if abs(i32(e + 0) - i32(o + 0)) >= anim_a[ot & 0x7F]:
+                continue
+            if abs(i32(e + 4) - i32(o + 4)) >= 3:
+                continue
+            if i16(e + 0x25) == 0:
+                continue
+            dt = i16(e + 0x25)
+
+            if ot == 0x51:
+                _entity_set_type(m, e, 0x52)
+                if i32(e + 0) > i32(o + 0):
+                    v = ((i32(e + 0) - i32(o + 0)) >> 3) + 1
+                else:
+                    v = -((((i32(o + 0) - i32(e + 0)) >> 3) + 1) & 0xFF)
+                m.uc.mem_write(e + 0x14, bytes([v & 0xFF]))
+                _sound_note(m, 4, 1)
+            elif ot == 0x2E:
+                if dt == 1:
+                    _sound_note(m, 0x0D, 1)
+                    _entity_set_type(m, o, 0x2F)
+                    add16(d + 0x2036, 0x14)
+            elif 6 <= ot <= 0x0A:
+                if dt == 1:
+                    continue
+                add16(d + 0x2007, -1)
+                add16(d + 0x2013, -1)
+                _entity_set_type(m, e, 0)
+                put32(e + 4, -40)
+                _entity_set_type(m, o, 0x1A)
+                add16(o + 0x17, -1)
+                _sound_note(m, 4, 1)
+                add16(d + 0x2036, bonus())
+                put16(d + 0x1FF8, 0xA0)
+            elif ot == 0x48:
+                if dt == 1:
+                    continue
+                _sound_note(m, 0x1F, 1)
+                _entity_set_type(m, o, 0x49)
+                _entity_set_type(m, e, 0x4A)
+                put16(e + 0x17, 0)
+                m.uc.mem_write(e + 0x15, b"\xFC")
+                put32(e + 4, i32(o + 4))
+                put32(e + 0, i32(o + 0))
+                add16(d + 0x2036, 0x1E)
+            elif ot == 0x1F:
+                if dt == 1 or m.uc.mem_read(e + 0x14, 1)[0] == 0:
+                    continue
+                f14 = struct.unpack("<b", m.uc.mem_read(e + 0x14, 1))[0]
+                _entity_set_type(m, e, 0)
+                _entity_set_type(m, o, 0x1E)
+                m.uc.mem_write(o + 0x14, bytes([1 if f14 > 0 else 0xFF]))
+                m.uc.mem_write(o + 0x15, b"\xFF")
+                _sound_note(m, 0x14, 1)
+                add16(d + 0x2036, 0x14)
+            elif ot in (0x0B, 0x58):
+                _duck_dies(m, e, 0, 1)
+            elif ot == 0x4D:
+                if dt == 1:
+                    _entity_set_type(m, e, 0x4E)
+                    _sound_note(m, 0x2A, 1)
+            elif ot in (0x39, 0x4B):
+                if i16(d + 0x0509):
+                    continue
+                _entity_set_type(m, e, 0)
+                add16(d + 0x2007, -1)
+                face = struct.unpack("<b", m.uc.mem_read(o + 0x14, 1))[0]
+                _entity_set_type(m, o, 0x46 + (1 if face == 1 else 0))
+                _sound_note(m, 0x1D, 1)
+                put16(d + 0x2005, 0x32)
+                put16(d + 0x0D7F, di)
+            elif ot == 0x2D:
+                if i16(d + 0x0509):
+                    continue
+                _sound_note(m, 0x0F, 1)
+                _entity_set_type(m, e, 0x35)
+                m.uc.mem_write(e + 0x15, b"\xFB")
+                add16(d + 0x2007, -1)
+            elif ot == 0x22:
+                if dt == 1:
+                    continue
+                _entity_set_type(m, e, 0x24)
+                _entity_set_type(m, o, 0x23)
+                put16(o + 0x23, 0)
+            elif ot == 0x37:
+                if dt != 1:
+                    continue
+                put32(e + 0, i32(o + 0))
+                put16(d + 0x1FF2, i16(o + 0x29))
+                put16(d + 0x1FF4, i16(o + 0x2D))
+                _entity_set_type(m, e, 0x20)
+                _sound_note(m, 0x0A, 1)
+            elif ot == 0x38:
+                if dt == 1:
+                    _entity_set_type(m, o, 0x3B)
+            elif ot == 0x42:
+                # Unreachable: the guard at the top declines before any of this
+                # runs. Kept because it is the reading -
+                #   if (g_509) break;
+                #   entity_set_type(d, 0); duck_count--;
+                #   at = scenes[1].count;
+                #   if (scene_add(&scenes[1], d->x, d->y - 10, 0x43, 0)) {
+                #       scenes[1].entities[at].f15 = 0xfb - (rand() & 3);
+                #       scenes[1].entities[at].f14 = ((rand() & 1) << 1) - 1;
+                #   }
+                #   sound_play_guarded(0x1e, 1);
+                # - and it needs scene_add, 301 bytes, still unread.
+                return DECLINE
+            elif ot == 0x3C:
+                if dt in (0x40, 0x41):
+                    continue
+                put32(e + 4, i32(o + 4))
+                put32(e + 0, i32(o + 0))
+                _entity_set_type(m, o, 0x3E)
+                _entity_set_type(m, e, 0x33 if dt == 1 else 0x41)
+                _sound_note(m, 0x1B, 1)
+                m.uc.mem_write(e + 0x15, b"\xF9")
+                put16(e + 0x21, 0)
+            elif ot == 0x3D:
+                _entity_set_type(m, o, 0x3F)
+                _entity_set_type(m, e, 0x1C if dt == 1 else 0x40)
+                _sound_note(m, 0x1B, 1)
+                m.uc.mem_write(e + 0x15, b"\xF9")
+                put16(e + 0x21, 0)
+            elif ot == 0x4F:
+                add16(d + 0x2007, -1)
+                add16(d + 0x2013, -1)
+                _entity_set_type(m, e, 0)
+                put32(e + 4, -40)
+                _sound_note(m, 0x14, 1)
+                add16(d + 0x2036, bonus())
+                put16(d + 0x1FF8, 0xA0)
     return None
 
 
@@ -5054,6 +5306,29 @@ def _watch_scroll_pos(m, args):
     return [(seg * 16 + off, 4)]
 
 
+def _watch_collide(m, args):
+    """The three scenes it can touch, plus every global an arm writes, plus the
+    RNG seed and the particle pool that duck_dies reaches through.
+
+    Sound state is deliberately NOT here: the native notes sounds instead of
+    playing them, so including it would report a difference that is by design.
+    """
+    d = m.dgroup_base
+    out = []
+    for hdr in (0x0D63, 0x0D6F, 0x0D7B):
+        n = struct.unpack("<h", m.uc.mem_read(d + hdr + 2, 2))[0]
+        off, seg = struct.unpack("<HH", m.uc.mem_read(d + hdr + 8, 4))
+        out.append((seg * 16 + off, max(0, n) * 0x29))
+    out += [(d + 0x0D63, 36),            # the three scene headers
+            (d + 0x0D7F, 2), (d + 0x1FF2, 8), (d + 0x2005, 2),
+            (d + 0x2007, 2), (d + 0x2013, 2), (d + 0x2036, 2),
+            (d + 0x3006, 4), (d + 0x18CD, 2)]
+    off, seg = struct.unpack("<HH", m.uc.mem_read(d + 0x18C1, 4))
+    cap = struct.unpack("<h", m.uc.mem_read(d + 0x18CF, 2))[0]
+    out.append((seg * 16, min(0x10000, off + max(0, cap) * 16)))
+    return out
+
+
 def _watch_particles(m, args):
     """The pool, how many are live, and the RNG seed - the seed because the
     number of draws is as much a part of the answer as the values."""
@@ -5100,6 +5375,7 @@ VERIFY_REGIONS = {
     "scene_swap_pair": _watch_swap_scene,
     "entity_copy": _watch_scene_entities,
     "particles_spawn": _watch_particles,
+    "collide_scenes": _watch_collide,
     "entity_set_type": _watch_entity,
 }
 
@@ -5146,6 +5422,15 @@ NATIVE_TABLE = [
     (0x0D4C2, "tool_events", native_tool_events, "far"),
     (0x06F4F, "entity_copy", native_entity_copy, "far"),
     (0x077AE, "particles_spawn", native_particles_spawn, "far"),
+]
+
+# Written, read out in full, and NOT registered: on synthetic collisions it
+# disagrees with the guest on about 15% of cases - the two sides pick different
+# arms, so something in the gate or the dispatch is still misread. It is here
+# rather than in NATIVE_TABLE so the game never runs it, and test_gameplay.py
+# reaches it through this list to keep the failure measured instead of forgotten.
+UNVERIFIED = [
+    (0x0993B, "collide_scenes", native_collide_scenes, "far"),
 ]
 
 # tool_events sat here written and unregistered for a day, on the belief that it

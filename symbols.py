@@ -115,7 +115,7 @@ FUNCTIONS = {
     0x0D55D: "tool_list_has",            # native
     0x0D591: "tool_list_any_flagged",    # native
     0x0D6C3: "bg_scroll_reset",          # native
-    0x0993B: "collide_scenes",           # scene 0 against scene 2, every duck
+    0x0993B: "collide_scenes",           # native. Scene 0 against scene 2, every duck
                                         # against every object: |dx| < anim_a
                                         # [type] and |dy| < 3, then a switch on
                                         # the object's type
