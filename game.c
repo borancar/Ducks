@@ -4005,3 +4005,26 @@ void far tool_events(void)
             tool_at = rec[2];
     }
 }
+
+/* 0x06f4f. Copy one entity of a scene over another - eleven fields, in the
+ * guest's own order, and the gaps are the point. +0x08 to +0x13 is not copied,
+ * which is prev_x and prev_y, so an entity moved this way keeps the
+ * destination's idea of where it was last frame rather than the source's.
+ * +0x19 to +0x1e is not copied either; nothing has read those yet. */
+void far entity_copy(scene_t far *s, int16_t from, int16_t to)
+{
+    entity_t far *a = &s->entities[from];
+    entity_t far *b = &s->entities[to];
+
+    b->x     = a->x;
+    b->y     = a->y;
+    b->f14   = a->f14;
+    b->f21   = a->f21;
+    b->f16   = a->f16;
+    b->f15   = a->f15;
+    b->frame = a->frame;
+    b->f23   = a->f23;
+    b->f27   = a->f27;
+    b->type  = a->type;
+    b->param = a->param;
+}

@@ -81,12 +81,12 @@ worth having as source.
 | file | contents so far |
 | --- | --- |
 | [`dos.h`](dos.h) | the types and the interface both backends implement, so `game.c` does not know which it is linked against |
-| [`game.c`](game.c) | 104 functions - `main` and `init`, the resource and string loaders, the two fonts, the whole menu system and every screen it reaches, the save format, the hall of fame, and the first pieces of the gameplay. Naming them all here would rot; they are in address order in the file and in `symbols.py` |
+| [`game.c`](game.c) | 105 functions - `main` and `init`, the resource and string loaders, the two fonts, the whole menu system and every screen it reaches, the save format, the hall of fame, and the first pieces of the gameplay. Naming them all here would rot; they are in address order in the file and in `symbols.py` |
 | [`dos_io.c`](dos_io.c) | nineteen functions: `set_bios_mode`, mode, planes, DAC, page flip, the three INT 33h wrappers, and every drawing primitive the native port replaced - `clear_vram`, `plot_pixel` and its stride-90 twin, `palette_fade_step`, `blit_rows`, `blit_rows_masked`, `compose_layer`, `compose_scroll`, `draw_sprite`, `outline_sprite`. No TODOs left in this file |
 | [`sound.c`](sound.c) | the sound module, code segments 0x1462 and 0x149e: the id-to-sample map, the eight-voice table, and the mixer. A sample lives in extended memory in the original and in a `malloc` here, which is the only difference that matters - the game asks about sounds by id either way |
 | [`sdl_io.c`](sdl_io.c) | the same interface on SDL3: a linear framebuffer, an SDL palette, a 70 Hz deadline in place of the retrace spin, SDL events counted into the INT 33h wrappers' shape, the mouse capture, and the audio device the mixer feeds |
 | [`egg.c`](egg.c) | the egg reader: the directory, `egg_find_block`, the chunk decoder and the shifted-string reader. The port maps the file and walks it with a cursor where the original seeks a `FILE *`, which is why the readers take a stream and treat NULL as the egg |
-| [`stubs.c`](stubs.c) | what is left: 25 declarations, and the list is the to-do list in dependency order. `run_level` is the large one, deliberately a no-op that reports "the run ended" - 51 of the 91 routines it reaches are unwritten, 16.5 KB of them, and its loop exits on a flag only the unread part clears, so a skeleton would hang rather than partly play |
+| [`stubs.c`](stubs.c) | what is left: 25 declarations, and the list is the to-do list in dependency order. `run_level` is the large one, deliberately a no-op that reports "the run ended" - 37 of the 91 routines it reaches are unwritten, 14.0 KB of them, and its loop exits on a flag only the unread part clears, so a skeleton would hang rather than partly play |
 
 `game.c` keeps its functions in **address order**, which within a module is the
 order the compiler emits them and therefore the order they were defined in - a
