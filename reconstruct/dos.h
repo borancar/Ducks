@@ -561,4 +561,9 @@ extern uint8_t  particle_colours[8];     /* 0x18c5 */
 void far particles_spawn(int16_t x, int16_t y, int16_t n);
 void far duck_dies(entity_t far *e, int16_t force, int16_t noisy);
 
+/* stubs.c - stubbed until run_level(1) needs them; see the note there */
+void far played_tool_events(uint8_t far *flash);
+void far tool_apply(scene_t far *s, int16_t n);
+void far f_07955(void);
+
 #endif /* DUCKS_DOS_H */

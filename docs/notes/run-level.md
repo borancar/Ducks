@@ -269,6 +269,31 @@ the far allocator and its free; `0:0x33cb` `fprintf` and `0:0x3007` `fclose`,
 which only run when `[0x51d]` is set — there is a play log, and nothing has been
 seen to turn it on.
 
+## Doing the demo first
+
+**2026-08-03.** `run_level(1)` needs no input, so it is the version to get
+running, and it is measurably less work: of the 35 routines still unwritten, 23
+run in a demo.
+
+Establishing *which* 23 took two goes, and the first was wrong. Tracing the four
+demo captures says twelve never run - but every capture is mid-level, so nothing
+in `run_level`'s setup or teardown can appear in a trace taken from one. Letting
+the main menu time out into a demo and tracing that instead shows `0x0881d`,
+`0x0d5c5`, `0x0615a`, `0x04f4b` and `0x0a85f` all running, the last of them 520
+times. **Five of the twelve were wrong**, and every one of them is a routine that
+runs once at level start or often under a condition the captures did not meet.
+
+So the two kinds of evidence are not equal, and the stubs in `stubs.c` say which
+they rest on. `0x0cf07` is off the demo path *by reading* - it is the played
+branch of the `[bp+6]` fork, and `0x0ce2e` is reached only from it. The rest are
+merely unobserved, and each complains the first time it is called, because a
+stub that silently does nothing is how a demo quietly stops matching.
+
+(The main-menu capture carries `game_in_progress` from having been taken under
+`--no-demo`, so the idle timeout never fires from it. The measurement clears it
+explicitly. That is not the restore-side fix that was rejected - there, our lie
+and a genuinely paused game are indistinguishable.)
+
 ## The order to take it
 
 The event tables and the tool list are filled by the level loader, so reading
