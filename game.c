@@ -4100,16 +4100,19 @@ void far particles_spawn(int16_t x, int16_t y, int16_t n)
 
 /* -------------------------------------------------------- 0x078f7: a duck dies
  *
- * The first test is the interesting one: with `force` clear it does nothing at
- * all unless g_509 is set, and menu_screen_driver clears g_509 for the duration
- * of a demo. So a demo's ducks only die when something asks for it explicitly.
+ * The first test is the interesting one, and it is easy to read inside out:
+ * `jne` on [0x509] jumps to the RETURN, so this does nothing when force is clear
+ * and g_509 is SET. g_509 is therefore "ducks do not die", and
+ * menu_screen_driver clears it for the duration of a demo - which is exactly
+ * when they do. Getting it backwards made both sides of the comparison silent
+ * for object types 0x0b and 0x58.
  *
  * Type 3 is dead. Note that this is not how the monster kills - that sets the
  * type to 0 and lets the retire pass drop the record; see docs/notes/the-monster.md.
  */
 void far duck_dies(entity_t far *e, int16_t force, int16_t noisy)
 {
-    if (!force && !g_509)
+    if (!force && g_509)
         return;
     if (e->type == 3)
         return;
@@ -4141,11 +4144,12 @@ void far duck_dies(entity_t far *e, int16_t force, int16_t noisy)
  * thirty-three table slots go straight to the next iteration, so the switch
  * below lists only the arms that do something.
  *
- * UNVERIFIED, and nothing calls it yet. The Python twin in native.py disagrees
- * with the guest on about 15% of synthetic collisions - the two pick different
- * arms, so something in the gate or the dispatch is still misread - and this C
- * was written from the same reading. Do not trust it until native.py's
- * UNVERIFIED entry comes off that list.
+ * The Python twin in native.py IS verified - every object type against every
+ * duck type, against the guest, plus 300 random multi-entity scenes. This C is a
+ * transcription of it and has NOT itself been compared: doing that needs three
+ * scenes and ten globals marshalled through ctypes, the way test_leaves.py does
+ * for entity_copy, and that is not written yet. Nothing calls this, because
+ * run_level is still a stub.
  * ====================================================================== */
 
 int16_t score;                   /* 0x2036 */
