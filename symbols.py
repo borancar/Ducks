@@ -98,6 +98,14 @@ FUNCTIONS = {
                                         # from 1
     0x06D84: "draw_string",             # (desc, str, x, y): glyph_to_image
                                         # per character, advancing by its return
+    0x0881D: "make_rect",                # (r, top, bottom, left, right): fills
+                                        # a viewport_t and derives its width and
+                                        # height. Already in game.c; it was only
+                                        # unnamed here, which is why the gap
+                                        # count had it as missing
+    0x0A410: "message_post",             # (fmt, arg): the three-slot on-screen
+                                        # ticker, 100 frames a line, newest at
+                                        # the bottom. A null fmt posts nothing
     0x0876A: "build_washed_ramp",       # native. v*0.75+64 into [0x0dad]
     0x0537D: "egg_block_end",           # native
     0x0580B: "rle_reset",                # native
@@ -386,6 +394,11 @@ VARIABLES = {
     0x178C: "tool_scene",               # the two-entity scene the tool cursor is
     0x201A: "level_clock",              # frames since the level started; both
                                         # event tables compare against it
+    0x210C: "message_image",            # three desc_t far *, rotated on post
+    0x2118: "message_rect",             # three viewport_t, 0x14 apart
+    0x2154: "message_time",             # three countdowns, 100 frames a line
+    0x172D: "view_top",                 # the play area's edges: 0x172d/0x172f
+    0x1731: "view_left",                # and 0x1731/0x1733
     0x2007: "duck_count",               # the HUD's second number, and what the
                                         # "not enough got home" ending compares
     0x3006: "rand_seed",                # a long. srand keeps only the low word
