@@ -566,4 +566,10 @@ void far played_tool_events(uint8_t far *flash);
 void far tool_apply(scene_t far *s, int16_t n);
 void far f_07955(void);
 
+/* 0x0993b, game.c - the collision pass */
+extern int16_t score, quota_left, combo_hi, combo_lo;
+extern int16_t g_1ff2, g_1ff4, eaten_countdown, eaten_index;
+extern uint8_t anim_a[112];
+void far collide_scenes(void);
+
 #endif /* DUCKS_DOS_H */
