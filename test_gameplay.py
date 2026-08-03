@@ -458,7 +458,39 @@ def case_collide_scenes(m, rng):
     return 0x0993B, b"", watch, "collide_scenes"
 
 
+def case_tool_use(m, rng):
+    """A tool used at a point, over a level image with a real ground profile.
+
+    The tool is drawn from the drag pair and the other arms in equal measure, so
+    the decline path is exercised as well as the one that acts. The ground is
+    built so the 28-row check sometimes passes and sometimes does not - a run
+    where it always passed would never test the second decline.
+    """
+    d = m.dgroup_base
+    h = 60
+    rows_at, pix_at = 0x100, 0x400
+    # a row table of `h` far pointers, each row 256 bytes
+    for i in range(h):
+        m.uc.mem_write(SCRATCH_SEG * 16 + rows_at + i * 4,
+                       struct.pack("<HH", pix_at + i * 0x100, SCRATCH_SEG))
+        # deep water above a floor, at a depth that varies the row count
+        floor = rng.randrange(2, 40)
+        row = bytes([0xFF if i < floor else rng.randrange(0, 0xC8)]) * 0x100
+        m.uc.mem_write(SCRATCH_SEG * 16 + pix_at + i * 0x100, row)
+    m.uc.mem_write(d + 0x16F5, struct.pack("<HH", rows_at, SCRATCH_SEG))
+    m.uc.mem_write(d + 0x1703, struct.pack("<H", h))
+    m.uc.mem_write(d + 0x1FD6, rng.randbytes(0x16))
+    m.uc.mem_write(d + 0x20FB, rng.randbytes(5))
+
+    tool = rng.choice([0x0C, 0x19, 0x18, 0x36, 0x0E, rng.randrange(0, 0x60)])
+    frame = struct.pack("<hhh", rng.randrange(0, 200), rng.randrange(0, 50),
+                        tool)
+    return (0x07A36, frame,
+            [(d + 0x1FD6, 0x16), (d + 0x20FB, 5)], "tool_use")
+
+
 CASES = [case_scroll, case_scroll_axis, case_entity_set_type,
+         case_tool_use,
          case_collide_scenes,
          case_particles_spawn,
          case_entity_copy,

@@ -238,6 +238,13 @@ FUNCTIONS = {
                                         # does nothing while g_509 is set, so
                                         # g_509 is "ducks do not die"; a demo
                                         # clears it, which is when they do
+    0x07A36: "tool_use",                 # native. (x, y, tool): where a tool's
+                                        # effect is decided. Publishes [0x1fd6]
+                                        # and the busy flag [0x1fd8], then one of
+                                        # four arms; only the drag pair leaves
+                                        # the flag set
+    0x0799C: "ground_check",             # (x*, y): sixteen pixels under 0xc8
+                                        # within 28 rows, or it complains
     0x078D4: "entity_set_type",         # native. (e, type): zeroes the frame
                                         # counter
                                         # only when the type actually changes
@@ -399,6 +406,11 @@ VARIABLES = {
     0x2154: "message_time",             # three countdowns, 100 frames a line
     0x172D: "view_top",                 # the play area's edges: 0x172d/0x172f
     0x1731: "view_left",                # and 0x1731/0x1733
+    0x1FD6: "tool_in_use",              # and 0x1fd8 the busy flag
+    0x1FE0: "drag_anchor",              # (x, y-1) twice: anchor at 0x1fe0 and
+                                        # current at 0x1fe6, which is the rubber
+                                        # band
+    0x20FF: "too_deep_count",           # third complaint gives up
     0x2007: "duck_count",               # the HUD's second number, and what the
                                         # "not enough got home" ending compares
     0x3006: "rand_seed",                # a long. srand keeps only the low word

@@ -5227,6 +5227,81 @@ def native_collide_scenes(m, args):
     return None
 
 
+def native_tool_use(m, args):
+    """0x07a36: use a tool at a point.
+
+        tool_use(int16_t x, int16_t y, int16_t tool)
+
+    The only place a tool's effect is decided. It first publishes what is
+    happening - [0x1fd6] is the tool, [0x1fd8] a busy flag - and run_level's
+    frame loop reads exactly those to draw the cursor as 0x16 instead of the
+    tool while one is in progress.
+
+    Four shapes, by tool:
+
+        0x18, 0x36  place: sound 9, scene_add into scene 1, then 0x0751b
+        0x0c, 0x19  drag:  the ground check at 0x0799c, then a start-and-current
+                           pair at [0x1fe0] and [0x1fe6], both (x, y-1) - which
+                           is what makes it a rubber band - and the busy flag is
+                           LEFT SET, the only arm that does
+        0x0e        aim:   sound 0x22, then 0x0739c with the tool's first sprite
+        default     as 0x0e but sound 0x0e. An unknown tool is not a no-op.
+
+    Only the drag arm is done here. The others need scene_add, 0x0751b and
+    0x0739c, none of which exist in Python, so they decline - and the decline is
+    decided before anything is written, because a decline half way through would
+    leave the original body to apply the rest a second time.
+
+    0x0799c is inlined. It scans down from the point for sixteen pixels below
+    0xc8 and complains if that takes more than 28 rows. The complaint is NOT an
+    early return - the drag block runs either way - but it posts through
+    message_post, which reaches sprintf, and it bumps [0x20ff], which is in the
+    watched range. So that case declines. When it does not fire the check writes
+    nothing at all, which is what makes the rest of the arm reproducible.
+
+    The scan's own arithmetic is therefore only half checked, and the half that
+    is not is worth naming: starting it at y instead of y + 1 changes nothing any
+    comparison can see, because the only thing the scan decides is whether we
+    decline, and a decline is not compared against the guest at all - it is
+    recorded as "not checked". Moving the 28 to 32 does show up, but only because
+    the native then acts where the guest also bumps [0x20ff].
+    """
+    d = m.dgroup_base
+    x, y, tool = struct.unpack("<hhh", m.uc.mem_read(args, 6))
+    if tool not in (0x0C, 0x19):
+        return DECLINE
+
+    # 0x0799c, read-only, ahead of any write - see above.
+    off, seg = struct.unpack("<HH", m.uc.mem_read(d + 0x16F5, 4))
+    level_h = struct.unpack("<H", m.uc.mem_read(d + 0x1703, 2))[0]
+    si, rows_scanned, found = (y + 1) & 0xFFFF, 0, 0
+    while si < level_h and found < 0x10:
+        roff, rseg = struct.unpack(
+            "<HH", m.uc.mem_read(seg * 16 + ((off + si * 4) & 0xFFFF), 4))
+        if m.uc.mem_read(rseg * 16 + ((roff + x) & 0xFFFF), 1)[0] < 0xC8:
+            found += 1
+        si = (si + 1) & 0xFFFF
+        rows_scanned += 1
+    if rows_scanned > 0x1C:
+        return DECLINE                  # posts a message; needs sprintf
+
+    put = lambda o, v: m.uc.mem_write(d + o, struct.pack("<h", _sign16(v & 0xFFFF)))
+    put(0x1FD6, tool)
+    put(0x1FD8, 1)
+    flag = 1 if tool == 0x0C else 0
+    put(0x1FE2, y - 1)
+    put(0x1FE0, x)
+    put(0x1FE8, y - 1)
+    put(0x1FE6, x)
+    put(0x1FE4, 1)
+    put(0x1FEA, 1)
+    put(0x1FDC, 4 - flag)
+    put(0x1FDE, flag)
+    put(0x20FB, 1)
+    put(0x20FD, 1)
+    return None
+
+
 def native_tool_events(m, args):
     """0x0d4c2: the level's scheduled tool changes. Takes no arguments.
 
@@ -5379,6 +5454,8 @@ VERIFY_REGIONS = {
     "entity_copy": _watch_scene_entities,
     "particles_spawn": _watch_particles,
     "collide_scenes": _watch_collide,
+    "tool_use": lambda m, args: [(m.dgroup_base + 0x1FD6, 0x16),
+                                 (m.dgroup_base + 0x20FB, 5)],
     "entity_set_type": _watch_entity,
 }
 
@@ -5426,6 +5503,7 @@ NATIVE_TABLE = [
     (0x06F4F, "entity_copy", native_entity_copy, "far"),
     (0x077AE, "particles_spawn", native_particles_spawn, "far"),
     (0x0993B, "collide_scenes", native_collide_scenes, "far"),
+    (0x07A36, "tool_use", native_tool_use, "far"),
 ]
 
 # Natives written but not registered, so the game never runs code nothing has

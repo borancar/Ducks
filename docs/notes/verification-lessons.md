@@ -71,6 +71,25 @@ itself native — is safely compared. Anything above a leaf is not, until the
 natives underneath it are skipped. Check the SHADOWED line before believing a
 clean run.
 
+## A decline is a coverage hole, not an answer
+
+**2026-08-03.** DECLINE lets a native handle only the cases it has been proven
+on, and the count is reported, which is right. What is easy to forget is that
+the *decision* to decline is itself unchecked: `compare()` restores memory and
+records "declined" without ever asking what the guest would have done.
+
+`tool_use` showed it. Its inlined ground check scans down from y + 1, and
+starting from y instead changes nothing any comparison can see - the scan's only
+observable effect is whether the native declines. Three other sabotages of the
+same routine were caught immediately. So a routine can be well covered on the
+paths it takes and completely unexamined on the boundary that decides which
+paths those are.
+
+**How to apply.** When a native declines on a computed condition rather than a
+constant one, that condition needs checking some other way - or say plainly that
+it is not checked. Declining on "this tool is not one I do" is safe; declining on
+"I scanned more than 28 rows" is a claim.
+
 ## Verification that works here
 
 - `--verify --verify-only <names>` byte-compares a native against the original
