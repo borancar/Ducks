@@ -145,3 +145,62 @@ void far f_15388(void far *o)             { (void) o; }
 uint8_t palette_stored[768];
 uint8_t palette_washed[48];
 
+
+/* ------------------------------------- stubbed because a demo does not run them
+ *
+ * The goal for now is run_level(1) - a demo, which needs no input. These are the
+ * routines it does not reach, so they can wait; each says how we know, because
+ * the two kinds of evidence are not equally good.
+ *
+ * "By reading" is proof. "Not observed" is not, and it misled us once already:
+ * every capture we had was mid-level, so run_level's setup and teardown never
+ * appeared in a trace taken from one, and 0x0881d, 0x0d5c5, 0x0615a, 0x04f4b and
+ * 0x0a85f all looked dead. Letting the menu time out into a demo and tracing
+ * that shows 0x0a85f alone runs 520 times. Five of twelve wrong - so the ones
+ * below say so instead of pretending.
+ *
+ * Each complains the first time it is called. A stub that silently does nothing
+ * is how a demo quietly stops matching the original.
+ */
+static void demo_stub(const char *what, int *said)
+{
+    if (*said)
+        return;
+    *said = 1;
+    fprintf(stderr, "  [stub] %s was reached - it was stubbed on the "
+                    "understanding that a demo never gets here, so that is "
+                    "wrong and the demo is no longer faithful\n", what);
+}
+
+/* 0x0cf07, 449 bytes. run_level's PLAYED branch: with its argument zero it is
+ * this that reads the input and drives the tool, where a demo takes 0x0d4c2 and
+ * the level's own table instead. Off the demo path by reading, not by absence -
+ * see docs/notes/run-level.md on the [bp+6] fork. 0x0ce2e (217 bytes) is called
+ * only from here, so it goes with it. */
+void far played_tool_events(uint8_t far *flash)
+{
+    static int said;
+    (void) flash;
+    demo_stub("0x0cf07, the played tool handler", &said);
+}
+
+/* 0x0af95, 304 bytes, from 0x0d4fc - which does run, four times a frame, but
+ * only reaches this when the selected tool is 0x12, 0x15 or 0x50. The four
+ * captures hold tools 0x36, 0x19, 0x0c and 0x0d, and a demo from the menu did
+ * not reach it either. Not observed, so not proven: a demo whose level offers
+ * one of those three tools will land here. */
+void far tool_apply(scene_t far *s, int16_t n)
+{
+    static int said;
+    (void) s; (void) n;
+    demo_stub("0x0af95, the tool applicator", &said);
+}
+
+/* 0x07955, 71 bytes, called from run_level's frame loop when the level is not
+ * paused, and from 0x0799c and 0x0cf07. Not observed in any demo, from a
+ * capture or from the start. Not proven. */
+void far f_07955(void)
+{
+    static int said;
+    demo_stub("0x07955", &said);
+}
