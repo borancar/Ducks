@@ -593,6 +593,8 @@ void far duck_dies(entity_t far *e, int16_t force, int16_t noisy);
 void far tool_use(int16_t x, int16_t y, int16_t type);   /* 0x07a36 */
 void far entity_update(entity_t far *e, int16_t applying, int16_t scripted);
 void far scene_update_all(scene_t far *s);           /* 0x0d715 */
+void far level_event(int16_t x, int16_t y);          /* 0x0d0c8 */
+void far demo_events(void);                          /* 0x0d471 */
 extern int16_t g_2100, g_dab;
 
 /* stubs.c - stubbed until run_level(1) needs them; see the note there */

@@ -4658,6 +4658,149 @@ int16_t far pick_random_demo(void)
     return load_demo((uint8_t) (rand() % g_2038));  /* 0x12711 */
 }
 
+/* ------------------------------------------------------ 0x0d471: demo_events
+ *
+ * The demo's own input, and it is three words a record: when the first matches the
+ * level clock, the other two are a point and level_event is called on it. So a
+ * recorded game is a list of "at frame N, click here" - which is why a demo needs
+ * the level's seed and nothing else.
+ *
+ * Every record is looked at every frame and the clock is compared for equality, so
+ * a record whose frame is skipped is a record that never fires.
+ */
+void far demo_events(void)
+{
+    uint16_t i;
+
+    for (i = 0; i < event_count; i++) {
+        uint8_t far *r = event_table + i * 6;
+
+        if (*(uint16_t far *) r == (uint16_t) level_clock)
+            level_event(*(int16_t far *) (r + 2), *(int16_t far *) (r + 4));
+    }
+}
+
+/* --------------------------------------------------------- 0x0d0c8: level_event
+ *
+ * What a tool does at a point - the click handler, and on the demo path what the
+ * six-byte event table fires. Six tools have their own behaviour and everything
+ * else falls to a default that puts the tool's own entity down.
+ *
+ * The first thing it does is ask whether the target is empty: a zero byte in the
+ * backdrop. Most of the arms refuse on solid ground, with sound 0x17 for "no".
+ * Then y is incremented, so what is placed sits one row below what was tested.
+ *
+ * `y == 0` is turned into 1 before any of that, which is why an event at the very
+ * top of a level behaves as though it were one row down.
+ */
+void far level_event(int16_t x, int16_t y)
+{
+    int16_t clear;
+
+    if (y == 0)                                    /* 0x0d0d8 */
+        y = 1;
+    /* 0x0d0db writes the clock and the point to the play log here. [0x51d] gates
+     * it and nothing sets it, and the FILE * at [0x51f] is not kept on this side. */
+    clear = backdrop.rows[y][x] == 0;              /* 0x0d0fc */
+    y++;                                           /* 0x0d11a */
+
+    switch (tool_type) {
+    case 0x0d:                                     /* 0x0d14b - send the leader */
+        if (!clear)
+            break;
+        if (scenes[0].flag != 0xff
+            && scenes[0].entities[scenes[0].flag].type == 1) {
+            sound_play_guarded(0x0a, 1);
+            g_1ff2 = x;                            /* where it is being sent */
+            g_1ff4 = y;
+            entity_set_type(&scenes[0].entities[scenes[0].flag], 0x20);
+        } else {
+            message_post(menu_text[74], 0);        /* 0x0d19f - no leader */
+            sound_play_guarded(0x17, 1);
+        }
+        break;
+
+    case 0x15:                                     /* 0x0d1cc - act on what is under */
+        if (picked) {
+            switch (picked->type) {
+            case 0x13:                             /* 0x0d1ec */
+                tool_use((int16_t) picked->x, (int16_t) picked->y, 0x18);
+                entity_set_type(picked, 0);
+                break;
+            case 0x28:                             /* 0x0d217 */
+                entity_set_type(picked, 0x31);
+                particles_spawn((int16_t) picked->x, (int16_t) picked->y, 0x28);
+                sound_play_guarded(6, 3);
+                break;
+            default:
+                sound_play_guarded(0x17, 1);
+                break;
+            }
+        }
+        scenes[3].count = 0;                       /* 0x0d258 - drop the highlight */
+        g_217d = 1;
+        break;
+
+    case 0x12:                                     /* 0x0d267 - choose a leader */
+        if (scenes[0].flag == picked_index)
+            break;                                 /* already this one */
+        if (scenes[0].flag != 0xff
+            && scenes[0].entities[scenes[0].flag].type != 1)
+            break;                                 /* the old one is not a leader */
+        if (scenes[0].flag != 0xff)
+            entity_set_type(&scenes[0].entities[scenes[0].flag], 2);
+        if (picked && (picked->type == 2 || picked->type == 4)) {
+            scenes[0].flag = picked_index;         /* 0x0d2d6 */
+            entity_set_type(&scenes[0].entities[scenes[0].flag], 1);
+            scenes[0].entities[scenes[0].flag].f16 = 0;
+            sound_play_guarded(0x13, 1);
+        } else {
+            scenes[0].flag = 0xff;                 /* 0x0d318 - nobody */
+            sound_play_guarded(0x14, 1);
+        }
+        break;
+
+    case 0x50:                                     /* 0x0d32c - cash something in */
+        if (picked && picked->type != 0x17 && picked->type != 0) {
+            eaten_countdown = 0;
+            entity_set_type(picked, 0x17);
+            score += scenes[0].count * 8;          /* eight a duck still out */
+            sound_play_guarded(9, 1);
+        }
+        break;
+
+    case 0x52:                                     /* 0x0d37a - another duck */
+        if (!g_2016) {
+            if (scene_add(&scenes[0], (int16_t) scenes[2].entities[0].x,
+                          0x64, 0x54, 0))
+                duck_count++;
+            else
+                sound_play_guarded(0x17, 1);
+        }
+        break;
+
+    default:                                       /* 0x0d3b1 */
+        if (type_flags[tool_type] & 2) {
+            /* A mirrored tool goes into scene 5, and the sound says which. */
+            if (!clear) {
+                sound_play_guarded(0x17, 1);
+            } else if (scene_add(&scenes[5], x, y, tool_type, 5)) {
+                sound_play_guarded((int16_t) ((tool_type == 0x28) + 0x23), 1);
+            } else {
+                message_post(menu_text[75], 0);    /* 0x0d3f6 - no room */
+                sound_play_guarded(0x17, 1);
+            }
+        } else if (clear && tool_type != 0) {      /* 0x0d43c - an ordinary one */
+            sound_play_guarded(8, 1);
+            scene_add(&scenes[3], x, y, tool_type, 5);
+            g_1fda = 1;
+        } else {
+            sound_play_guarded(0x17, 1);
+        }
+        break;
+    }
+}
+
 /* ------------------------------------------------- 0x0d715: scene_update_all
  *
  * Every entity of one scene through entity_update. run_level calls it on three of
@@ -4772,8 +4915,13 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
             break;
         }
         {
-            int16_t slope = (backdrop.rows[e->y][e->x + 2] == 0)
-                          - (backdrop.rows[e->y][e->x - 2] == 0);
+            /* 0x07f2d reads rows[y + 1], not rows[y]: a duck looks at the
+             * ground under its feet two pixels either side, and drifts toward
+             * whichever side is open. Probing its own row instead put the slope
+             * one row too high, which test_entity.py caught on level 11 as a
+             * duck a pixel out with the wrong facing. */
+            int16_t slope = (backdrop.rows[e->y + 1][e->x + 2] == 0)
+                          - (backdrop.rows[e->y + 1][e->x - 2] == 0);
 
             if ((int8_t) e->f15 < 4) {             /* 0x07f94 */
                 if ((rand() & 3) == 0) {
@@ -5323,6 +5471,18 @@ int16_t far run_level(int16_t demo)
         } else if (hold) {
             hold--;
         }
+        /* 0x0dcc9. The clock, which every table keys off. The quack that goes
+         * with it - rand() & 0x7f - is part of the spawn section and not written. */
+        level_clock++;
+
+        /* 0x0de79. The tool, and on the demo path the events: the level's own
+         * recorded input. A played level reads 0x0cf07 instead, which is not
+         * written, so the tool only changes on a demo for now. */
+        if (demo) {
+            tool_events();                         /* 0x0d4c2 */
+            demo_events();                         /* 0x0d471 */
+        }
+
         /* 0x0e11b. Every entity of scenes 0, 1 and 2 walks and falls. This is
          * what gravity is: entity_update prefers the largest fall it can take,
          * then level ground, then a climb of up to five pixels. */
