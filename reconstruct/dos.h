@@ -137,7 +137,7 @@ typedef struct {
 /* 0x29 bytes. x and y are 32-bit: run_screen assigns the mouse position to the
  * cursor entity with two word stores each, and entity_set_type reaches past
  * both of them for the frame counter and the type. */
-typedef struct {
+typedef struct entity_s {
     int32_t x, y;               /* +0x00, +0x04 */
     uint8_t unread[4];          /* +0x08 - never touched by anything read yet */
     int32_t prev_x, prev_y;     /* +0x0c, +0x10 - where it was when the frame
@@ -148,7 +148,9 @@ typedef struct {
                                  *         and draw_entities tests it for < 0 */
     uint8_t f15, f16;           /* +0x15 - scene_add zeroes these with it */
     int16_t param;              /* +0x17 - scene_add's last argument */
-    uint8_t unread2[6];         /* +0x19 */
+    uint8_t f19, f1a;           /* +0x19 - type 2 reads both: whether it
+                                 * walks, and how far behind to follow */
+    struct entity_s far *lead;  /* +0x1b - which entity type 2 follows */
     int16_t frame;              /* +0x1f - animate_scene's step, zeroed when
                                  *         the type changes */
     int16_t f21, f23;           /* +0x21 */
@@ -160,7 +162,10 @@ typedef struct {
     int16_t       capacity;     /* +0 - how many scene_alloc made room for */
     int16_t       count;        /* +2 */
     int16_t       flag;         /* +4 - scene_alloc sets it to 0xff */
-    int16_t       unread6;      /* +6 */
+    int16_t       keep_order;   /* +6 - scene_retire shuffles the survivors
+                                 * down when this is set and swaps the last
+                                 * one into the hole when it is not. The
+                                 * level loader sets it on scene 2 */
     entity_t far *entities;     /* +8 */
 } scene_t;
 
@@ -409,6 +414,12 @@ void far resource_load_at(desc_t far *desc, uint8_t type, uint8_t index,
 void far entity_set_type(entity_t far *e, int16_t type);
 void far animate_scene(scene_t far *scene);
 void far scene_alloc(scene_t far *s, int16_t capacity);
+void far scene_retire(scene_t far *s);              /* 0x0981b */
+void far scene_pick_nearest(scene_t far *s, int16_t mark);  /* 0x0af95 */
+void far level_update(void);                        /* 0x0d4fc */
+extern int16_t       picked_index;                  /* 0x18f3 */
+extern entity_t far *picked;                        /* 0x18ef */
+extern int16_t       g_217d;                        /* 0x217d */
 int16_t far scene_add(scene_t far *s, int16_t x, int16_t y, int16_t type,
                       int16_t param);
 #define cursor_scene scenes[4]   /* 0x0d93 is scenes[4] */
@@ -573,6 +584,10 @@ extern int16_t  duck_count;              /* 0x2007 */
 extern uint8_t  particle_colours[8];     /* 0x18c5 */
 void far particles_spawn(int16_t x, int16_t y, int16_t n);
 void far duck_dies(entity_t far *e, int16_t force, int16_t noisy);
+void far tool_use(int16_t x, int16_t y, int16_t type);   /* 0x07a36 */
+void far entity_update(entity_t far *e, scene_t far *s, int16_t driven);
+void far scene_update_all(scene_t far *s);           /* 0x0d715 */
+extern int16_t g_2100, g_dab;
 
 /* stubs.c - stubbed until run_level(1) needs them; see the note there */
 void far played_tool_events(uint8_t far *flash);

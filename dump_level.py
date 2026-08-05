@@ -31,7 +31,8 @@ class Entity(ctypes.Structure):
                 ("prev_x", ctypes.c_int32), ("prev_y", ctypes.c_int32),
                 ("f14", ctypes.c_int8), ("f15", ctypes.c_uint8),
                 ("f16", ctypes.c_uint8), ("param", ctypes.c_int16),
-                ("unread2", ctypes.c_uint8 * 6), ("frame", ctypes.c_int16),
+                ("f19", ctypes.c_uint8), ("f1a", ctypes.c_uint8),
+                ("lead", ctypes.c_void_p), ("frame", ctypes.c_int16),
                 ("f21", ctypes.c_int16), ("f23", ctypes.c_int16),
                 ("type", ctypes.c_int16), ("f27", ctypes.c_int16)]
 

@@ -94,6 +94,21 @@ void egg_bringup_open(void)
 }
 void far set_text_colour(int16_t c)       { (void) c; }
 
+/* 0x07a36, 380 bytes: what a tool actually does where it is used. It exists as a
+ * byte-compared native in native.py and has not been transcribed, so entity_update
+ * and the frame call into this. It complains once rather than silently doing
+ * nothing, because a tool that quietly fails is how a demo stops matching. */
+void far tool_use(int16_t x, int16_t y, int16_t type)
+{
+    static int said = 0;
+
+    (void) x; (void) y; (void) type;
+    if (!said) {
+        fprintf(stderr, "tool_use (0x07a36) is not written: tools do nothing\n");
+        said = 1;
+    }
+}
+
 /* ------------------------------------------------ unnamed, by image offset */
 
 void far f_04dcd(int16_t n)               { (void) n; }

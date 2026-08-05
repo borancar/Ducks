@@ -527,7 +527,7 @@ void far scene_alloc(scene_t far *s, int16_t capacity)
 {
     s->capacity = capacity;
     s->count    = 0;
-    s->unread6  = 0;
+    s->keep_order  = 0;
     s->entities = malloc((size_t) capacity * sizeof *s->entities);
                                                /* 0x29 in the original */
     s->flag     = 0xff;
@@ -4526,6 +4526,11 @@ int16_t      g_507;              /* 0x507 - picks 0x10c06's level picker over
                                   * name and the level-select key on the map
                                   * screen. Zero in ordinary play */
 int16_t      level_seed;         /* 0x2039 - what run_level srand()s */
+int16_t      picked_index;       /* 0x18f3 - which entity the pointer is over */
+entity_t far *picked;            /* 0x18ef - and a pointer to it */
+int16_t      g_217d;             /* 0x217d - a once-only gate on tool 0x15 */
+int16_t      g_2100;             /* 0x2100 - what the level script last set */
+int16_t      g_dab;              /* 0x0dab - is the flock right of the cursor */
 uint8_t      too_deep_count;     /* 0x20ff - tool_use's complaint counter */
 int16_t      blink_enable;       /* 0x2157 - from the level's first flag */
 scene_t      tool_scene;         /* 0x178c - two entities: the tool cursor */
@@ -4540,6 +4545,502 @@ int16_t      play_log;           /* 0x51d - the fprintf gate, cleared here and
                                   * nothing has been seen to set it */
 int16_t      g_517;              /* 0x517 - with [0x1ffa], decides whether a
                                   * 0x4d entity is placed. Unread */
+
+/* ------------------------------------------------- 0x0d715: scene_update_all
+ *
+ * Every entity of one scene through entity_update. run_level calls it on three of
+ * the six at 0x0e11b, which is where a frame's walking and falling happens.
+ */
+void far scene_update_all(scene_t far *s)
+{
+    int16_t i;
+
+    for (i = 0; i < s->count; i++)
+        entity_update(&s->entities[i], s, 0);
+}
+
+/* ================================================== 0x07bb2: entity_update
+ *
+ * One entity, one frame: what it decides to do, then the walking and falling that
+ * every type shares, then what happens if that moved it out of the level. 3,082
+ * bytes in the original and four parts:
+ *
+ *   the fall step, from anim_b[type]        0x07bba, table at image 0x08762
+ *   what this type wants                    0x07c10, table at image 0x0873a
+ *   the walk-and-fall core                  0x080bb
+ *   having moved, or been blocked           0x0832f, table at image 0x08714
+ *   having left the level                   0x08565, tables at 0x086d4 and 0x086ba
+ *
+ * **Gravity is not a velocity.** The core counts down from the movement amount to
+ * -5 and probes backdrop.rows[y + d][x + facing] at each step, taking the first
+ * depth where that row and every row between it and the entity are clear. So an
+ * entity tries the largest upward step first and settles for the deepest clear row
+ * within five, every frame - which is one loop for walking up a ledge, walking
+ * along, and falling off.
+ *
+ * Read out and transcribed 2026-08-05, and **not compared against anything**. The
+ * check it wants is a demo: run_level(1) needs no input and reseeds from the
+ * level, so the guest and this can be stepped from one snapshot and their entity
+ * positions diffed frame by frame.
+ */
+void far entity_update(entity_t far *e, scene_t far *s, int16_t driven)
+{
+    int16_t depth   = -5;                          /* [bp-6] - how far it may fall */
+    int16_t step    = 4;                           /* [bp-0xe] - the type's speed cap */
+    int16_t moved   = 0;                           /* [bp-0x14] */
+    int16_t stepped = 0;                           /* [bp-0x16] */
+    int16_t active  = 1;                           /* [bp-0x18] - does it walk at all */
+    int16_t blocked = 0;                           /* [bp-0xc] */
+    int16_t facing, want, speed, d, i;
+
+    switch (anim_b[e->type] - 1) {                 /* 0x07bd3 */
+    case 0: step = 2;  break;                      /* 0x07c09 */
+    case 1: return;                                /* 0x07c06 */
+    case 2: e->y -= 1;  return;                    /* 0x07bf6 */
+    case 3: step = 0;  break;                      /* 0x07bef */
+    default: break;
+    }
+
+    switch (e->type) {                             /* 0x07c10 */
+    case 0x36:                                     /* 0x07d89 */
+        e->f15 = (uint8_t) 0xfe;
+        break;
+    case 0x1e:                                     /* 0x07d64 */
+        if (g_2016)
+            duck_dies(e, 1, 0);
+        step   = -1;
+        active = 1;
+        break;
+    case 0x25:                                     /* 0x07d0c */
+        if (e->f23++ == 0x20) {
+            entity_set_type(e, 0x26);
+            e->f23 = 0;
+        }
+        break;
+    case 0x26:                                     /* 0x07d37 */
+        e->f23 += 2;
+        if ((uint16_t) e->f23 >= 0xa) {
+            entity_set_type(e, 0x22);
+            e->f23 = 0;
+        }
+        break;
+    case 1:                                        /* 0x07dc6 - the hero */
+        if (driven) {
+            e->f14 = (int8_t) g_2100;
+            active = e->f14 != 0;
+        } else {
+            e->f14 = (int8_t) ((e->y < (int32_t) mouse_y
+                                || (e->y == (int32_t) mouse_y
+                                    && e->x < (int32_t) mouse_x))
+                             - (e->y > (int32_t) mouse_y
+                                || (e->y == (int32_t) mouse_y
+                                    && e->x > (int32_t) mouse_x)));
+            active = button_a_down;
+        }
+        e->f23 = 0;
+        break;
+    case 2:                                        /* 0x07e83 - follows its leader */
+    {
+        int32_t ahead = (int32_t) e->f1a * (int8_t) e->f16;
+        entity_t far *lead = e->lead;
+        int32_t tx = lead ? lead->x - ahead : e->x;
+
+        e->f14 = (int8_t) ((e->x < tx) - (e->x > tx));
+        active = e->f19;
+        e->f23 = 0;
+        break;
+    }
+    case 4:                                        /* 0x07f11 - an ordinary duck */
+        if (!level_flags[1]) {
+            active = 0;
+            break;
+        }
+        {
+            int16_t slope = (backdrop.rows[e->y][e->x + 2] == 0)
+                          - (backdrop.rows[e->y][e->x - 2] == 0);
+
+            if ((int8_t) e->f15 < 4) {             /* 0x07f94 */
+                if ((rand() & 3) == 0) {
+                    if (e->param > 0) e->param--;
+                    if (e->param < 0) e->param++;
+                }
+            } else {
+                e->f23 = 5;
+            }
+            e->param = (int16_t) (slope * 2 + e->param);
+            if (e->param < -0xc) e->param = -0xc;
+            if (e->param >  0xc) e->param =  0xc;
+            facing = (int8_t) e->f14;
+            e->f14 = (int8_t) ((e->param > 0) - (e->param < 0));
+            if ((int8_t) e->f14 != facing) {       /* it turned */
+                if (e->f23) {
+                    e->f14    = 0;
+                    e->param  = 0;
+                }
+                e->f23 = 0;
+            } else if (e->f23) {
+                e->f23--;
+            }
+            active = 1;
+        }
+        break;
+    case 0x1c:                                     /* 0x07e47 */
+        e->f14 = (int8_t) ((e->f21 < 0xf) + 1);
+        break;
+    case 0x33:                                     /* 0x07e64 */
+        e->f14 = (int8_t) (-(e->f21 < 0xf) - 1);
+        break;
+    case 0x4f: case 0x51:                          /* 0x07d94 - toward the cursor */
+        step   = 0;
+        e->f14 = (int8_t) (((int32_t) mouse_x + 4 - e->x) >> 3);
+        active = 1;
+        break;
+    case 0x4a:                                     /* 0x07c80 - sinks and settles */
+        e->y -= 1;
+        if (e->y == 0) {
+            entity_set_type(e, 2);
+        } else if (backdrop.rows[e->y][e->x] != 0) {
+            e->param = 1;
+        } else if (e->param) {
+            entity_set_type(e, 2);
+        }
+        return;
+    case 0x52:                                     /* 0x07cf4 */
+        e->f15 = (uint8_t) 0xfc;
+        active = 1;
+        break;
+    case 0x53:                                     /* 0x07d04 */
+        active = 1;
+        break;
+    case 0x43:                                     /* 0x080a3 */
+        particles_spawn(e->x, e->y, 1);
+        break;
+    default:                                       /* 0x080bb */
+        if (type_flags[e->type] & 1) {
+            if (e->f14 == 0)
+                e->f14 = (int8_t) ((g_dab << 1) - 1);
+            active = 1;
+        } else {
+            active = 0;
+        }
+        break;
+    }
+
+    /* 0x080ed. Without a facing there is nothing to walk. */
+    if (!active)
+        e->f14 = 0;
+    if ((int8_t) e->f15 < step)                    /* 0x080fb - one a frame */
+        e->f15++;
+    speed  = (int8_t) e->f15 / 2;                  /* 0x0810f */
+    facing = (int8_t) e->f14;
+
+    /* 0x0812a. Once per pixel of intended movement. */
+    do {
+        want    = (int8_t) e->f15;
+        blocked = 0;
+
+        if (facing == 0) {                         /* 0x08143 - standing still */
+            moved = 1;
+            switch (e->type) {
+            case 0x1e:                             /* 0x08160 - it lands and hatches */
+                sound_play_guarded(1, 1);
+                entity_set_type(e, 0);
+                scene_add(&scenes[0], (int16_t) e->x, (int16_t) e->y, 2, 0);
+                break;
+            case 0x52:                             /* 0x08198 */
+                entity_set_type(e, 0x53);
+                /* fall through */
+            case 0x53:                             /* 0x081a7 */
+                tool_use((int16_t) e->x, (int16_t) e->y, 0x18);
+                score += 5;
+                e->f14 = (int8_t) -(int8_t) e->f14;
+                break;
+            default:                               /* 0x081d4 */
+                if (type_flags[e->type] & 1)
+                    e->f14 = (int8_t) -(int8_t) e->f14;
+                break;
+            }
+        }
+
+        /* 0x081f2. Both paths come here - an entity with no facing still falls,
+         * it just probes its own column. The step loop takes the largest step up
+         * first, then down to five, and the first depth whose whole column is
+         * clear wins. */
+        {
+            for (d = speed; d > depth; d--) {
+                if (stepped)
+                    want = d * 2;
+                stepped = 1;
+
+                if (backdrop.rows[e->y + d][e->x + facing] != 0) {
+                    blocked = 1;                   /* 0x08308 */
+                    continue;
+                }
+                {
+                    int16_t clear = 1;
+
+                    for (i = d - 1; i >= 0; i--)   /* 0x0824a */
+                        clear &= backdrop.rows[e->y + i][e->x + facing] == 0;
+                    if (!clear)
+                        continue;
+                }
+                e->x += facing;                    /* 0x0828c - it moves */
+                if (e->x < 0)
+                    e->x = 0;
+                if (e->x > level_w)
+                    e->x = level_w - 1;
+                e->y += d;
+                e->f15 = (uint8_t) want;
+                e->f21++;
+                d     = -5;
+                moved = 1;
+            }
+        }
+        depth  = 0;                                /* 0x08316 */
+        facing -= (int8_t) e->f14;
+    } while (!moved);
+
+    /* 0x0832f. What it makes of having moved, or of being blocked. */
+    if (e->type != 0 && blocked) {
+        if (driven) {                              /* 0x0834b */
+            tool_use((int16_t) e->x, (int16_t) e->y, e->type);
+            entity_set_type(e, 0);
+            g_1fda = 0;
+        } else {
+            switch (e->type) {
+            case 1: case 2: case 4:                /* 0x083d2 */
+                if (e->f21 > 0x32)
+                    duck_dies(e, 0, 1);
+                break;
+            case 0x1c: case 0x33:                  /* 0x083f0 */
+                if (e->f21 > 0x32)
+                    duck_dies(e, 0, 1);
+                else {
+                    entity_set_type(e, 1);
+                    e->f14 = 0;
+                }
+                break;
+            case 0x40:                             /* 0x08427 */
+                if (e->f21 > 0x32)
+                    duck_dies(e, 0, 1);
+                else {
+                    entity_set_type(e, 2);
+                    e->f14 = 0;
+                }
+                break;
+            case 0x39:                             /* 0x0845e */
+                if (e->f21 > 8) {
+                    sound_play_guarded(0x18, 1);
+                    entity_set_type(e, 0x4b);
+                    eaten_countdown = 0;
+                }
+                break;
+            case 0x31:                             /* 0x0848b */
+                entity_set_type(e, 0x32);
+                sound_play_guarded(0x10, 3);
+                particles_spawn((int16_t) e->x, (int16_t) e->y, 0x28);
+                break;
+            case 0x41:                             /* 0x08427 via the table */
+                if (e->f21 > 0x32)
+                    duck_dies(e, 0, 1);
+                else {
+                    entity_set_type(e, 2);
+                    e->f14 = 0;
+                }
+                break;
+            case 0x4b:                             /* 0x0845e via the table */
+                if (e->f21 > 8) {
+                    sound_play_guarded(0x18, 1);
+                    entity_set_type(e, 0x4b);
+                    eaten_countdown = 0;
+                }
+                break;
+            case 0x53:                             /* 0x084be */
+                entity_set_type(e, 0x52);
+                tool_use((int16_t) e->x, (int16_t) e->y, 0x18);
+                score += 5;
+                break;
+            case 0x43: case 0x44: case 0x45:       /* 0x084ea - it tumbles */
+                if (e->f21 > 8) {
+                    int16_t v = (int16_t) (2 - (e->f21 >> 2) - (rand() & 3));
+
+                    e->f15 = (uint8_t) v;
+                    if ((int8_t) e->f15 < (int8_t) 0xf8)
+                        e->f15 = (uint8_t) 0xf8;
+                    entity_set_type(e, 0x43);
+                } else if (e->type == 0x43) {
+                    entity_set_type(e, (int16_t) ((rand() & 1) + 0x44));
+                }
+                break;
+            default:
+                break;
+            }
+        }
+        e->f21 = 0;                                /* 0x0855c */
+    }
+
+    /* 0x08565. Below the level's floor, or above its ceiling, and it is gone -
+     * with whatever that means for its type on the way out. */
+    if ((int32_t) e->y >= level_h + 8 || e->y <= 1) {
+        switch (e->type) {
+        case 6: case 7: case 8: case 9: case 0x0a:
+            g_2018 = 1;                            /* 0x085f8 */
+            break;
+        case 1: case 2: case 4: case 0x1c: case 0x1e: case 0x20:
+        case 0x21: case 0x33: case 0x40: case 0x41: case 0x4a:
+            sound_play_guarded(7, 1);              /* 0x08601 */
+            duck_count--;
+            break;
+        case 0x13:
+            sound_play_guarded(0x25, 1);           /* 0x08613 */
+            break;
+        case 0x28:
+            sound_play_guarded(0x24, 1);           /* 0x08620 */
+            break;
+        case 0x52:                                 /* 0x0862d */
+            entity_set_type(e, 0x53);
+            if (!g_2016
+                && !scene_add(&scenes[0], (int16_t) scenes[2].entities[0].x,
+                              0x64, 0x54, 0))
+                duck_count--;
+            break;
+        case 0x47: case 0x4b: case 0x39: case 0x46:  /* 0x08665 */
+            sound_play_guarded(0x19, 1);
+            score += 0x19;
+            message_post(menu_text[45], 0);
+            eaten_countdown = 0;
+            break;
+        default:
+            break;
+        }
+        entity_set_type(e, 0);                     /* 0x0869b */
+        if (driven)
+            g_1fda = 0;
+    }
+}
+
+/* ------------------------------------------------------ 0x0981b: scene_retire
+ *
+ * The one place a scene's entity array ever shrinks. An entity is dead when its
+ * type is 0, and the compaction takes one of two shapes depending on the scene's
+ * `flag6`: with it set the survivors shuffle down one by one and keep their order,
+ * with it clear the last entity is swapped into the hole, which is cheaper and
+ * scrambles the order. Scene 2 is the one the loader sets it on.
+ *
+ * The `flag` field follows whatever it was pointing at: cleared to 0xff when that
+ * entity is the one dying, and moved to the hole when the swap brings the last
+ * entity - which is the hero index for scene 0 and what is being eaten for scene 2.
+ *
+ * An entity that lives gets one thing done to it: if its type has changed since
+ * last frame, its animation restarts. That is why the type and its copy at +0x27
+ * both exist.
+ */
+void far scene_retire(scene_t far *s)
+{
+    int16_t i, j;
+
+    for (i = 0; i < s->count; i++) {
+        entity_t far *e = &s->entities[i];
+
+        if (e->type != 0) {                        /* 0x098be - it lives */
+            if (e->f27 != e->type)
+                e->frame = 0;                      /* restart its script */
+            e->f27 = e->type;
+            continue;
+        }
+
+        if (s->flag == i)                          /* 0x0983f */
+            s->flag = 0xff;
+
+        if (s->keep_order) {                          /* 0x09851 - keep the order */
+            s->count--;
+            for (j = i; j < s->count; j++)
+                entity_copy(s, j + 1, j);
+        } else {                                   /* 0x09885 - swap the last in */
+            if (s->flag == s->count - 1)
+                s->flag = i;
+            s->count--;
+            entity_copy(s, s->count, i);
+        }
+        i--;                                       /* look at this slot again */
+    }
+}
+
+/* --------------------------------------------------- 0x0af95: scene_pick_nearest
+ *
+ * Which entity of a scene the pointer is over, by nearest in the taxicab sense
+ * with the pointer taken six pixels lower than it is, and only within twelve.
+ * The answer goes to three globals: the index at [0x18f3] or -1, and a pointer to
+ * the entity at [0x18ef].
+ *
+ * With `mark` set it also puts the highlight on it - scene 3's single entity
+ * becomes type 0x11 and moves to the picked entity's position - and [0x0d89] ends
+ * up saying whether anything is highlighted at all. That is scene 3's whole job:
+ * one entity that follows whatever the pointer is closest to.
+ */
+void far scene_pick_nearest(scene_t far *s, int16_t mark)
+{
+    int32_t best = 0xc;                            /* twelve, and no further */
+    int16_t found = -1;
+    int16_t i;
+
+    for (i = 0; i < s->count; i++) {
+        entity_t far *e = &s->entities[i];
+        int32_t d = iabs(e->x - (int32_t) mouse_x)
+                  + iabs(e->y - (int32_t) mouse_y - 6);
+
+        if (d < best) {                            /* 0x0b009 */
+            found = i;
+            best  = d;
+        }
+    }
+
+    picked_index = found;                          /* 0x18f3 */
+    if (found != -1) {
+        picked = &s->entities[found];              /* 0x18ef */
+        if (mark) {                                /* 0x0b055 */
+            entity_t far *high = scenes[3].entities;
+
+            entity_set_type(high, 0x11);
+            high->x = picked->x;
+            high->y = picked->y;
+        }
+    } else {
+        picked = NULL;                             /* 0x0b09c */
+    }
+    /* 0x0b0be. [0x0d89] is scenes[3].count: the highlight scene holds one
+     * entity and its count says whether it is there, so draw_entities skips
+     * it by drawing nothing rather than by testing a flag. */
+    scenes[3].count = (mark && picked) ? 1 : 0;
+}
+
+/* ---------------------------------------------------- 0x0d4fc: level_update
+ *
+ * One call a frame, and all it does is decide which scene the pointer is picking
+ * from, which depends on the tool in hand: the ducks for 0x12, the objects for
+ * 0x50, and for 0x15 the mirrored-entity scene, but only while no tool is in
+ * progress and only until [0x217d] says it has been done once.
+ */
+void far level_update(void)
+{
+    switch (tool_type) {                           /* 0x0d4ff */
+    case 0x12:
+        scene_pick_nearest(&scenes[0], 1);
+        break;
+    case 0x50:
+        scene_pick_nearest(&scenes[2], 1);
+        break;
+    case 0x15:
+        if (!g_1fd8 && !g_1fda) {
+            if (!g_217d)
+                scene_pick_nearest(&scenes[5], 1);
+            g_217d = 0;
+        }
+        break;
+    default:
+        break;
+    }
+}
 
 /* ============================================================ 0x0d7ee: run_level
  *
@@ -4707,6 +5208,24 @@ int16_t far run_level(int16_t demo)
         } else if (hold) {
             hold--;
         }
+        /* 0x0e11b. Every entity of scenes 0, 1 and 2 walks and falls. This is
+         * what gravity is: entity_update tries the largest step up first and
+         * settles for the deepest clear row within five. */
+        scene_keep_positions(&scenes[0]);
+        scene_update_all(&scenes[0]);
+        scene_update_all(&scenes[1]);
+        scene_update_all(&scenes[2]);
+
+        /* 0x0e346. Which entity the pointer is over, per the tool in hand. */
+        level_update();
+
+        /* 0x0e2c9. The retire pass, over all six scenes - the only place an
+         * entity array shrinks, so this is what makes a duck that has been
+         * eaten actually leave. The other half of that section is 0x0d715 on
+         * three of the scenes, which needs 0x07bb2 and is not written. */
+        for (i = 0; i < 6; i++)
+            scene_retire(&scenes[i]);
+
         animate_scene(&cursor_scene);
         for (i = 0; i < 6; i++)
             animate_scene(&scenes[i]);
@@ -5365,7 +5884,7 @@ void far level_load(void)
 
     records = egg_read_byte(egg_stream);
     scene_alloc(&scenes[2], records + tool_slots);     /* 0x08aef - d+0xd7b */
-    scenes[2].unread6 = 1;                            /* 0x08af5 */
+    scenes[2].keep_order = 1;                            /* 0x08af5 */
     scenery_count     = 0;
     quota_left        = 0;
 

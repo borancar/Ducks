@@ -294,6 +294,80 @@ stub that silently does nothing is how a demo quietly stops matching.
 explicitly. That is not the restore-side fix that was rejected - there, our lie
 and a genuinely paused game are indistinguishable.)
 
+## 0x07bb2: gravity, terrain and every entity's behaviour
+
+**Read out about half way, 2026-08-05.** This is the per-entity update, 3,082
+bytes, and it is where gravity and terrain collision live. Everything it calls
+already exists - `sound_play_guarded`, `scene_add`, `particles_spawn`,
+`entity_set_type` (sixteen sites), `duck_dies`, `tool_use`, `message_post`,
+`rand` - so it is writable without reading anything else first. It is the last
+routine that can be said of.
+
+Its shape is four parts:
+
+1. **A preamble** that sets the fall step from `anim_b[type] - 1` through a
+   four-entry jump table at image `0x08762`: 1 gives a step of 2, 2 returns at
+   once, 3 decrements y and returns, 4 gives a step of 0. Anything else keeps the
+   default of 4.
+2. **A dispatch on the type**: `0x36`, `0x1e`, `4`, `1`, `2`, `0x1c`, `0x25`,
+   `0x26`, `0x33`, then a twenty-entry table at image `0x0873a` for `0x40`-`0x53`,
+   then a default. Twelve of those twenty go straight to the shared code.
+3. **The shared walk-and-fall core** at `0x80bb`, which is the answer to "why do
+   the ducks not fall".
+4. **A second dispatch** at `0x832f`, on the same entity's type again, for what to
+   do having moved or having been blocked - with a third jump table at `0x3a74`.
+
+### What the core actually does
+
+The facing comes from `type_flags` bit 0 and `[0xdab]` - which side of the cursor
+the flock is on - and an entity with the bit clear has its facing forced to 0. The
+speed byte at `+0x15` accelerates by one a frame up to the type's step, and half
+of it is the movement amount.
+
+Then the step loop, and it is one loop for walking, climbing and falling: `di`
+counts down from the movement amount to **-5**, and at each value it probes
+`backdrop.rows[e->y + di][e->x + facing]`. A non-zero byte there is solid, so it
+is blocked; a zero means it checks every row from `di - 1` down to 0 is also clear
+before committing. On a commit it moves x by the facing - clamped to 0 and
+`level_w - 1` - adds `di` to y, stores the speed byte, counts a step in `+0x21`,
+and resets `di` to -5. So **gravity is not a velocity at all**: an entity simply
+tries the largest upward step first and settles for the deepest clear row down to
+five, every frame, which is why a duck walks up a small ledge and falls off a big
+one at the same five-pixel rate.
+
+`[bp-4]` carries the facing and loses one unit of `e->f14` per pass, so the whole
+thing runs once per pixel of intended movement.
+
+### Written, and what it taught
+
+All 3,082 bytes are read and transcribed, along with `0x0d715` - the pass that
+runs it over one scene, which `run_level` calls on scenes 0, 1 and 2. Six jump
+tables were decoded to do it: `0x08762`, `0x0873a`, `0x08714`, `0x086d4`,
+`0x086ba` and the fall-step table.
+
+Two mistakes are worth recording, because both looked right:
+
+- **The no-facing branch falls *into* the step loop, it does not skip it.** Read
+  as an else, an entity with no facing never moves - which is every duck on a
+  level whose second flag is clear, so nothing fell at all. The two paths meet at
+  `0x081f2`, and gravity applies whether or not the entity is walking; with a
+  facing of 0 it simply probes its own column.
+- Splitting `entity_t`'s `unread2` into the three fields type 2 actually uses
+  changed the structure's size on this machine, so the *harness's* ctypes mirror
+  of it silently stopped matching and printed nonsense positions. A mirror of a
+  structure is a second declaration of it, with all that implies.
+
+Exercised on level 1: duck 0 goes 132, 133, 134, 136, 138, 139 and stops, and the
+backdrop column under it is clear at 137-139 and solid at 140 - it is standing on
+the terrain, and the 1, 1, 2, 2, 1 spacing is the speed byte ramping to its cap and
+then being clipped by the ground. Three other ducks land at their own heights.
+
+**Not compared against the guest.** `tool_use` is also still a stub that complains
+once, so tools do nothing where an entity would use one. The demo comparison is
+what settles both: `run_level(1)` needs no input and reseeds from the level, so the
+guest and the port can be stepped from one snapshot and their entity positions
+diffed frame by frame.
+
 ## The setup is written; the frame is not
 
 **2026-08-05.** `run_level` is a real function in `game.c` now rather than a stub,
@@ -312,6 +386,35 @@ mouse, and the ambience.
 
 The **frame** is a stand-in inside that function, marked as one: it composes what
 the setup built, animates the scenes, moves the camera and waits for ESC.
+
+Three more of the frame's parts are written, and they were the ones whose
+dependencies already existed:
+
+- **`0x0981b`, the retire pass**, and it is the only place a scene's entity array
+  ever shrinks. An entity is dead when its type is 0. Compaction takes one of two
+  shapes on the scene's `+6`: set, the survivors shuffle down and keep their order;
+  clear, the last entity is swapped into the hole. So **`+6` is not "unread" - it
+  is "keep the order"**, and the loader sets it on scene 2. The `flag` field
+  follows what it pointed at: `0xff` when that entity is the one dying, and moved
+  to the hole when the swap brings the last entity in - which is the hero index for
+  scene 0 and what is being eaten for scene 2. An entity that lives gets its
+  animation restarted if its type changed since last frame, which is what the copy
+  of the type at `+0x27` is for.
+- **`0x0af95`**, which is which entity the pointer is over: nearest in the taxicab
+  sense with the pointer taken six pixels lower, and only within twelve. With its
+  second argument set it also moves scene 3's single entity onto the winner as type
+  `0x11` - and **`[0x0d89]` is `scenes[3].count`**, so the highlight is hidden by
+  having no entities rather than by a flag.
+- **`0x0d4fc`**, one call a frame, which picks *which* scene that runs on from the
+  tool in hand: the ducks for `0x12`, the objects for `0x50`, the mirrored-entity
+  scene for `0x15` while no tool is in progress.
+
+Exercised rather than verified: killing scene 0's third duck on level 1 takes the
+count from 11 to 10, swaps the last entity into the hole, and moves the hero index
+from 10 to 2 because the hero *was* the last one; killing the entity the flag
+points at clears it to `0xff`. There is no native for any of the three, so
+`test_gameplay.py` cannot compare them against the guest - they rest on one
+reading.
 
 The camera is the one part of the frame that is real, because everything it needs
 existed. `0x0e34e` puts the mouse into the cursor entity - which is
