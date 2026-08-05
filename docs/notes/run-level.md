@@ -311,7 +311,18 @@ pool sized `(scene0.capacity + pair_slots) * 0x28`, the camera snapped to the
 mouse, and the ambience.
 
 The **frame** is a stand-in inside that function, marked as one: it composes what
-the setup built, animates the scenes and waits for ESC. The real one is 2,830
+the setup built, animates the scenes, moves the camera and waits for ESC.
+
+The camera is the one part of the frame that is real, because everything it needs
+existed. `0x0e34e` puts the mouse into the cursor entity - which is
+`scenes[4].entities[0]`, the same object `[0xd9b]` names - and then, when someone
+is playing, `scroll_follow(mouse_x, mouse_y)`. That is what makes a level wider
+than the screen scroll: on level 11, 380 across against a 320 view, the mouse
+crossing the level walks `scroll_x` from 0 to its maximum of 60. A demo instead
+follows `scenes[3]`'s entity when `[0x1fda]` says so, or the hero duck while it is
+facing somewhere, each with a twenty-frame hold, and falls back to the flock's
+average - which the unwritten part of the frame computes, so a demo holds on the
+hero here rather than averaging. The real one is 2,830
 bytes and needs nineteen routines that do not exist, 7,464 between them - the
 largest `0x07bb2` (3,082) and `0x0d0c8` (937). Until then a level can be looked at
 but not played, and pressing ESC is how it ends rather than one of the four
