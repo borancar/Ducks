@@ -363,6 +363,31 @@ backdrop column under it is clear at 137-139 and solid at 140 - it is standing o
 the terrain, and the 1, 1, 2, 2, 1 spacing is the speed byte ramping to its cap and
 then being clipped by the ground. Three other ducks land at their own heights.
 
+### What ends a level, and what ends a demo
+
+**Read 2026-08-05.** Nothing times a demo out. The frame's back edge at `0x0e7d7`
+loops while `[0x1798]` is non-zero, so a level ends when something sets
+`fade_direction` to -1 and the fade runs `fade_level` down to 0. Three sites do
+that, and only two of them can happen on a demo:
+
+- **`0x0de7f`: any key or any mouse button, but only when the argument says demo.**
+  That is attract mode's whole exit - touch anything and it fades out.
+- **`0x0de73`: the ducks are gone.** A counter runs while `duck_count` is 0 or
+  `[0x2016]` is set, and at **0x20 frames** it sets the outcome to 3, which fades
+  out at `0x0df46`. This is not gated on the demo flag, so it ends a demo too: a
+  recording whose events have all fired simply plays on until the last duck is
+  home or dead, and then bows out half a second later.
+- **`0x0df27`: one of the four endings**, outcome 1. Those are **skipped entirely
+  for a demo** - `0x0df70` jumps past the whole section when the argument is
+  non-zero - so a demo never ends "properly", and `run_level` returns
+  `[0x200d] == 2`, which a demo therefore never reports.
+
+Two things that look like a clock and are not: `[0x1ff6]` counts down from `0xa00`
+one a frame and `[0x1ff8]` likewise, and both are read only by `collide_scenes` as
+`(combo_lo >> 4) + (combo_hi >> 8) + 5` - **a score bonus that decays**, so a duck
+brought home early is worth more. And `[0x2003]`, the timer the panel shows, only
+plays sound `0x1c` when it reaches zero; it does not end anything by itself.
+
 ### 0x0d0c8 and 0x0d471: what a click does, and a demo's input
 
 **Written 2026-08-05.** `0x0d0c8` is the click handler - what a tool does at a
