@@ -591,7 +591,7 @@ extern uint8_t  particle_colours[8];     /* 0x18c5 */
 void far particles_spawn(int16_t x, int16_t y, int16_t n);
 void far duck_dies(entity_t far *e, int16_t force, int16_t noisy);
 void far tool_use(int16_t x, int16_t y, int16_t type);   /* 0x07a36 */
-void far entity_update(entity_t far *e, scene_t far *s, int16_t driven);
+void far entity_update(entity_t far *e, int16_t applying, int16_t scripted);
 void far scene_update_all(scene_t far *s);           /* 0x0d715 */
 extern int16_t g_2100, g_dab;
 

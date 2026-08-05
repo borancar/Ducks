@@ -4668,7 +4668,7 @@ void far scene_update_all(scene_t far *s)
     int16_t i;
 
     for (i = 0; i < s->count; i++)
-        entity_update(&s->entities[i], s, 0);
+        entity_update(&s->entities[i], 0, 0);
 }
 
 /* ================================================== 0x07bb2: entity_update
@@ -4683,19 +4683,23 @@ void far scene_update_all(scene_t far *s)
  *   having moved, or been blocked           0x0832f, table at image 0x08714
  *   having left the level                   0x08565, tables at 0x086d4 and 0x086ba
  *
- * **Gravity is not a velocity.** The core counts down from the movement amount to
- * -5 and probes backdrop.rows[y + d][x + facing] at each step, taking the first
- * depth where that row and every row between it and the entity are clear. So an
- * entity tries the largest upward step first and settles for the deepest clear row
- * within five, every frame - which is one loop for walking up a ledge, walking
- * along, and falling off.
+ * **Gravity is not a velocity.** The core counts d down from the movement amount
+ * to -5, probing backdrop.rows[y + d][x + facing] and requiring every row between
+ * that one and the entity to be clear too. y grows downward, so it tries the
+ * largest **fall** first, then smaller ones, then level, and finally **climbs** of
+ * up to five pixels - one loop for falling off a ledge, walking along, and
+ * stepping up onto something, in that order of preference.
  *
  * Read out and transcribed 2026-08-05, and **not compared against anything**. The
  * check it wants is a demo: run_level(1) needs no input and reseeds from the
  * level, so the guest and this can be stepped from one snapshot and their entity
  * positions diffed frame by frame.
  */
-void far entity_update(entity_t far *e, scene_t far *s, int16_t driven)
+/* The two words after the entity are separate things, and mixing them up is easy:
+ * [bp+0xa] is "a tool is being applied through this entity" - the branch at
+ * 0x08345 and the clear of [0x1fda] at 0x086aa - while [bp+0xc] is "this one is
+ * being driven by a script", which only type 1 reads, at 0x07dc6. */
+void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
 {
     int16_t depth   = -5;                          /* [bp-6] - how far it may fall */
     int16_t step    = 4;                           /* [bp-0xe] - the type's speed cap */
@@ -4737,7 +4741,7 @@ void far entity_update(entity_t far *e, scene_t far *s, int16_t driven)
         }
         break;
     case 1:                                        /* 0x07dc6 - the hero */
-        if (driven) {
+        if (scripted) {                            /* [bp+0xc] */
             e->f14 = (int8_t) g_2100;
             active = e->f14 != 0;
         } else {
@@ -4875,9 +4879,8 @@ void far entity_update(entity_t far *e, scene_t far *s, int16_t driven)
         }
 
         /* 0x081f2. Both paths come here - an entity with no facing still falls,
-         * it just probes its own column. The step loop takes the largest step up
-         * first, then down to five, and the first depth whose whole column is
-         * clear wins. */
+         * it just probes its own column. Largest fall first, then level, then a
+         * climb of up to five: the first d whose whole column is clear wins. */
         {
             for (d = speed; d > depth; d--) {
                 if (stepped)
@@ -4914,7 +4917,7 @@ void far entity_update(entity_t far *e, scene_t far *s, int16_t driven)
 
     /* 0x0832f. What it makes of having moved, or of being blocked. */
     if (e->type != 0 && blocked) {
-        if (driven) {                              /* 0x0834b */
+        if (applying) {                            /* 0x0834b - [bp+0xa] */
             tool_use((int16_t) e->x, (int16_t) e->y, e->type);
             entity_set_type(e, 0);
             g_1fda = 0;
@@ -5026,7 +5029,7 @@ void far entity_update(entity_t far *e, scene_t far *s, int16_t driven)
             break;
         }
         entity_set_type(e, 0);                     /* 0x0869b */
-        if (driven)
+        if (applying)
             g_1fda = 0;
     }
 }
@@ -5321,8 +5324,8 @@ int16_t far run_level(int16_t demo)
             hold--;
         }
         /* 0x0e11b. Every entity of scenes 0, 1 and 2 walks and falls. This is
-         * what gravity is: entity_update tries the largest step up first and
-         * settles for the deepest clear row within five. */
+         * what gravity is: entity_update prefers the largest fall it can take,
+         * then level ground, then a climb of up to five pixels. */
         scene_keep_positions(&scenes[0]);
         scene_update_all(&scenes[0]);
         scene_update_all(&scenes[1]);
