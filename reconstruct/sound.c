@@ -35,6 +35,8 @@
 uint8_t   sound_state;
 
 uint8_t   sound_count;              /* 0x298b - samples loaded, at most 31 */
+int16_t   sound_keep_mark;          /* 0x2909 - sound_count as it stood after
+                                     * the last sound_preload */
 uint8_t   sound_slot[0x96];         /* 0x298c - id -> slot, 0xff for none */
 sample_t *sample_table[32];         /* 0x290b - one per slot */
 
@@ -188,6 +190,23 @@ void far sound_play_loop(int16_t id, int16_t scale, int16_t egg)
         return;
 
     play_sample(sample_table[sound_slot[id]], 0, 1);
+}
+
+/* ------------------------------------------------- 0x1480f: sound_preload
+ *
+ * Load a sample without playing it, and remember how many are loaded once it
+ * has. The level loader calls this for each of the level's ambient sounds, at
+ * AMBIENCE VOLUME, so that the ids are resident before play starts.
+ *
+ * What reads the watermark at d+0x2909 has not been found; it is written here
+ * and nowhere else that has been read.
+ */
+void far sound_preload(uint8_t id, int16_t scale)
+{
+    if (!sound_state)
+        return;
+    sound_load(id, scale, episode_egg_index);      /* 0x14825 */
+    sound_keep_mark = sound_count;                 /* 0x2909 */
 }
 
 /* --------------------------------------------------- 0x146cd: release_sounds

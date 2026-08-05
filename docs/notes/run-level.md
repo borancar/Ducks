@@ -294,6 +294,216 @@ stub that silently does nothing is how a demo quietly stops matching.
 explicitly. That is not the restore-side fix that was rejected - there, our lie
 and a genuinely paused game are indistinguishable.)
 
+## The level format, and where a level comes from
+
+**Read out 2026-08-05**, all 2,607 bytes of `0x088fa`. It is not reached from
+`run_level` at all: `game_main` calls `f_1102a` just before `run_level(0)`, and
+that calls this. So by the time the frame loop starts, everything below has
+already happened - which is why `run_level`'s setup can look as thin as it does.
+
+It takes no arguments. `egg_find_block(0x4c, level_attempted,
+episode_egg_index)` opens the level's own `'L'` block and everything after that
+is a straight sequential read, so **the stream order is the file format**:
+
+| read | into | |
+| --- | --- | --- |
+| byte | `[bp-0x15]` | the tile-set id, used at the very end as block `0x54` |
+| byte | `[0x2103]` | the sprite-set id, which `run_level`'s prologue loads as block `0x43` |
+| byte, byte | a `desc_t` | the map's width and height in tiles, through `image_alloc` |
+| w×h bytes | that grid | one tile index per cell, row-major |
+| byte | `[bp-6]` | the background id, for `load_background` at the end |
+| byte | `[0x178b]` | how many tools, then one byte each into a `farmalloc`'d array at `[0x1782]`. Tool `0x50` is remembered as `0x10` extra entity slots |
+| byte | | how many entity records follow |
+| n × (word, word, byte) | the scenes | x, y, type - the switch below |
+| byte | `[0x2007]` | how many ducks, then that many (word x, word y) added to scene 0 as type 4 |
+| byte | `[0xd67]` | which of those ducks is the hero: `entity_set_type(&scene0[i], 1)`, and only when no `0x4f` was loaded |
+| word-prefixed string | `[0x200f]` | through `0x04f4b`, which is already `egg.c`'s string reader |
+| 7 bytes | `[0x201e]`..`[0x202a]` | the level's flags, stored one per **word**. `[0x2022]`, the background warp, is the fourth |
+| byte | `[0x202c]` | `bg_drift` |
+| word | `[0x2001]` | frames per timer tick |
+| byte | | the hero's facing, less one |
+| byte, byte, n bytes | `[0x2015]`, a local | the ambience flag and the ambient sound ids |
+| byte | `[0x2031]` | how many solid objects; `farmalloc(n * 0x20)` at `[0x202d]`, then per object a byte id at `+0x1e` and words x at `+0x16`, y at `+0x18` |
+| byte | `[0x2102]` | where a completed level jumps to |
+| 4 bytes | `[0x13ed]`, `[0x13e1]`, `[0x13e5]`, `[0x13e9]` | each `fild`'d and divided by the constant at `[0x232a]`, which is **256.0** - so they are fractions in 1/256ths. Nothing here reads them back |
+
+**The entity switch.** Every arm adds to scene 2 (`0xd7b`); what differs is what
+else it does. `0x4f` sets a flag worth `0x10`, which later becomes eight more
+ducks scattered across the level; `0x42` widens scene `0xd6f` from 5 to
+`duck_count + 5`; `0x4d` is added only when `[0x517]` is set or this is not the
+level at `[0x1ffa]`; `0x51` is added plainly, but if it is the **first** entity
+of scene 2 the loader also drops a type `0x53` at (0xa0, 0x64) into scene 0,
+faces the first entity by `(rand() & 2) - 1`, and counts one extra duck. Types
+**6 to
+0x0a** share one arm - the jump table at image `0x9321` has four entries and all
+four point at `0x08c04` - which bumps `[0x2000]`, takes the layer as `type - 5`,
+and adds that into `[0x2013]`, the counter one of the four endings compares
+against the duck count. Everything else falls through to a default that tests
+`type_flags[type] & 2` and routes to scene `0xd9f` or to scene `0xd7b`.
+
+**Then it builds what gets drawn.** `level_w = map_w * 0x14` and
+`level_h = map_h * 0x14`, so **a tile is 20x20**. The tile set arrives as block
+`0x54` and is painted into `backdrop` (`[0x16f5]`) twenty rows at a time by
+`0:0x4bc1`, a `memcpy`; the map and the tile set are both released straight
+afterwards, so neither survives the load. Each solid object is
+`resource_load`ed into its 32-byte record - which is a `desc_t` with x, y and
+then `right = x + w`, `bottom = y + h` filled in after - and `0x07490` stamps it
+into `backdrop` **only where the destination byte is still zero**, so an object
+goes behind whatever the tiles already put there. The eight ducks the `0x4f`
+flag bought are then placed by a retry loop: `rand() & 0xff + 0x20` by
+`rand() & 0x3f + 2`, rejected unless the backdrop pixel there is 0 - so they
+land in open space, and the level's own seed decides where.
+
+**Two `scene_t` fields are not what `dos.h` calls them.** `+4` ("flag", set to
+`0xff` by `scene_alloc`) holds the hero duck's index for scene 0, which is what
+`[0xd67]` is; and `+6` ("unread6") is written 1 for scene 2 at `0x08af5`.
+
+### It builds viewport_game
+
+The root README recorded `viewport_game` (`0x172d`) as "built somewhere else and
+still unread". It is built here, in the last twenty instructions before the
+ambience loop:
+
+```c
+left = level_w > screen_width ? 0 : (screen_width - level_w) / 2;
+di   = screen_height - 0x28;                      /* the 40-row panel */
+top  = level_h > di ? 0 : (di - level_h) / 2;
+make_rect(&viewport_game, top, di - top, left, screen_width - left);
+```
+
+So a level smaller than the screen is centred in what is left above the panel,
+and one larger than it starts hard against the edge.
+
+### Checked against the guest, 2026-08-05
+
+`compare_level.py` restores a snapshot, reads the loader's output out of the
+guest's DGROUP, runs the port's `level_load` on the same level and diffs. On
+`snapshots/snap004.snap` - level 1, captured while the ducks were still falling -
+**20 fields and all 160 backdrop rows are identical**. That covers the level size,
+the sprite-set id, the tools, the seven flags, the four fractions, the timer, the
+solid objects, every scene capacity, the viewport, and every byte the tile paint
+and the object stamping produced.
+
+`snapshots/level-start.snap` - level 4, mid-play - agrees on everything except
+**two backdrop rows**, which is consistent with the backdrop being written during
+play rather than with a loader fault: the fresh capture matches byte for byte and
+that one does not. Not proven, and worth settling when something is known to
+write the backdrop mid-level.
+
+**`quota_left` is not a loader output and is not compared.** The loader sets it
+from the scenery layers, `run_level`'s setup then adds one at `0x0dbf5` when the
+level has a hero duck (`[0xd67] != 0xff`), and `collide_scenes` decrements it as
+ducks get home. Level 1 has a hero and reads 6 against the loader's 5; level 4
+has none and reads 10 against 10. That increment is the only part of the setup
+that has been read out precisely so far.
+
+### The two screens before a level
+
+`snap001` to `snap003` are the screens `f_1102a` shows between the menu and the
+level, and they say where the loader sits in that sequence: **`snap001` has
+`duck_count` 0** - the level is not loaded yet - while `snap002` and `snap003`
+both have 11 with the clock still at 0. So the episode intro comes first, then
+the load, then the information screen. All three already have `lives` at 5, so
+whatever starts a new game sets it before any of this.
+
+**Found at `0x137e0`**, in `game_main`'s START case: `lives = 5`, `score = 0`,
+`[0x21a3] = 1`, `[0x201c] = 0x1388` - which is the first extra-life threshold,
+5000 points, tested at `0x138cb` - and then `menus_resume()`. Five stores the
+port did not have, which is why its HUD read 00 lives.
+
+**It took the right instrument to find.** A census of every function that names
+`[0x2034]` missed it, because that scan walks recognised function extents and
+`game_main`'s did not cover the site. A byte scan of the whole code region for
+the store patterns - `C7 06 34 20`, `A3 34 20`, `FF 06 34 20` - found six sites
+in one pass, including this one, the extra life at `0x138cd` and the loss at
+`0x139bf`. When the question is "what writes this address", scan the image, not
+the functions.
+
+### The episode intro is a map of the level
+
+**Read out 2026-08-05.** `f_1102a` loads the level *first* (`0x1108b`), then a
+picture - resource `0x4a` at the episode's ordinal, its own colours at `0x80`,
+with `0x4d`:1 as the fallback, which in this egg is always taken because **type
+`0x4a` has no blocks in it at all** - and then calls `0x0b284` to draw into it.
+
+`0x0b284` is the level in miniature: **every fourth pixel** of the backdrop, so a
+quarter of the size each way, centred in 320x200, with the background tile
+showing through wrapped wherever the backdrop is transparent. Over that goes a
+marker per duck - sprite 80, or 81 for the hero, the entity whose type is 1 - and
+one per scenery item of types 6 to `0x0a`, all five of which share sprite 82 (the
+jump table at image `0x0b525` has five entries and they are the same address).
+Positions are the entity's own, quartered. Last a one-pixel frame in colour 0
+with a one-pixel shadow down and right.
+
+`0x10ba4` is `episode_for_level`: the episode whose range contains
+`level_attempted` **and** whose egg matches, last match winning.
+
+**`f_1102a` builds two screens, and there is a third before them.** The captures
+say which is which: `snap001` is "EPISODE 1" with `duck_count` still 0, so it is
+drawn *before* the level loads, by `0x10c06` (1,037 bytes, gated on `[0x507]`).
+`snap002` and `snap003` are the same *instructions* screen at two moments - the
+wavy title, a stone background and the level's text - and it exists only when the
+level carries a `0x44` block (`0x11259`). `snap002` looks nearly empty because
+`fade_start_colour = 0x10` keeps the title's low entries out of the fade, so the
+banner is at full brightness while the rest is still coming up.
+
+The map screen is the one between them, and no capture has it - it fades in,
+holds for a key at `0x11280`, and fades out. Its parts: the picture, the map,
+the collected tools at y=0xb4 through `0x7259` (323 bytes, unwritten), and the
+status line from `0x0b739` - `"%s: %i  -  %s: %i  -  %s: %i"` with the game's own
+words for LEVEL, SCORE and LIVES, centred on its own measured width.
+
+Written: `0x0b284`, `0x10ba4`, `0x0b739`, and `0x1081c` - `image_overlay`, which
+stamps one image onto another transparent-where-zero and slides by twenty rows in
+the 360x240 mode, which is how 320x200 artwork lands right in either resolution.
+Not written: `0x10c06` (the EPISODE screen) and `0x103e2` (the text layout), about
+2.1 KB between them.
+
+### The helpers, and what was already written
+
+`0x08885` is `image_alloc` and `0x04f4b` is the string reader: both were already
+in the reconstruction, and both were on a "still to write" list because that list
+was keyed on `symbols.py` names rather than on image offsets. The same mistake as
+`make_rect` in `e395416`. Counting by offset, 25 of the 91 under `run_level` are
+unwritten, not 32, and `sprite_set_load` (`0x0615a`) is written too - so
+`run_level`'s whole setup needs only `0x0d5c5`.
+
+Genuinely unwritten here: `0x088fa` itself, `0x07490` (the stamp), `0x09329`
+(the free), and `0x04de6` - `fatal`, which restores text mode, prints
+`OH NO: %s (%s)` under `DUCKS fatal error!` and exits 1. The loader's three
+failure messages are "Can't find level", "Can't load tiles" and "Can't load
+solid object image", each with the id as the parenthesised argument.
+
+### The four fractions are a colour grade
+
+**Answered 2026-08-05**, by `0x0d5c5` - the last unwritten piece of `run_level`'s
+setup, and the reason a level drawn without it has black where its numbers and
+its cursor should be. It builds the palette a level is played through:
+
+- every one of the first 224 entries is tinted toward the level's three
+  fractions (`[0x13e1]`, `[0x13e5]`, `[0x13e9]`) in proportion to the fourth
+  (`[0x13ed]`), weighted per entry by the average of its own red and green. So
+  the four bytes the level block carries, which the loader stores and nothing
+  was seen to read, are a **colour grade**;
+- the result goes to a **second palette buffer at `d+0x0de1`**, which
+  `set_buffer` then publishes - `snap004` confirms it, its current buffer is
+  exactly that address, while the menus use `default_buffer` at `d+0x13f1`;
+- `text_fill` gains `0x90` and `text_outline` becomes `0x5b`;
+- and entries **`0x50`-`0x6f` are duplicated at `0xe0`-`0xff`**. That is what
+  makes the `0x90` colour bias work: sprite pixels are already palette indices
+  in the sprite set's own `0x50`-`0x6f` slice - the digit glyphs measure
+  `0x52`-`0x65` - so `+0x90` lands on the copy. Without it every sprite drawn
+  with a bias indexes an empty part of the palette, which is exactly what a port
+  missing this routine shows.
+- two level flags override slices outright: `[0x2026]` restores `0x40`-`0x4f`
+  and `[0x2028]` restores `0x00`-`0x0f` and takes the top copy from the source.
+
+Written into `game.c` and checked against `snap004`: entries `0xe0`-`0xff` agree
+byte for byte. 88 entries still differ, all of them in `0x70`-`0xcf`, and they
+are missing from the **source** rather than mis-blended - the two screens
+`f_1102a` shows before a level load resources of their own, and until those are
+written that part of `default_buffer` is never filled.
+
 ## 0x0993b is the collision pass
 
 **Mapped 2026-08-03.** 2,668 bytes, and two nested loops cover all but 96 of

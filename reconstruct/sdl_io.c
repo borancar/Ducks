@@ -50,6 +50,11 @@ int16_t    flip_phase;
  * own size; a screen sets the step and palette_fade_step's tail does the moving. */
 int16_t    wrap_x, wrap_y;              /* 0x1729, 0x172b */
 uint8_t    bg_scroll_x, bg_scroll_y;    /* 0x177e, 0x177f */
+uint8_t    warp_table[32];              /* 0x179f - the background warp's per-row
+                                         * x displacements. Nothing read so far
+                                         * fills it, so the warp is inert here;
+                                         * the branch that uses it has never been
+                                         * verified either. See the root README */
 uint8_t    bg_step_x, bg_step_y;        /* 0x1780, 0x1781 - added to the scroll
                                          * once a frame, so a menu's background
                                          * creeps upward at one row a frame */
@@ -492,9 +497,58 @@ void far compose_layer(void)
             dst[x] = fg[x] ? fg[x] : bg[x & wrap_x];
     }
 }
+/* 0x05dc4, on a linear framebuffer: the in-game compositor, and the reason the
+ * ground shows up at all. compose_layer's scrolling sibling, and the differences
+ * are all in the indexing:
+ *
+ *   - the foreground is the level, not the screen. Its row is `sy + r` and its
+ *     column `sx + x`, both unmasked - the backdrop is level_w by level_h and
+ *     nothing wraps it. Masking it by wrap_x/wrap_y, which are the *tile's*
+ *     size less one, would repeat the ground every 64 pixels.
+ *   - the background tile does wrap, in both axes, and scrolls at **half** the
+ *     foreground's rate: `sx >> 1` and `sy >> 1`, plus its own bg_scroll pair.
+ *     That halving is the parallax.
+ *   - the rows drawn are the game viewport's, not the screen's.
+ *
+ * This indexing is native.py's, which is byte-compared against the original on
+ * every call - except the warp branch, which had never executed until 2026-08-01
+ * and is still unverified. dos_io.c's copy of this routine masks the foreground
+ * as well, which does not match native.py and would tile the ground; it has
+ * never been run.
+ */
 void far compose_scroll(int16_t sx, int16_t sy)
 {
-    (void) sx; (void) sy;
+    int16_t row0   = viewport_game.top;
+    int16_t rows   = viewport_game.bottom - viewport_game.top;
+    int16_t right  = viewport_game.width;
+    int16_t base_x = (sx >> 1) + bg_scroll_x;      /* [0x177e] */
+    int16_t phase  = warp_phase + (sy >> 1) * warp_step;
+    int16_t r, x;
+
+    if (!backdrop.rows || !background.rows || rows <= 0)
+        return;
+
+    for (r = 0; r < rows; r++) {
+        int16_t        dx = base_x;
+        uint8_t far   *fg = backdrop.rows[sy + r];
+        uint8_t far   *bg;
+        uint8_t       *dst;
+
+        if (level_flags[2]) {                      /* [0x2022] - the warp */
+            phase &= 0x1f;                         /* re-masked every row, so
+                                                    * this is not a progression */
+            dx     = base_x + warp_table[phase];
+            phase  = (phase + warp_step) & 0xff;
+        }
+        bg  = background.rows[(((sy >> 1) + bg_scroll_y + row0 + r)) & wrap_y];
+        dst = fb_back + (size_t) (row0 + r) * screen_width + viewport_game.left;
+
+        for (x = current_plane; x < right; x += 4) {
+            uint8_t px = fg[sx + x];
+
+            dst[x] = px ? px : bg[(x + dx) & wrap_x];
+        }
+    }
 }
 
 /* ------------------------------------------------------------------- audio

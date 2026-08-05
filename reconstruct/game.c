@@ -201,7 +201,9 @@ char       save_name[] = "GAME-.SG";
 char far  *settings_name = "settings.dat";       /* 0x21d2 - a pointer in the
                                                   * image, to d+0x27c7 */
 uint8_t    g_28ff[1];            /* 0x28ff - main's first splash source */
-void far  *buf_200f, *buf_203b, *buf_203f, *buf_2043;  /* freed per demo */
+void far  *buf_203b, *buf_203f, *buf_2043;    /* the three event tables,
+                                              * filled by something not read
+                                              * out yet and freed per demo */
 /* The string tables - see dos.h. Two of them are far data at 0x1894:0 and
  * 0x1894:4, which is why main loads them with an explicit segment. */
 char far **menu_text;            /* 0x1894:0000 */
@@ -1973,8 +1975,12 @@ void far draw_number2(int16_t value, int16_t digits, int16_t x, int16_t y)
     for (i = digits - 1; i >= 0; i--) {
         int16_t tile = 0x70, glyph = 0x71 + (value % 10);
 
-        draw_sprite(&tile,  x + i * 12, y, &sprite_table, &hud_clip, 0); /* behind */
-        draw_sprite(&glyph, x + i * 12, y, &sprite_table, &hud_clip, 0); /* over it */
+        /* viewport_panel and colour 0x90, which is what native.py passes and
+         * what --verify compares against the original on every call. The
+         * `hud_clip` this used to clip against was an invented global that
+         * nothing ever filled, so every digit was clipped away entirely. */
+        draw_sprite(&tile,  x + i * 12, y, &sprite_table, &viewport_panel, 0x90);
+        draw_sprite(&glyph, x + i * 12, y, &sprite_table, &viewport_panel, 0x90);
         value /= 10;
     }
 }
@@ -2409,8 +2415,8 @@ item_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
             if (attract_choice) {                  /* [0x21ae] */
                 show_attract_screen(400);          /* 0x0b9fc */
             } else if (pick_random_demo()) {       /* 0x126db: rand() % [0x2038] */
-                f_088fa();
-                free(buf_200f);
+                level_load();                  /* 0x088fa */
+                free(level_text);
                 g_18f5 = 5;  g_1ffc = 0;
                 saved = g_509;  g_509 = 0;     /* switched off for the demo */
                 run_level(1);                  /* 0x1279d - it IS the game */
@@ -2497,6 +2503,16 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
             level_attempted   = episode_index[i].first;
             episode_egg_index = episode_index[i].egg;
             shareware_limit   = egg_files[episode_egg_index].limit;   /* +0x10 */
+            /* 0x137da. What starting a game means: five lives, no score, and
+             * the two menu items menus_resume relabels. These five stores were
+             * missing, which is why the HUD's lives counter read 00 - a byte
+             * scan of the whole image for a store to [0x2034] is what found
+             * them, after a scan of the recognised function extents did not. */
+            g_21a3 = 1;
+            lives  = 5;                            /* 0x137e0 */
+            score  = 0;                            /* 0x137e6 */
+            g_201c = 0x1388;                       /* 0x137ec - 5000 */
+            menus_resume();                        /* 0x128a5 */
             /* FALL THROUGH into the play loop */
 
         case 2:                                    /* 0x137f6: play, tally, repeat */
@@ -3811,14 +3827,17 @@ void far main(void)
  * not partly of itself. See docs/notes/verification-lessons.md on why that
  * distinction matters.
  *
- * Nothing calls these yet. run_level is still the stub in stubs.c, because 51
+ * Nothing calls these yet. run_level is still the stub in stubs.c, because 24
  * of the 91 routines it reaches are unwritten and its loop exits on a flag that
  * only the unread part clears - so a skeleton of it would not play a level, it
  * would hang. These are the bottom of that list, done first.
+ *
+ * That count was 51, then 33, and both were too high: they were taken by
+ * matching symbols.py names rather than image offsets, so anything written
+ * under a name symbols.py did not have - image_alloc, sprite_set_free,
+ * sprite_set_load, egg_read_string - read as missing. Count by offset.
  * ======================================================================== */
 
-int32_t scroll_x, scroll_y;      /* 0x1739, 0x173d - the view, in pixels */
-int16_t view_w, view_h;          /* 0x1735, 0x1737 */
 int16_t level_w, level_h;        /* 0x1701, 0x1703 */
 uint8_t scroll_shift;            /* 0x18f5 - how much of the way to the target
                                   * the view moves each frame, as a right shift.
@@ -3900,8 +3919,8 @@ void far scroll_axis_snap(int32_t focus, int32_t extent, int32_t far *pos,
 void far scroll_follow(int32_t x, int32_t y)
 {
     if (scroll_smooth) {
-        scroll_axis(x, view_w >> 1, &scroll_x, (int16_t) (level_w - view_w));
-        scroll_axis(y, view_h >> 1, &scroll_y, (int16_t) (level_h - view_h));
+        scroll_axis(x, viewport_game.width >> 1, &viewport_game.scroll_x, (int16_t) (level_w - viewport_game.width));
+        scroll_axis(y, viewport_game.height >> 1, &viewport_game.scroll_y, (int16_t) (level_h - viewport_game.height));
         return;
     }
 
@@ -3909,14 +3928,14 @@ void far scroll_follow(int32_t x, int32_t y)
      * exactly as much as the point leaves by when it is not. The +1 is what
      * makes the two bounds consistent: it leaves the point on the last column
      * of the view rather than the first one past it. */
-    if (x < scroll_x)
-        scroll_x = x;
-    if (y < scroll_y)
-        scroll_y = y;
-    if (x - scroll_x >= view_w)
-        scroll_x = x - view_w + 1;
-    if (y - scroll_y >= view_h)
-        scroll_y = y - view_h + 1;
+    if (x < viewport_game.scroll_x)
+        viewport_game.scroll_x = x;
+    if (y < viewport_game.scroll_y)
+        viewport_game.scroll_y = y;
+    if (x - viewport_game.scroll_x >= viewport_game.width)
+        viewport_game.scroll_x = x - viewport_game.width + 1;
+    if (y - viewport_game.scroll_y >= viewport_game.height)
+        viewport_game.scroll_y = y - viewport_game.height + 1;
 }
 
 /* 0x0979f. Remember where every entity in a scene was. run_level calls it on
@@ -4407,5 +4426,488 @@ void far message_post(const char far *fmt, const char far *arg)
 
     image_clear(reused, 0);
     draw_string(reused, line, 0, 0);
-    message_rect[2].right = (int16_t) (text_width(line) + view_left + 4);
+    message_rect[2].right = (int16_t) (text_width(line) + viewport_game.left + 4);
+}
+
+/* ==========================================================================
+ * Loading a level, 0x088fa
+ *
+ * Read out of the disassembly on 2026-08-05, not transcribed from a native, so
+ * unlike the leaves above **none of this has been compared against anything**.
+ * The check it is waiting for is a dump of the guest's own loaded state against
+ * this one's - see docs/notes/run-level.md, which also has the level format
+ * this reads, field by field.
+ *
+ * It is not reached from run_level: game_main calls f_1102a just before
+ * run_level(0), and that calls this.
+ * ======================================================================== */
+
+uint8_t      sprite_set_id;      /* 0x2103 - the level's own 'C' sprite set */
+table_t      level_sprites;      /* 0x1fec - block type 0x43, chosen by
+                                  * sprite_set_id. It carries a palette
+                                  * slice of its own, which is why a level
+                                  * that never loads it draws in the
+                                  * menu's colours */
+uint8_t      solid_count;        /* 0x2031 */
+solid_t far *solids;             /* 0x202d */
+int16_t      level_flags[7];     /* 0x201e - one per word */
+uint8_t      scenery_count;      /* 0x2000 - a byte: the loader
+                                  * clears and increments it as one */
+int16_t      timer_period;       /* 0x2001 - frames per tick of [0x2003] */
+uint8_t      next_level;         /* 0x2102 */
+char far    *level_text;         /* 0x200f */
+uint8_t      ambience_on;        /* 0x2015 */
+int16_t      pair_slots;         /* 0x18d1 - two per mirrored entity, and what
+                                  * run_level's far allocation is sized from */
+float        level_frac[4];      /* 0x13e1, 0x13e5, 0x13e9, 0x13ed */
+int16_t      play_log;           /* 0x51d - the fprintf gate, cleared here and
+                                  * nothing has been seen to set it */
+int16_t      g_517;              /* 0x517 - with [0x1ffa], decides whether a
+                                  * 0x4d entity is placed. Unread */
+
+/* ------------------------------------------------------ 0x1081c: image_overlay
+ *
+ * Stamp one image onto another, transparent where the source is zero, starting
+ * at `row` down the destination. In the 360x240 mode it slides by the twenty
+ * rows that mode has spare: a source going to row 0 is read from its own row
+ * 0x14 instead, and anywhere else is written twenty rows lower. That is how the
+ * same 320x200 artwork lands correctly in either resolution.
+ */
+void far image_overlay(desc_t far *src, desc_t far *dst, int16_t row)
+{
+    int16_t sy = 0, end = src->h, x;
+
+    if (video_mode) {                              /* 0x10836 */
+        if (row) { end -= 0x14; row += 0x14; }
+        else       sy += 0x14;
+    }
+    for (; sy < end; sy++, row++)
+        for (x = 0; x < 0x140; x++) {
+            uint8_t px = src->rows[sy][x];
+
+            if (px)
+                dst->rows[row][x] = px;
+        }
+}
+
+/* -------------------------------------------------- 0x0b739: draw_level_status
+ *
+ * The line along the bottom of the level's intro screen: which level, the score
+ * and the lives, from one format string and three of the game's own words, then
+ * centred by its own measured width.
+ */
+void far draw_level_status(desc_t far *dest)
+{
+    char line[0x50];
+
+    sprintf(line, "%s: %i  -  %s: %i  -  %s: %i",   /* d+0x2430 */
+            menu_text[49], level_attempted,
+            menu_text[50], score,
+            menu_text[51], lives);
+    draw_string(dest, line, 0xa0 - text_width(line) / 2, 0xb9);
+}
+
+/* ----------------------------------------------- 0x10ba4: episode_for_level
+ *
+ * Which episode the level about to be played belongs to, or 0xff. The egg has
+ * to match as well as the range, because two eggs can number levels the same.
+ * The loop does not stop at the first hit - the last match wins, exactly as the
+ * tool-list scans do.
+ */
+int16_t far episode_for_level(void)
+{
+    int16_t i, found = 0xff;
+
+    for (i = 0; i < episode_count; i++)
+        if (episode_index[i].first <= level_attempted
+            && episode_index[i].last >= level_attempted
+            && episode_index[i].egg == episode_egg_index)
+            found = i;
+    return found;
+}
+
+/* --------------------------------------------------- 0x0b284: level_map_draw
+ *
+ * The episode intro is a **map of the level**, drawn into the picture that
+ * screen loaded: every fourth pixel of the backdrop, so a quarter of the size
+ * in each direction, centred in 320x200. Where the backdrop is transparent the
+ * background tile shows through, wrapped, exactly as the compositor does it.
+ *
+ * Then a marker per duck - sprite 80, or 81 for the hero, which is the entity
+ * whose type is 1 - and one per scenery item of types 6 to 0x0a, all five of
+ * which share sprite 82 (the jump table at image 0x0b525 has five entries and
+ * they are the same address). Positions are the entity's own, quartered.
+ *
+ * Last, a one-pixel frame in colour 0 with a one-pixel shadow down and right.
+ */
+void far level_map_draw(desc_t far *dest)
+{
+    int16_t x0 = (0x140 - level_w / 4) / 2;        /* 0x0b28c */
+    int16_t y0 = (0x0c8 - level_h / 4) / 2;
+    int16_t dx = x0, dy = y0;
+    int16_t sx, sy, i;
+
+    for (sy = 2; sy < level_h; sy += 4) {          /* 0x0b2b7 */
+        dx = x0;
+        for (sx = 2; sx < level_w; sx += 4) {
+            uint8_t px = backdrop.rows[sy][sx];
+
+            if (px == 0)                           /* 0x0b2de */
+                px = background.rows[sy & wrap_y][sx & wrap_x];
+            dest->rows[dy][dx] = px;
+            dx++;
+        }
+        dy++;
+    }
+
+    for (i = 0; i < scenes[0].count; i++) {        /* 0x0b336 - the ducks */
+        entity_t far *e = &scenes[0].entities[i];
+
+        sprite_to_image_plain((int16_t) (e->x / 4) + x0,
+                              (int16_t) (e->y / 4) + y0,
+                              &sprite_table.base[80 + (e->type == 1)], dest);
+    }
+
+    for (i = 0; i < scenes[2].count; i++) {        /* 0x0b3c0 - the scenery */
+        entity_t far *e = &scenes[2].entities[i];
+
+        if (e->type >= 6 && e->type <= 0x0a)
+            sprite_to_image_plain((int16_t) (e->x / 4) + x0,
+                                  (int16_t) (e->y / 4) + y0,
+                                  &sprite_table.base[82], dest);
+    }
+
+    for (i = x0; i < dx; i++) {                    /* 0x0b44c - top and bottom */
+        dest->rows[y0 - 1][i] = 0;
+        dest->rows[dy][i]     = 0;
+        dest->rows[dy + 1][i + 1] = 0;             /* the shadow */
+    }
+    for (i = y0; i < dy; i++) {                    /* 0x0b4a5 - the sides */
+        dest->rows[i][x0 - 1] = 0;
+        dest->rows[i][dx]     = 0;
+        dest->rows[i + 1][dx + 1] = 0;
+    }
+    dest->rows[dy][dx] = 0;                        /* 0x0b509 - the corner */
+}
+
+uint8_t      level_palette[768]; /* 0x0de1 - the palette a level is played
+                                  * through, blended from default_buffer here
+                                  * and published with set_buffer */
+
+/* -------------------------------------------------- 0x0d5c5: level_palette_build
+ *
+ * The level's colours, and the reason a level drawn without it comes out black
+ * where the numbers and the cursor should be.
+ *
+ * Every entry of the palette the level's resources loaded is tinted toward the
+ * level's own three fractions, in proportion to the fourth - so the four bytes
+ * the level block carries, which nothing had been seen to read, are a colour
+ * grade. The weight per entry is the average of its own red and green.
+ *
+ * Then the part that matters for every sprite on the screen: entries 0x50-0x6f
+ * are **duplicated at 0xe0-0xff**. Sprite pixels are already palette indices in
+ * the sprite set's own 0x50-0x6f slice, and the HUD and the cursor are drawn
+ * with a colour bias of 0x90 - which lands exactly on the copy. Without it they
+ * draw through whatever is at 0xe2-0xf5, which on a fresh palette is nothing.
+ *
+ * Two level flags override slices of the result outright: [0x2026] restores
+ * entries 0x40-0x4f, and [0x2028] restores 0x00-0x0f and takes the top copy
+ * from the source rather than from the tinted result.
+ */
+void far level_palette_build(void)
+{
+    int16_t i, c, di = 0;
+
+    text_colour[0] += 0x90;                        /* 0x0d5cf */
+    text_colour[1]  = 0x5b;
+    set_buffer(level_palette);                     /* 0x0d5e1 - d+0x0de1 */
+
+    for (i = 0; i < 0xe0; i++) {                   /* 224 entries, not 256 */
+        /* 0x0d5eb: (r + g) / 2.0, the constant at d+0x2498 */
+        float scale = (float) (default_buffer[di] + default_buffer[di + 1]) / 2.0f;
+
+        for (c = 0; c < 3; c++) {
+            float t = (float) default_buffer[di];
+
+            level_palette[di] = (uint8_t) (t * (1.0f - level_frac[3])
+                                           + level_frac[c] * scale * level_frac[3]);
+            di++;
+        }
+    }
+
+    if (level_flags[4])                            /* 0x0d661 - [0x2026] */
+        for (i = 0xc0; i < 0xf0; i++)
+            level_palette[i] = default_buffer[i];
+
+    if (level_flags[5]) {                          /* 0x0d67c - [0x2028] */
+        for (i = 0; i < 0x30; i++)
+            level_palette[i] = default_buffer[i];
+        for (i = 0xf0; i < 0x150; i++)
+            level_palette[i + 0x1b0] = default_buffer[i];
+    } else {
+        for (i = 0xf0; i < 0x150; i++)
+            level_palette[i + 0x1b0] = level_palette[i];
+    }
+}
+
+/* ------------------------------------------------------- 0x07490: stamp_solid
+ *
+ * One solid object into the backdrop, and the test is on the **destination**:
+ * a pixel is written only where what is already there is zero. So the tiles
+ * win every argument and an object fills in around them, which is the opposite
+ * of the usual transparency rule and is worth not getting backwards.
+ */
+void far stamp_solid(solid_t far *o, desc_t far *dest)
+{
+    int16_t sy = 0, dy;
+
+    for (dy = o->y; dy < o->bottom; dy++, sy++) {
+        uint8_t far *src = o->img.rows[sy];
+        uint8_t far *dst = dest->rows[dy] + o->x;
+        int16_t      x;
+
+        for (x = o->x; x < o->right; x++, src++, dst++)
+            if (*dst == 0)
+                *dst = *src;
+    }
+}
+
+/* --------------------------------------------------------- 0x088fa: the level
+ *
+ * One 'L' block, read straight through: the map, the tools, the entities, the
+ * ducks, the flags, the solid objects. Then it builds what gets drawn - the
+ * backdrop out of 20x20 tiles, the objects stamped into it, the leftover ducks
+ * scattered where the backdrop is still empty - and finally the viewport the
+ * in-game scenes clip to.
+ */
+void far level_load(void)
+{
+    desc_t   map;                            /* [bp-0x70] */
+    desc_t   tiles;                          /* [bp-0x5a] */
+    char     detail[0x22];                   /* [bp-0x22] - the "(%i)" */
+    uint8_t  ambience[0x22];                 /* [bp-0x44] */
+    uint8_t  tile_set_id, records;           /* [bp-0x15], [bp-0xd] */
+    int16_t  spare_ducks = 0;                /* [bp-0xb] - 0x10 once a 0x4f
+                                              * has been seen, and half of that
+                                              * is how many ducks are scattered */
+    int16_t  tool_slots  = 0;                /* [bp-0xc] - 0x10 for tool 0x50 */
+    int16_t  wide_scene1 = 0;                /* [bp-0x14] - set by a 0x42 */
+    int16_t  background_id;                  /* [bp-6] */
+    int16_t  ambience_n;                     /* [bp-0xa] */
+    int16_t  i, j, x, y, type, layer;
+
+    pair_slots = 0;
+    play_log   = 0;
+    release_sounds();
+
+    scene_alloc(&scenes[5], 1);                       /* 0x08922 - d+0xd9f */
+    scene_alloc(&scenes[3], 1);                       /* 0x0892f - d+0xd87 */
+
+    if (!egg_find_block(0x4c, (uint8_t) level_attempted, episode_egg_index)) {
+        sprintf(detail, "%i", level_attempted);
+        fatal("Can't find level", detail);            /* 0x08969 */
+    }
+
+    tile_set_id   = egg_read_byte(egg_stream);
+    sprite_set_id = egg_read_byte(egg_stream);
+    map.w         = egg_read_byte(egg_stream);        /* in tiles, not pixels */
+    map.h         = egg_read_byte(egg_stream);
+    image_alloc(&map, map.w, map.h);                  /* 0x089c2 */
+
+    for (i = 0; i < map.h; i++)                       /* 0x089cc */
+        for (j = 0; j < map.w; j++)
+            map.rows[i][j] = egg_read_byte(egg_stream);
+
+    background_id = egg_read_byte(egg_stream);
+    tool_count    = egg_read_byte(egg_stream);
+
+    if (tool_count) {                                 /* 0x08a34 */
+        tool_list = malloc((size_t) tool_count * 2);
+        if (!tool_list)
+            fatal(out_of_memory, 0);                  /* d+0x500 */
+        for (i = 0; i < tool_count; i++) {
+            tool_list[i] = egg_read_byte(egg_stream);
+            if (tool_list[i] == 0x50)                 /* 0x08a97 */
+                tool_slots = 0x10;
+        }
+    } else {
+        tool_list    = malloc(2);
+        tool_list[0] = 0;
+    }
+
+    records = egg_read_byte(egg_stream);
+    scene_alloc(&scenes[2], records + tool_slots);     /* 0x08aef - d+0xd7b */
+    scenes[2].unread6 = 1;                            /* 0x08af5 */
+    scenery_count     = 0;
+    quota_left        = 0;
+
+    for (; records; records--) {                      /* 0x08b0e */
+        x     = egg_read_word(egg_stream);
+        y     = egg_read_word(egg_stream);
+        type  = egg_read_byte(egg_stream);
+        layer = 5;
+
+        switch (type) {
+        case 0x51:                                    /* 0x08b85 */
+            scene_add(&scenes[2], x, y, type, layer);
+            continue;
+        case 0x4f:                                    /* 0x08b9f */
+            scene_add(&scenes[2], x, y, type, layer);
+            spare_ducks = 0x10;
+            continue;
+        case 0x42:                                    /* 0x08bbd */
+            scene_add(&scenes[2], x, y, type, layer);
+            wide_scene1 = 1;
+            continue;
+        case 0x4d:                                    /* 0x08bdb */
+            if (g_517 || level_attempted != g_1ffa)
+                scene_add(&scenes[2], x, y, type, layer);
+            continue;
+        case 6: case 7: case 8: case 9: case 0x0a:    /* 0x08c04 - all one arm,
+                                                       * the jump table at image
+                                                       * 0x9321 has four entries
+                                                       * and they are the same */
+            scenery_count++;
+            layer       = type - 5;
+            quota_left += layer;
+            break;
+        default:
+            break;
+        }
+
+        if (type_flags[type] & 2) {                   /* 0x08c1b */
+            pair_slots += 2;
+            scene_add(&scenes[5], x, y, type, 5);
+        } else {
+            scene_add(&scenes[2], x, y, type, layer);
+        }
+    }
+
+    duck_count = egg_read_byte(egg_stream);           /* 0x08c63 */
+    scene_alloc(&scenes[0], duck_count + spare_ducks
+                            + (scenes[2].entities[0].type == 0x51 ? 8 : 0));
+    scene_alloc(&scenes[1], wide_scene1 ? duck_count + 5 : 5);
+
+    for (i = 0; i < duck_count; i++) {                /* 0x08cd4 */
+        x = egg_read_word(egg_stream);
+        y = egg_read_word(egg_stream);
+        scene_add(&scenes[0], x, y, 4, 0);
+    }
+
+    if (scenes[2].entities[0].type == 0x51) {         /* 0x08d19 */
+        scene_add(&scenes[0], 0xa0, 0x64, 0x53, 0);
+        scenes[0].entities[0].f14 = (int8_t) ((rand() & 2) - 1);
+        duck_count++;
+    }
+    duck_count += spare_ducks / 2;
+
+    i = egg_read_byte(egg_stream);                    /* which duck is the hero */
+    if (spare_ducks == 0 && i < scenes[0].count) {    /* 0x08d7d */
+        scenes[0].flag = i;                           /* d+0xd67 */
+        entity_set_type(&scenes[0].entities[i], 1);
+    }
+
+    level_text = egg_read_string(egg_stream);         /* 0x04f4b */
+
+    for (i = 0; i < 7; i++)                           /* 0x08dcb */
+        level_flags[i] = egg_read_byte(egg_stream);
+    bg_drift     = egg_read_byte(egg_stream);
+    timer_period = egg_read_word(egg_stream);
+
+    j = egg_read_byte(egg_stream);                    /* the hero's facing */
+    if (scenes[0].flag)                               /* 0x08e25 */
+        scenes[0].entities[scenes[0].flag].f14 = (int8_t) (j - 1);
+
+    ambience_on = egg_read_byte(egg_stream);
+    ambience_n  = egg_read_byte(egg_stream);
+    for (i = 0; i < ambience_n; i++)
+        ambience[i] = egg_read_byte(egg_stream);
+
+    solid_count = egg_read_byte(egg_stream);          /* 0x08e96 */
+    solids      = malloc((size_t) solid_count * sizeof *solids);
+                                                      /* 0x20 in the original */
+    if (!solids)
+        fatal(out_of_memory, 0);
+    for (i = 0; i < solid_count; i++) {               /* 0x08ed1 */
+        solids[i].id = egg_read_byte(egg_stream);
+        solids[i].x  = egg_read_word(egg_stream);
+        solids[i].y  = egg_read_word(egg_stream);
+    }
+
+    next_level = egg_read_byte(egg_stream);
+    /* Four bytes as 1/256ths - the only floating point in the level format, and
+     * the stream order is not the memory order. */
+    level_frac[3] = egg_read_byte(egg_stream) / 256.0f;   /* 0x13ed */
+    level_frac[0] = egg_read_byte(egg_stream) / 256.0f;   /* 0x13e1 */
+    level_frac[1] = egg_read_byte(egg_stream) / 256.0f;   /* 0x13e5 */
+    level_frac[2] = egg_read_byte(egg_stream) / 256.0f;   /* 0x13e9 */
+    egg_block_end();                                  /* 0x08fd6 */
+
+    for (i = 0; i < solid_count; i++) {               /* 0x08fde */
+        if (!resource_load(&solids[i].img, 0x51, solids[i].id, 0x50, 0,
+                           episode_egg_index, 1)
+            && !resource_load(&solids[i].img, 0x51, solids[i].id, 0x50, 0,
+                              0, 1)) {
+            sprintf(detail, "%i", solids[i].id);
+            fatal("Can't load solid object image", detail);
+        }
+        solids[i].right  = solids[i].x + solids[i].img.w;
+        solids[i].bottom = solids[i].y + solids[i].img.h;
+    }
+
+    level_w = map.w * 0x14;                           /* 0x090d4 - 20x20 tiles */
+    level_h = map.h * 0x14;
+    /* 0x090f7: alloc_image(&backdrop, 1, 1, 0xa, 1). What those four arguments
+     * mean is not read out - 0x05388 is 745 bytes and manages a buffer of its
+     * own - but the size is not in doubt: the tile paint below writes every one
+     * of level_h rows and level_w columns, so that is what it must produce. */
+    image_alloc(&backdrop, level_w, level_h);
+
+    if (!resource_load(&tiles, 0x54, tile_set_id, 0x10, 0, episode_egg_index, 1)
+        && !resource_load(&tiles, 0x54, tile_set_id, 0x10, 0, 0, 1)) {
+        sprintf(detail, "%i", tile_set_id);
+        fatal("Can't load tiles", detail);
+    }
+
+    for (i = 0; i < map.h; i++)                       /* 0x09167 */
+        for (j = 0; j < map.w; j++) {
+            int16_t tile = map.rows[i][j];
+            int16_t row;
+
+            for (row = 0; row < 0x14; row++)
+                memcpy(backdrop.rows[i * 0x14 + row] + j * 0x14,
+                       tiles.rows[tile * 0x14 + row], 0x14);
+        }
+
+    resource_release(&tiles);                         /* 0x091fb */
+    resource_release(&map);
+
+    for (i = 0; i < solid_count; i++)                 /* 0x09211 */
+        stamp_solid(&solids[i], &backdrop);
+
+    for (i = 0; i < spare_ducks / 2; i++) {           /* 0x0923d */
+        do {
+            x = (rand() & 0xff) + 0x20;
+            y = (rand() & 0x3f) + 2;
+        } while (backdrop.rows[y][x] != 0);           /* open space only */
+        scene_add(&scenes[0], x, y, 4, 0);
+    }
+
+    load_background((uint8_t) background_id, episode_egg_index);
+    text_colour[0] = 0x6f;                            /* 0x092a3 */
+
+    /* 0x092a8. The level centred in what is left above the 40-row panel, or
+     * hard against the edge when it is bigger than the screen. */
+    {
+        int16_t left = level_w > screen_width
+                     ? 0 : (screen_width - level_w) / 2;
+        int16_t high = screen_height - 0x28;
+        int16_t top  = level_h > high ? 0 : (high - level_h) / 2;
+
+        make_rect(&viewport_game, top, high - top, left, screen_width - left);
+    }
+
+    if (ambience_volume)                              /* 0x092f8 */
+        for (i = 0; i < ambience_n; i++)
+            sound_preload(ambience[i], ambience_volume);
 }

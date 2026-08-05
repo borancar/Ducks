@@ -38,6 +38,17 @@ typedef struct {
     int16_t       h;            /* +0x0e */
 } desc_t;
 
+/* A solid object: one of the level's scenery images, with where it goes. The
+ * original's record is 0x20 bytes and starts with a descriptor, so the loader
+ * hands the same pointer to resource_load and to stamp_solid. */
+typedef struct {
+    desc_t  img;                /* +0x00 - rows, and w/h at +0x0c/+0x0e */
+    int16_t unread10[3];        /* +0x10 - nothing written or read here */
+    int16_t x, y;               /* +0x16, +0x18 - out of the level block */
+    int16_t right, bottom;      /* +0x1a, +0x1c - x + w and y + h, after loading */
+    uint8_t id;                 /* +0x1e - which 0x51 resource it is */
+} solid_t;                      /* 0x20 in the original */
+
 /* A glyph, the 8 bytes at d+0x54d + character*8. The pixels are one byte each,
  * stored column-major, and the byte is not a colour: 0 is transparent, 1 and 2
  * select text_colour[0] and text_colour[1]. */
@@ -206,6 +217,7 @@ typedef struct {
 /* ------------------------------------------------- the state the video owns */
 
 extern int16_t    video_mode;        /* non-zero is the 360-wide mode */
+extern int16_t    episode_egg_index; /* 0x0094 - which egg the episode is in */
 extern int16_t    screen_width;      /* 360 or 320 */
 extern int16_t    screen_height;     /* 240 or 200 */
 extern int16_t    screen_x0;         /* centring offset, 20 or 0 */
@@ -221,6 +233,7 @@ extern int16_t    flip_phase;
 /* game.c's, which the video reads */
 extern uint8_t    game_speed;
 extern int16_t    last_key;      /* 0x18f6 - what init spins on */
+extern int16_t    g_18e5;        /* 0x18e5 - any button; escapes the fades */
 extern int16_t    fade_level;
 extern int8_t     fade_direction;
 extern int16_t    fade_start_colour;
@@ -228,6 +241,7 @@ extern uint8_t    palette_stored[768];
 extern uint8_t    palette_washed[48];
 extern int16_t    blink_enable, blink_countdown, blink_toggle;
 extern viewport_t viewport_panel, viewport_screen, viewport_full;
+extern viewport_t viewport_game;     /* 0x172d - built by the level loader */
 
 /* --------------------------------------------------------- the interface */
 
@@ -314,6 +328,8 @@ void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour);
 void far show_splash(const char far *text, int16_t frames);
 void far show_resource(uint8_t type, uint8_t index, int16_t frames, int16_t x);
 void far show_resource_loop(desc_t far *desc, int16_t frames);
+extern episode_t far *episode_index;   /* 0x20ba */
+extern int16_t        level_attempted; /* 0x2032 */
 void far close_egg_files(void);
 void far input_poll(int16_t w, int16_t h);
 void far scan_save_slots(void);
@@ -470,6 +486,8 @@ void far sound_play_guarded(int16_t id, int16_t voice);
 void far sound_play(int16_t id, int16_t voice);
 void far sound_play_loop(int16_t id, int16_t scale, int16_t egg);
 int16_t far sound_load(uint8_t id, int16_t scale, int16_t egg);
+void far sound_preload(uint8_t id, int16_t scale);   /* 0x1480f */
+extern int16_t sound_keep_mark;                      /* 0x2909 */
 int16_t far play_sample(sample_t *desc, int16_t id, int16_t loop);
 void far stop_voice(int16_t slot);
 void far stop_sound_by_id(int16_t id);
@@ -496,7 +514,6 @@ int egg_open(const char *path);
 void egg_bringup_open(void);
 void far f_04dcd(int16_t n);
 void far f_0615a(int16_t a, int16_t b, void far *c, int16_t d);
-void far f_088fa(void);
 void far f_09329(void);
 void far f_0becb(void);
 void far f_0f8bd(void);
@@ -520,7 +537,6 @@ extern int16_t      next_type[112];
 extern int16_t      left_handed;
 extern uint8_t      cursor_divider, cursor_phase;
 void far load_animations(void);
-extern viewport_t hud_clip;
 extern void far *egg_stream, *current_buffer;
 
 /* game.c's, called from the video layer */
@@ -531,8 +547,6 @@ void far palette_set_black(uint8_t index);
 extern uint8_t gamma_level;
 
 /* run_level's leaves - game.c, at the bottom. Nothing calls them yet. */
-extern int32_t scroll_x, scroll_y;       /* 0x1739, 0x173d */
-extern int16_t view_w, view_h;           /* 0x1735, 0x1737 */
 extern int16_t level_w, level_h;         /* 0x1701, 0x1703 */
 extern uint8_t scroll_shift;             /* 0x18f5 */
 extern int16_t scroll_smooth;            /* 0x4fa */
@@ -568,12 +582,37 @@ void far f_07955(void);
 
 /* 0x0993b, game.c - the collision pass */
 extern int16_t score, quota_left, combo_hi, combo_lo;
+extern int16_t lives;                    /* 0x2034 */
+extern int32_t mouse_x, mouse_y;         /* 0x18d3, 0x18d7 */
 extern int16_t g_1ff2, g_1ff4, eaten_countdown, eaten_index;
 extern uint8_t anim_a[112];
 void far collide_scenes(void);
 
-extern int16_t view_top, view_bottom;    /* 0x172d, 0x172f */
-extern int16_t view_left, view_right;    /* 0x1731, 0x1733 */
+/* 0x088fa, game.c - the level loader, and what it fills in */
+extern uint8_t     sprite_set_id;        /* 0x2103 */
+extern table_t     level_sprites;        /* 0x1fec */
+extern uint8_t     solid_count;          /* 0x2031 */
+extern solid_t far *solids;              /* 0x202d */
+extern int16_t     level_flags[7];       /* 0x201e - one per word. The third,
+                                          * [0x2022], is the background warp */
+extern uint8_t     scenery_count;        /* 0x2000 - a byte */
+extern int16_t     timer_period;         /* 0x2001 */
+extern uint8_t     next_level;           /* 0x2102 */
+extern char far   *level_text;           /* 0x200f */
+extern uint8_t     ambience_on;          /* 0x2015 */
+extern int16_t     pair_slots;           /* 0x18d1 */
+extern float       level_frac[4];        /* 0x13e1, 0x13e5, 0x13e9, 0x13ed - the
+                                          * level's four 1/256ths. Written here,
+                                          * read nowhere yet. The stream order is
+                                          * [3], [0], [1], [2] */
+void far level_load(void);
+void far level_palette_build(void);   /* 0x0d5c5 */
+int16_t far episode_for_level(void);  /* 0x10ba4 */
+void far level_map_draw(desc_t far *dest);  /* 0x0b284 */
+void far image_overlay(desc_t far *src, desc_t far *dst, int16_t row);  /* 0x1081c */
+void far draw_level_status(desc_t far *dest);  /* 0x0b739 */
+extern uint8_t level_palette[768];   /* 0x0de1 */
+void far stamp_solid(solid_t far *o, desc_t far *dest);
 
 /* 0x0a410, game.c - the three-slot message ticker */
 extern desc_t far  *message_image[3];    /* 0x210c */

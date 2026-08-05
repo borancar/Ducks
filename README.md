@@ -449,7 +449,10 @@ rectangle, and `set_mode_x` builds three of them from the resolution it selects:
 `viewport_panel` (`0x1741`) is the bottom 40 rows, `viewport_screen` (`0x1769`)
 the centred 320x200 window - rows 20 to 220 at 360x240, the whole screen at
 320x200 - and `viewport_full` (`0x1755`) everything. `viewport_game` (`0x172d`),
-the one the in-game scenes clip to, is built somewhere else and is still unread.
+the one the in-game scenes clip to, is built by the **level loader** instead, at
+the end of `0x088fa`: the level is centred in whatever is left above the 40-row
+panel, or pinned to the edge when it is larger than the screen. See
+[`docs/notes/run-level.md`](docs/notes/run-level.md).
 
 **Numbers are sprites.** `draw_number` (`0x0bb3b`) draws glyph `0x71 + digit` from
 the same sprite table the entities use, 12 pixels apart, least significant digit

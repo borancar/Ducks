@@ -73,6 +73,18 @@ FUNCTIONS = {
                                         # reads two
     0x05388: "alloc_image?",            # called with the descriptor before the
                                         # rows are decoded into it
+    0x04F4B: "egg_read_string",         # a length word, then that many bytes into
+                                        # a fresh allocation
+    0x04DE6: "fatal",                   # (msg, arg): text mode back, "DUCKS fatal
+                                        # error!", "OH NO: %s (%s)", exit(1)
+    0x0615A: "sprite_set_load",         # (index, type, table, egg)
+    0x08885: "image_alloc",             # (desc, w, h): size it, then alloc_image
+    0x088B3: "sprite_set_free",         # every sprite's pixels, then the records
+    0x088FA: "level_load",              # the whole level out of its 'L' block:
+                                        # map, tools, entities, ducks, solids,
+                                        # the backdrop, and viewport_game
+    0x07490: "stamp_solid",             # (object, dest): copy where dest is 0
+    0x1480F: "sound_preload",           # (id, scale): load without playing
     0x05AC2: "blit_rows_masked",        # native
     0x05C09: "blit_rows",               # native
     0x05D3A: "compose_layer",           # native
