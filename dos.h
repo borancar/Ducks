@@ -306,6 +306,8 @@ void far sprite_set_load(uint8_t index, uint8_t type, table_t far *table,
 void far sprite_set_free(table_t far *table);
 void far sprite_to_image(int16_t x, int16_t y, sprite_t far *s,
                          desc_t far *desc, uint8_t colour);
+void far outline_to_image(int16_t x, int16_t y, sprite_t far *s,
+                          desc_t far *desc);   /* 0x07259 */
 void far sprite_to_image_plain(int16_t x, int16_t y, sprite_t far *s,
                                desc_t far *desc);
 void far image_alloc(desc_t far *desc, int16_t w, int16_t h);
@@ -428,7 +430,6 @@ int16_t far alloc_image(void far *d, int16_t a, int16_t b, int16_t c, int16_t e)
 int16_t far load_demo(uint8_t index);
 int16_t far pick_random_demo(void);
 int16_t far detect_hardware(void);
-int16_t far f_1102a(int16_t a);
 int16_t far f_14e88(void far *fp);
 void far show_readme_section(uint8_t n);
 void far console_rule(void);
@@ -610,6 +611,7 @@ void far level_palette_build(void);   /* 0x0d5c5 */
 int16_t far episode_for_level(void);  /* 0x10ba4 */
 void far level_map_draw(desc_t far *dest);  /* 0x0b284 */
 void far episode_intro(void);   /* 0x1089b */
+int16_t far level_screens(int16_t demo);   /* 0x1102a */
 void far banner_build(desc_t far *dest, const char far *text, uint8_t colour,
                       int16_t top);   /* 0x103e2 */
 void far image_overlay(desc_t far *src, desc_t far *dst, int16_t row);  /* 0x1081c */
