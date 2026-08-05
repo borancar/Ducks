@@ -438,6 +438,43 @@ with a one-pixel shadow down and right.
 `0x10ba4` is `episode_for_level`: the episode whose range contains
 `level_attempted` **and** whose egg matches, last match winning.
 
+### 0x1102a, written out: two screens with the level loaded between them
+
+**Written 2026-08-05** as `level_screens`, in the order the original does it: the
+level's name bounces in as a banner (`0x110a4`) *before* the picture it will be
+stamped onto exists, the level loads, the picture arrives with the map drawn into
+it, the name and the status line go over it, that fades in and waits for a key
+and fades out, and then - only if the level carries a `0x44` block, which
+`0x11259` settles before the first screen is even shown - the instructions page
+appears with the same banner over a fresh picture and one animated entity at
+(0xa0, 0x3c).
+
+Levels 1, 2 and 5 have that block; level 12 does not, so it goes straight from
+the map screen into play.
+
+`0x07259` is the tool row's halo: the same clipping and walk as
+`sprite_to_image_plain`, but it writes colour 0 at the four neighbours of every
+non-zero source pixel and nothing at the pixel itself - `outline_sprite` into an
+image rather than through the plot pointer. The tools go in a row centred on the
+screen, sixteen apart at y=0xb4, each haloed and then drawn, and the icon is the
+first frame of the tool type's own script.
+
+**Checked against `snapshots/snap006.snap` - a level with two tools - the whole
+map screen is 64,000 of 64,000 pixels:** the name banner, the picture, the map,
+both icons with their outlines, and the status line.
+
+**And against `snapshots/snap003.snap`: 63,961 of 64,000 pixels, 187 of 200
+rows identical.** The 39 that differ sit at x 159-161, y 48-60 - the animated
+entity, which the frame loop draws to the screen rather than into the picture, so
+it cannot be in a comparison of the picture. That covers `load_text_page`, the
+banner, the overlay and the picture together.
+
+Two stores at the top were easy to miss and matter: `text_outline = 0` and
+`text_fill = 0x6f` at `0x11041`, which is the colour `load_text_page` then draws
+the instructions in. The tail reseeds the level - `[0x2039]` from the runtime's
+clock at `0x11488`, which is what `run_level` srand()s, so two goes at one level
+differ - and gates a play log on `[0x513]`, which nothing sets.
+
 **`f_1102a` builds two screens, and there is a third before them.** The captures
 say which is which: `snap001` is "EPISODE 1" with `duck_count` still 0, so it is
 drawn *before* the level loads, by `0x10c06` (1,037 bytes, gated on `[0x507]`).

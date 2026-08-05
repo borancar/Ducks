@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <strings.h>       /* strcasecmp, which is Borland's stricmp */
 #include <ctype.h>         /* toupper, at 0:0x184f */
 
@@ -692,6 +693,57 @@ void far entity_set_type(entity_t far *e, int16_t type)
     if (e->type != type) {                         /* +0x25, a word */
         e->type  = type;
         e->frame = 0;                              /* +0x1f */
+    }
+}
+
+/* 0x07259. The same clipping again, and the same walk, but what it writes is a
+ * halo: colour 0 above, below, left and right of every non-zero source pixel,
+ * and nothing where the pixel itself is. outline_sprite does this through the
+ * plot pointer at the screen; this does it into an image.
+ *
+ * The level intro draws its tools with this and then sprite_to_image_plain over
+ * the top, which is the same pairing the HUD uses for the collected items.
+ *
+ * The neighbours are not clipped - a pixel on the first row of the destination
+ * writes to rows[-1]. The original does that too; nothing draws close enough to
+ * an edge for it to show, and the tools sit in the middle of the screen.
+ */
+void far outline_to_image(int16_t x, int16_t y, sprite_t far *s,
+                          desc_t far *desc)
+{
+    int32_t at = 0;
+    int16_t skip = 0;
+    int16_t x1, y1, row, col;
+
+    x -= s->ox;
+    y -= s->oy;
+    x1 = x + s->w;
+    y1 = y + s->h;
+
+    if (x < 0) {
+        skip -= x;
+        at   -= x;
+        x     = 0;
+    } else if (desc->w < x1) {
+        skip += x1 - desc->w;
+        x1    = desc->w;
+    }
+    if (y < 0) {
+        at -= (int32_t) y * s->w;
+        y   = 0;
+    } else if (desc->h < y1) {
+        y1 = desc->h;
+    }
+
+    for (row = y; row < y1; row++) {
+        for (col = x; col < x1; col++)
+            if (s->pixels[at++]) {
+                desc->rows[row - 1][col] = 0;       /* 0x0733b */
+                desc->rows[row + 1][col] = 0;
+                desc->rows[row][col - 1] = 0;
+                desc->rows[row][col + 1] = 0;
+            }
+        at += skip;
     }
 }
 
@@ -2521,7 +2573,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                     sound_play_guarded(0x29, 1);
                     show_splash(menu_text[40], 200);   /* "SECRET LEVEL!" */
                 }
-                if (f_1102a(g_21a3))             /* a screen; non-zero leaves */
+                if (level_screens(g_21a3))       /* 0x1102a; non-zero leaves */
                     break;
                 g_18f5 = 2;
 
@@ -4460,10 +4512,175 @@ uint8_t      ambience_on;        /* 0x2015 */
 int16_t      pair_slots;         /* 0x18d1 - two per mirrored entity, and what
                                   * run_level's far allocation is sized from */
 float        level_frac[4];      /* 0x13e1, 0x13e5, 0x13e9, 0x13ed */
+int16_t      g_507;              /* 0x507 - picks 0x10c06's level picker over
+                                  * the episode intro, and enables the level
+                                  * name and the level-select key on the map
+                                  * screen. Zero in ordinary play */
+int16_t      level_seed;         /* 0x2039 - what run_level srand()s */
 int16_t      play_log;           /* 0x51d - the fprintf gate, cleared here and
                                   * nothing has been seen to set it */
 int16_t      g_517;              /* 0x517 - with [0x1ffa], decides whether a
                                   * 0x4d entity is placed. Unread */
+
+/* --------------------------------------------------- 0x1102a: level_screens
+ *
+ * Everything between choosing a level and playing it, and it is two screens with
+ * the level loaded between them:
+ *
+ *   the level's name bounces in as a banner       0x110a4
+ *   the level loads                               0x1108b
+ *   a picture, with the level's map drawn into it 0x110d7, 0x11131
+ *   the name over it, the tools, the status line  0x11190, 0x1123d
+ *   that fades in, waits for a key, fades out     0x11280
+ *   then the instructions page, if the level has one, with the same name banner
+ *   over a fresh picture and one animated entity  0x1131f
+ *
+ * Returns non-zero only to tell game_main to leave the play loop, which happens
+ * on the level-select key in the [0x507] branch and nowhere else.
+ *
+ * The tools that belong on the first screen at y=0xb4 need 0x7259, which is not
+ * written; the branch that draws the level's name over the picture when [0x507]
+ * is set is here, because it is two calls.
+ */
+int16_t far level_screens(int16_t demo)
+{
+    desc_t  name, pic;
+    scene_t scene;
+    int16_t leave = 0, has_page, i, ordinal;
+
+    text_colour[1] = 0;                            /* 0x11041 */
+    text_colour[0] = 0x6f;
+    episode_intro();                               /* 0x1105f */
+
+    i       = episode_for_level();                 /* 0x11063 */
+    ordinal = (i == 0xff) ? 0xff : episode_index[i].ordinal;
+
+    level_load();                                  /* 0x1108b */
+    clear_vram();
+
+    /* The name, bouncing in over whatever is on screen, before the picture it
+     * will be stamped onto even exists. */
+    banner_build(&name, level_text, 0, 0);         /* 0x110a4 */
+    fade_start_colour = 0x10;
+    free(level_text);                              /* 0x110b8 */
+
+    if (!resource_load(&pic, 0x4a, (uint8_t) ordinal, 0x80, 1,
+                       episode_egg_index, 0)
+        && !resource_load(&pic, 0x4d, 1, 0x80, 1, 0xff, 0)) {
+        dac_set_black(0, 0);                       /* 0x11109 - no picture */
+        clear_vram();
+        resource_release(&name);
+        fade_start_colour = 0;
+        return leave;
+    }
+
+    level_map_draw(&pic);                          /* 0x11131 */
+    if (g_507) {                                   /* 0x1113e */
+        const char far *s = menu_text[65];
+
+        draw_string(&pic, s, 0xa0 - text_width(s) / 2, 0x5f);
+    }
+    image_overlay(&name, &pic, 0);                 /* 0x11190 */
+
+    /* 0x11196. The tools this level gives you, in a row centred on the middle of
+     * the screen: sixteen pixels apart, each haloed and then drawn. The sprite
+     * is the first frame of the tool type's own script, which is how the HUD
+     * picks its icons too. */
+    {
+        int16_t at = 0xa0 - ((tool_count - 1) << 3);
+
+        for (i = 0; i < tool_count; i++) {
+            sprite_t far *icon =
+                &sprite_table.base[anim_script[tool_list[i]][0]];
+
+            outline_to_image(at + (i << 4), 0xb4, icon, &pic);      /* 0x111e5 */
+            sprite_to_image_plain(at + (i << 4), 0xb4, icon, &pic); /* 0x11224 */
+        }
+    }
+
+    draw_level_status(&pic);                       /* 0x1123d */
+
+    /* Whether there is an instructions page at all is settled here, before the
+     * first screen is shown, by looking for the block and closing it again. */
+    has_page = egg_find_block(0x44, (uint8_t) level_attempted,
+                              episode_egg_index) != 0;
+    if (has_page)
+        egg_block_end();
+
+    fade_direction = 1;                            /* 0x1126a */
+    fade_level     = 0;
+    dac_set_black(0x10, 0);
+    do {                                           /* 0x11280 */
+        int16_t plane;
+
+        input_poll(0x140, 0xc8);
+        if (fade_direction == 0) {
+            if (g_507 && last_key == 0x20) {       /* 0x1129b - level select */
+                leave    = 1;
+                has_page = 0;
+                demo     = 0;
+            }
+            if (last_key || g_18e5) {
+                fade_direction = -1;
+                if (!has_page)
+                    fade_start_colour = 0;
+            }
+        }
+        for (plane = 0; plane < 4; plane++) {
+            set_plane((uint8_t) plane);
+            blit_rows(&pic, viewport_screen, 0);
+        }
+        page_flip();
+        palette_fade_step(0);
+    } while (fade_level != 0);
+
+    if (has_page) {                                /* 0x1131f - the second screen */
+        scene_alloc(&scene, 1);
+        scene_add(&scene, 0xa0, 0x3c, 0x34, 5);
+        resource_release(&pic);
+        if (!resource_load(&pic, 0x4d, 1, 0x80, 1, 0xff, 1))
+            fatal("Can't load level information screen", 0);   /* d+0x24e4 */
+
+        image_overlay(&name, &pic, 0);             /* 0x11388 - the same banner */
+        load_text_page(&pic, 0x44, (uint8_t) level_attempted,
+                       text_colour[0], 0x136, episode_egg_index);
+
+        fade_direction = 1;                        /* 0x113ab */
+        fade_level     = 0;
+        do {                                       /* 0x113b6 */
+            int16_t plane;
+
+            input_poll(0x140, 0xc8);
+            if ((last_key || g_18e5) && fade_direction == 0) {
+                fade_direction    = -1;
+                fade_start_colour = 0;
+            }
+            animate_scene(&scene);                 /* 0x113e9 */
+            for (plane = 0; plane < 4; plane++) {
+                set_plane((uint8_t) plane);
+                blit_rows(&pic, viewport_screen, 0);
+                draw_entities(&scene, viewport_screen, 0);
+            }
+            page_flip();
+            palette_fade_step(0);
+        } while (fade_level != 0);
+
+        free(scene.entities);                      /* 0x1145d */
+    }
+
+    resource_release(&name);                       /* 0x1146b */
+    resource_release(&pic);
+
+    /* 0x11488. A fresh seed for the level, which run_level srand()s - so this is
+     * what makes two goes at the same level differ. The original reads it out of
+     * the runtime's clock at 0:0x17df. The play log below it is gated on [0x513],
+     * which nothing has been seen to set, and is not written. */
+    level_seed = (int16_t) time(NULL);
+    play_log   = 0;
+
+    (void) demo;
+    return leave;
+}
 
 /* -------------------------------------------------- 0x1089b: episode_intro
  *
