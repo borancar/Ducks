@@ -362,11 +362,52 @@ backdrop column under it is clear at 137-139 and solid at 140 - it is standing o
 the terrain, and the 1, 1, 2, 2, 1 spacing is the speed byte ramping to its cap and
 then being clipped by the ground. Three other ducks land at their own heights.
 
+**Seen working, 2026-08-05**: the monster prowls, turns around when it hits a
+wall, and falls under gravity - which is the whole of `the-monster.md`'s claim
+demonstrated from the other side. It has no code of its own: `next_type` walks its
+type through the four states while the shared core moves it and flips its facing on
+a block, and that is all "the thing that eats ducks" is.
+
 **Not compared against the guest.** `tool_use` is also still a stub that complains
 once, so tools do nothing where an entity would use one. The demo comparison is
 what settles both: `run_level(1)` needs no input and reseeds from the level, so the
 guest and the port can be stepped from one snapshot and their entity positions
 diffed frame by frame.
+
+## The demos load, so the idle menu plays one
+
+**Written 2026-08-05**: `0x1240f` (`load_demo`), `0x126db` (`pick_random_demo`)
+and `0x11013` (the clock seed). The menu's idle branch had been reaching a stub
+and printing DEMO MISSING.
+
+**A demo is not a recording of the mouse.** It is a seed, a level number, and
+three tables of events - which is why replaying one needs nothing else: the level
+plays itself out of those tables, and because `run_level` `srand()`s the demo's own
+seed, `rand()` lands in the same places both times.
+
+| table | records | count | who walks it |
+| --- | --- | --- | --- |
+| `[0x203f]` | six bytes | `[0x2049]` | `0x0d471`, the demo's event fork |
+| `[0x203b]` | three bytes | `[0x2047]` | `0x0d4c2`, the tool changes |
+| `[0x2043]` | three bytes | `[0x204b]` | the level script the frame advances |
+
+Each record's fields come out of the file in a different order from the record:
+the two words read first go to `+2` and `+4`, and the one read last to `+0`.
+
+The six demos in this egg are levels 36, 63, 11, 49 and two more, with event
+counts from 2 to 11 and script counts up to 14. The block is `0x52`, and it starts
+with two strings: an empty first one means the demo belongs to the egg it was found
+in, otherwise it names an egg by id and `find_egg_by_id` goes looking.
+
+**Three more duplicate declarations came out of extending the sweep** to lines that
+declare several names at once, which is how `buf_203b` had been hiding as a second
+name for `tool_event_table`:
+
+- `g_da1` is **`scenes[5].count`** - whether the level has any mirrored entities,
+  which is what the setup's two ending flags and one of the four endings test.
+- `g_18f5` and `scroll_shift` were the same byte; so were `g_2036` and `score`.
+
+That makes nine of these in one day, all of one shape.
 
 ## The setup is written; the frame is not
 

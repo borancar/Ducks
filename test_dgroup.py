@@ -56,6 +56,18 @@ def size_of(type_name, stars, count):
     return unit * n
 
 
+# a name like g_203b or buf_203b carries its own offset, and those turn up on
+# lines declaring several at once - which the pattern above skips. `buf_203b` was
+# a second name for tool_event_table for exactly that reason.
+NAMED = re.compile(r"\b(?:g|buf|f)_([0-9a-f]{3,4})\b")
+
+
+# A whole definition line and nothing else: a type, some names, a semicolon. Only
+# these are searched for name-carried offsets, so a *use* of g_21a3 in an
+# expression is not mistaken for a declaration of it.
+MULTI = re.compile(r"^(?P<type>[A-Za-z_][A-Za-z0-9_]*)\s+(?P<rest>[^;{}()=]*);")
+
+
 def main():
     decls = []
     for path in SOURCES:
@@ -64,8 +76,22 @@ def main():
         except OSError:
             continue
         for line in text.split("\n"):
-            m = DECL.match(line.replace("far ", "").strip())
+            stripped = line.replace("far ", "").strip()
+            if stripped.startswith(("extern", "static", "typedef", "*", "/")):
+                continue
+            m = DECL.match(stripped)
             if not m:
+                multi = MULTI.match(stripped)
+                if multi and multi.group("type") in SIZES:
+                    for part in multi.group("rest").split(","):
+                        part = part.strip()
+                        found = NAMED.search(part)
+                        if not found:
+                            continue
+                        decls.append((int(found.group(1), 16),
+                                      POINTER if part.startswith("*")
+                                      else SIZES[multi.group("type")],
+                                      part.lstrip("*"), path))
                 continue
             if "alias" in m.group("tail"):
                 continue

@@ -202,9 +202,6 @@ char       save_name[] = "GAME-.SG";
 char far  *settings_name = "settings.dat";       /* 0x21d2 - a pointer in the
                                                   * image, to d+0x27c7 */
 uint8_t    g_28ff[1];            /* 0x28ff - main's first splash source */
-void far  *buf_203b, *buf_203f, *buf_2043;    /* the three event tables,
-                                              * filled by something not read
-                                              * out yet and freed per demo */
 /* The string tables - see dos.h. Two of them are far data at 0x1894:0 and
  * 0x1894:4, which is why main loads them with an explicit segment. */
 char far **menu_text;            /* 0x1894:0000 */
@@ -273,7 +270,9 @@ extern uint8_t bg_step_x, bg_step_y;    /* 0x1780, 0x1781 */
 
 /* used but not identified */
 int16_t  g_509, g_50b, g_1ffa, g_1ffc, g_1ffe, g_18e1, g_18e3;
-uint8_t  g_18f5;                /* byte-sized on every access */
+/* 0x0da1 is scenes[5].count: whether the level has any mirrored entities,
+ * which is what the setup's two ending flags and one of the four endings
+ * actually test. */
 /* 0x1fd3. The scale sound_load multiplies every sample byte by, out of 32, and
  * the only thing the ambience is ever loaded with - so this is AMBIENCE VOLUME.
  * That is what it is used as and where it is kept, beside game_speed and gamma
@@ -285,7 +284,6 @@ int16_t  slider_x;              /* 0x176d - where a slider's trough starts; 0 */
 int16_t  bar_type_off = 4;      /* 0x2179 - the entity type of a dark block */
 int16_t  bar_type_on  = 18;     /* 0x217b - and of a lit one */
 int16_t  g_201c;                /* compared with jle, so signed */
-uint16_t g_2036;                /* compared with jb, so unsigned */
 int16_t  g_21a3;
 
 /* ---------------------------------------------------- the second, larger font
@@ -2474,11 +2472,11 @@ item_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
             } else if (pick_random_demo()) {       /* 0x126db: rand() % [0x2038] */
                 level_load();                  /* 0x088fa */
                 free(level_text);
-                g_18f5 = 5;  g_1ffc = 0;
+                scroll_shift = 5;  g_1ffc = 0;
                 saved = g_509;  g_509 = 0;     /* switched off for the demo */
                 run_level(1);                  /* 0x1279d - it IS the game */
                 g_509 = saved;
-                free(buf_2043);  free(buf_203f);  free(buf_203b);
+                free(script_table);  free(event_table);  free(tool_event_table);
                 release_sounds();
             } else {
                 show_splash("DEMO MISSING", 100);  /* 0x1287e, DGROUP+0x26bd */
@@ -2489,7 +2487,7 @@ item_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
         case 0x15:                                 /* play the demo named */
             if (load_demo(r->param)) {             /* 0x1240f */
                 /* TODO 0x12811-0x1283a: elided because it is byte for byte the
-                 * same as the branch above - the three frees, g_18f5, the
+                 * same as the branch above - the three frees, scroll_shift, the
                  * g_509 save and restore. Worth writing out if that ever turns
                  * out not to be exactly true. */
                 run_level(1);                  /* 0x1283a */
@@ -2580,7 +2578,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                 }
                 if (level_screens(g_21a3))       /* 0x1102a; non-zero leaves */
                     break;
-                g_18f5 = 2;
+                scroll_shift = 2;
 
                 if (shareware_limit < level_attempted      /* 0x13841 */
                     && !registered && !g_1ffc) {
@@ -3275,7 +3273,7 @@ void far high_score_screen(void)
     release_sounds();
     g_1ffc = 0;
     g_1ffe = 0;
-    sprintf(line, "%s: %i", menu_text[50], g_2036);        /* "SCORE" */
+    sprintf(line, "%s: %i", menu_text[50], score);        /* "SCORE" */
     show_splash(line, 100);
 
     if (save_serial) {                             /* already on the board? */
@@ -3287,12 +3285,12 @@ void far high_score_screen(void)
     }
     /* On it already with a score this good: nothing to add. */
     if (save_serial && score_table[here].serial == save_serial
-        && (uint16_t) score_table[here].score >= g_2036)
+        && (uint16_t) score_table[here].score >= score)
         goto show;
 
     /* The lowest row this score does not beat, and then the one below it. */
     for (at = 9; at >= 0; at--)
-        if ((uint16_t) score_table[at].score > g_2036)
+        if ((uint16_t) score_table[at].score > score)
             break;
     at++;
     if (at > here)                                 /* not good enough */
@@ -3304,7 +3302,7 @@ void far high_score_screen(void)
 
     sound_play_loop(0x27, ambience_volume, 0xff);
     high_score_name(line);
-    score_set((int16_t) g_2036, line, at);
+    score_set((int16_t) score, line, at);
     release_sounds();
 
 show:
@@ -3326,7 +3324,7 @@ void far high_score_name(char far *buf)
     menu_reset(&m);
     menu_add_title(&m, menu_text[0]);              /* "NEW HIGH SCORE!" */
     menu_add_action(&m, menu_text[60], 0x0b, &menu_always, 0);  /* "ENTER YOUR NAME" */
-    sprintf(buf, "%s: %u", menu_text[50], g_2036);              /* "SCORE" */
+    sprintf(buf, "%s: %u", menu_text[50], score);              /* "SCORE" */
     menu_add_action(&m, buf, 0x0b, &menu_never, 0);
     m.background = 7;
 
@@ -3517,7 +3515,7 @@ int16_t far load_game_screen(void)
     free(name);
 
     save_serial     = egg_read_word(fp);
-    g_2036          = egg_read_word(fp);
+    score          = egg_read_word(fp);
     g_201c          = egg_read_word(fp);
     level_attempted = fgetc(fp);
     lives           = fgetc(fp);
@@ -3584,7 +3582,7 @@ void far save_game_screen(void)
         save_serial = ++max_save_value;
 
     write_word(save_serial, fp);
-    write_word(g_2036, fp);
+    write_word(score, fp);
     write_word(g_201c, fp);
     fputc(level_attempted, fp);
     fputc(lives, fp);
@@ -3912,6 +3910,13 @@ scene_t scenes[6];               /* 0x0d63, twelve bytes each */
 int16_t level_clock;             /* 0x201a - frames since the level started */
 uint8_t far *tool_event_table;   /* 0x203b - three bytes a record */
 uint16_t    tool_event_count;    /* 0x2047 */
+uint8_t far *event_table;        /* 0x203f - six bytes a record, and what
+                                  * 0x0d471 walks on the demo path */
+uint16_t    event_count;         /* 0x2049 */
+uint8_t far *script_table;       /* 0x2043 - three bytes a record, the
+                                  * level script the frame advances */
+uint16_t    script_count;        /* 0x204b */
+int16_t     script_at;           /* 0x204d */
 
 /* ------------------------------------------------------- 0x05f7f: one axis
  *
@@ -4540,11 +4545,118 @@ int16_t      level_timer;        /* 0x2003 - counts down at one per [0x2001] */
 int16_t      can_finish;         /* 0x2009 - decides one of the four endings */
 int16_t      can_finish_alt;     /* 0x200b - and another */
 int16_t      level_outcome;      /* 0x200d - what run_level returns == 2 */
-int16_t      g_2016, g_2018, g_1fd8, g_1fda, g_da1;
+int16_t      g_2016, g_2018, g_1fd8, g_1fda;
 int16_t      play_log;           /* 0x51d - the fprintf gate, cleared here and
                                   * nothing has been seen to set it */
 int16_t      g_517;              /* 0x517 - with [0x1ffa], decides whether a
                                   * 0x4d entity is placed. Unread */
+
+/* ------------------------------------------------------- 0x11013: clock_seed
+ *
+ * The seed a level is played from when nothing else supplies one. The original
+ * reads the runtime's clock at 0:0x17df into a four-byte local and returns what
+ * that call left in AX; any value works as long as it varies, since run_level
+ * srand()s it. A demo overrides it with its own recorded seed, which is what
+ * makes a recording replay.
+ */
+int16_t far clock_seed(void)
+{
+    return (int16_t) time(NULL);
+}
+
+/* --------------------------------------------------------- 0x1240f: load_demo
+ *
+ * A demo is not a recording of the mouse. It is a seed, a level, and **three
+ * tables of events** - which is why replaying one needs nothing but the same
+ * seed: the level plays itself out of those tables, and rand() lands in the same
+ * places both times.
+ *
+ *   [0x203f]  six bytes a record, count [0x2049]  - what 0x0d471 fires
+ *   [0x203b]  three bytes a record, count [0x2047] - the tool changes, 0x0d4c2
+ *   [0x2043]  three bytes a record, count [0x204b] - the level script
+ *
+ * Each record's fields are read out of order - the two words that come first in
+ * the file go to +2 and +4, and the one that comes last to +0 - so the file's
+ * order is not the record's.
+ *
+ * The block is 0x52 in whichever egg the demo names. It begins with two strings:
+ * when the first is empty the demo belongs to the egg it was found in, and when it
+ * is not, it names an egg by id and find_egg_by_id goes looking.
+ */
+int16_t far load_demo(uint8_t index)
+{
+    int16_t   egg   = demo_index[index].egg;        /* +6 */
+    int16_t   block = demo_index[index].first;      /* +4 */
+    char far *want, *id;
+    uint16_t  i;
+
+    if (!egg_find_block(0x52, (uint8_t) block, egg))
+        return 0;
+
+    want = egg_read_string(egg_stream);             /* 0x12462 */
+    id   = egg_read_string(egg_stream);
+    if (*want)
+        find_egg_by_id(want, id);                   /* 0x12499 */
+    else
+        episode_egg_index = egg;                    /* 0x124a1 */
+    free(want);
+    free(id);
+
+    level_seed      = egg_read_byte(egg_stream);    /* 0x124cb */
+    level_attempted = egg_read_byte(egg_stream);
+
+    event_count = egg_read_byte(egg_stream);        /* 0x124e9 */
+    event_table = malloc((size_t) event_count * 6);
+    if (!event_table)
+        fatal(out_of_memory, 0);
+    for (i = 0; i < event_count; i++) {             /* 0x12534 */
+        uint8_t far *r = event_table + i * 6;
+
+        *(uint16_t far *) (r + 2) = (uint16_t) egg_read_word(egg_stream);
+        *(uint16_t far *) (r + 4) = (uint16_t) egg_read_word(egg_stream);
+        *(uint16_t far *) (r + 0) = (uint16_t) egg_read_word(egg_stream);
+    }
+
+    tool_event_count = egg_read_byte(egg_stream);   /* 0x125a0 */
+    tool_event_table = malloc((size_t) tool_event_count * 3);
+    if (!tool_event_table)
+        fatal(out_of_memory, 0);
+    for (i = 0; i < tool_event_count; i++) {        /* 0x125ec */
+        uint8_t far *r = tool_event_table + i * 3;
+
+        r[2] = egg_read_byte(egg_stream);
+        *(uint16_t far *) r = (uint16_t) egg_read_word(egg_stream);
+    }
+
+    script_count = egg_read_byte(egg_stream);       /* 0x12631 */
+    script_table = malloc((size_t) script_count * 3);
+    if (!script_table)
+        fatal(out_of_memory, 0);
+    script_at = 0;                                  /* 0x12679 */
+    for (i = 0; i < script_count; i++) {            /* 0x12683 */
+        uint8_t far *r = script_table + i * 3;
+
+        r[2] = egg_read_byte(egg_stream);
+        *(uint16_t far *) r = (uint16_t) egg_read_word(egg_stream);
+    }
+
+    egg_block_end();
+    return 1;
+}
+
+/* -------------------------------------------------- 0x126db: pick_random_demo
+ *
+ * Which demo the idle menu plays: seeded from the clock so it is not the same one
+ * every time, and the score and lives set as a game would - a demo is played as
+ * though someone had just started, five lives and nothing scored.
+ */
+int16_t far pick_random_demo(void)
+{
+    srand((unsigned) clock_seed());                /* 0x126e2 */
+    score = 0;
+    lives = 5;
+    return load_demo((uint8_t) (rand() % g_2038));  /* 0x12711 */
+}
 
 /* ------------------------------------------------- 0x0d715: scene_update_all
  *
@@ -5149,8 +5261,8 @@ int16_t far run_level(int16_t demo)
      * about [0xda1]: whether the level can be finished at all without the tool
      * that would be needed. */
     can_finish     = (!tool_list_any_flagged() && !tool_list_has(0x12)
-                      && !level_flags[1] && !g_da1);
-    can_finish_alt = (g_da1 && !tool_list_any_flagged() && !tool_list_has(0x12)
+                      && !level_flags[1] && !scenes[5].count);
+    can_finish_alt = (scenes[5].count && !tool_list_any_flagged() && !tool_list_has(0x12)
                       && !level_flags[1]);
     if (!tool_list_has(0x12) && scenes[0].flag != 0xff)
         quota_left++;                              /* 0x0dbf5 */
