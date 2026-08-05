@@ -411,7 +411,7 @@ void far animate_scene(scene_t far *scene);
 void far scene_alloc(scene_t far *s, int16_t capacity);
 int16_t far scene_add(scene_t far *s, int16_t x, int16_t y, int16_t type,
                       int16_t param);
-extern scene_t cursor_scene;
+#define cursor_scene scenes[4]   /* 0x0d93 is scenes[4] */
 void far build_washed_ramp(void);
 
 /* the port I/O the original used; a port supplies its own or drops them */
@@ -519,7 +519,6 @@ void far f_09329(void);
 void far f_0becb(void);
 void far f_0f8bd(void);
 void far f_11bee(void far *name, int16_t egg);
-void far f_15388(void far *o);
 extern char far *owner_name;
 extern int16_t   owner_key;
 
@@ -527,14 +526,14 @@ extern int16_t particle_count;
 extern particle_t far *particle_array;
 extern table_t sprite_table;
 extern int16_t far *anim_script[112];
-extern uint8_t      type_flags[112];
+extern uint8_t      type_flags[111];
 extern int16_t far *tool_list;      /* 0x1782 */
 extern int16_t      tool_type;      /* 0x1786 */
 extern uint8_t      tool_at;        /* 0x1788 */
 extern uint8_t      tool_count;     /* 0x178b */
 int16_t far tool_list_has(int16_t type);
 int16_t far tool_list_any_flagged(void);
-extern int16_t      next_type[112];
+extern int16_t      next_type[111];
 extern int16_t      left_handed;
 extern uint8_t      cursor_divider, cursor_phase;
 void far load_animations(void);
@@ -551,7 +550,6 @@ extern uint8_t gamma_level;
 extern int16_t level_w, level_h;         /* 0x1701, 0x1703 */
 extern uint8_t scroll_shift;             /* 0x18f5 */
 extern int16_t scroll_smooth;            /* 0x4fa */
-extern int16_t bg_w, bg_h;               /* 0x1717, 0x1719 */
 extern uint8_t bg_drift;                 /* 0x202c */
 extern scene_t scenes[6];                /* 0x0d63 */
 extern int16_t level_clock;              /* 0x201a */
@@ -585,8 +583,8 @@ void far f_07955(void);
 extern int16_t score, quota_left, combo_hi, combo_lo;
 extern int16_t lives;                    /* 0x2034 */
 extern int32_t mouse_x, mouse_y;         /* 0x18d3, 0x18d7 */
-extern int16_t g_1ff2, g_1ff4, eaten_countdown, eaten_index;
-extern uint8_t anim_a[112];
+extern int16_t g_1ff2, g_1ff4, eaten_countdown;
+extern uint8_t anim_a[111];
 void far collide_scenes(void);
 
 /* 0x088fa, game.c - the level loader, and what it fills in */

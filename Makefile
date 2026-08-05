@@ -9,7 +9,7 @@
 # of the split: game.c does not know which backend it has.
 
 CC      ?= cc
-CFLAGS  ?= -std=c99 -Wall -Wextra -O1 $(shell pkg-config --cflags sdl3)
+CFLAGS  ?= -std=c99 -Wall -Wextra -O1 -ggdb $(shell pkg-config --cflags sdl3)
 LDLIBS  ?= $(shell pkg-config --libs sdl3)
 
 OBJS = game.o sdl_io.o stubs.o egg.o sound.o
