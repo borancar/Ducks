@@ -178,14 +178,14 @@ int16_t    save_serial;          /* 0x2053 - which save is the newest: written
  * where settings begins, which is what fixes the length at 112.
  */
 int16_t far *anim_script[112];   /* 0x009a - a sprite index per step, 999 ends */
-uint8_t      anim_a[112];        /* 0x025a - an object's collision reach
+uint8_t      anim_a[111];        /* 0x025a - an object's collision reach
                                   * in x. 0x0993b tests |dx| against it,
                                   * with |dy| against a constant 3 */
-uint8_t      anim_b[112];        /* 0x02c9 */
-uint8_t      anim_c[112];        /* 0x0338 */
-uint8_t      type_flags[112];    /* 0x03a7 - bit 2 says the type has a mirrored
+uint8_t      anim_b[111];        /* 0x02c9 */
+uint8_t      anim_c[111];        /* 0x0338 */
+uint8_t      type_flags[111];    /* 0x03a7 - bit 2 says the type has a mirrored
                                   * script in the next slot */
-int16_t      next_type[112];     /* 0x0416 - what a type becomes when its script
+int16_t      next_type[111];     /* 0x0416 - what a type becomes when its script
                                   * runs out; a type that points at itself loops */
 
 /* the menu and the attract cycle */
@@ -231,7 +231,6 @@ uint8_t    tool_names_count;     /* 0x210a */
 
 /* startup and settings */
 int16_t    sound_available;      /* 0x2104 - detect_hardware's result */
-void far  *init_objects[3];      /* 0x210c - three 22-byte objects, stride 4 */
 /* 0x04f4. The word array save_settings writes and every menu toggle indexes by
  * its item's param. The image initialises it to these five values, and the
  * sixth word is video_mode - adjacent in DGROUP and reached as [0x4fe], never
@@ -253,7 +252,6 @@ desc_t     backdrop;             /* 0x16f5 - screen-sized, the items are drawn
                                   * into it once and composed every frame */
 desc_t     background;           /* 0x170b - the 64x64 tile behind them */
 table_t    menu_sprites;         /* 0x18f8 - 'S' block 1, the large font */
-scene_t    cursor_scene;         /* 0x0d93 - one entity: the mouse pointer */
 int16_t    menu_always = 1;      /* 0x217f */
 int16_t    menu_never;           /* 0x2181 */
 uint8_t    on_off_width;         /* 0x0097 - max strlen of "N" and "FF" */
@@ -911,8 +909,12 @@ void far load_string_table(uint8_t index, char far ***table, uint8_t far *count,
  * screen indexes off the end of it. */
 void far load_string_tables(void)
 {
-    /* TODO 0x094cd: the tool names go through 0x0e09b rather than the loader
-     * below, and that one has not been read. */
+    /* 0x094cd. The tool names, and they go through the same loader as the rest -
+     * an earlier note here said otherwise. Block 0xff, no length assertion, and
+     * message_post indexes it by anim_c[tool_type], so a level with tools reads
+     * off a null pointer without it. */
+    load_string_table(0xff, &tool_names, &tool_names_count,
+                      "Can't find tool names", 0xff);
     load_string_table(0xfd, &menu_text,  &menu_text_count,
                       "No menu text", 0xff);
     load_string_table(0xfb, &extra_text, &extra_text_count,
@@ -1195,7 +1197,10 @@ void far draw_number(int16_t value, int16_t x, int16_t y, viewport_t far *clip,
  * their outlines join into one continuous border.
  */
 
-glyph_t font[256];               /* 0x054d */
+glyph_t font[256];               /* 0x054d alias - glyph 0's first byte
+                                  * is text_colour[1], and nothing draws
+                                  * character 0: charmap sends everything
+                                  * unknown to 0x1b */
 uint8_t text_colour[2];          /* 0x054c - see dos.h on the shared byte */
 uint8_t far *font_codes;         /* 0x20f6 - the first code of each glyph */
 uint8_t      font_glyph_count;   /* 0x20fa */
@@ -3760,10 +3765,15 @@ void far init(void)
                                                     * opening and indexing the
                                                     * original does here */
     for (i = 0; i < 3; i++) {                      /* three 22-byte objects */
-        init_objects[i] = malloc(22);              /* [0x210c], stride 4 */
-        ((desc_t far *) init_objects[i])->w = 316;
-        ((desc_t far *) init_objects[i])->h = 15;
-        f_15388(init_objects[i]);
+        message_image[i] = malloc(sizeof(desc_t));  /* [0x210c], stride 4 */
+        message_image[i]->w = 316;
+        message_image[i]->h = 15;
+        /* 0x14284 calls 0x15388, which is alloc_image at 0x05388 - a near call
+         * wraps inside its 64 KB segment, so the offset read off a listing is a
+         * segment offset and not an image one. This had been a do-nothing stub,
+         * which left all three of these images without rows: message_post writes
+         * through them, so the first level with a tool crashed. */
+        alloc_image(message_image[i], 0, 0, 0, 1);
     }
     buffer_init();                                 /* bring-up: see stubs.c */
     /* 0x142bb. The board starts full: ten rows of TIM FURNISH, 10000 down to
@@ -3897,7 +3907,6 @@ uint8_t scroll_shift;            /* 0x18f5 - how much of the way to the target
 int16_t scroll_smooth;           /* 0x4fa - 1 to ease, 0 to only move the view
                                   * when the followed point would leave it.
                                   * Starts 1; a level event toggles it */
-int16_t bg_w, bg_h;              /* 0x1717, 0x1719 - the background tile */
 uint8_t bg_drift;                /* 0x202c - two base-3 digits the level carries */
 scene_t scenes[6];               /* 0x0d63, twelve bytes each */
 int16_t level_clock;             /* 0x201a - frames since the level started */
@@ -4037,9 +4046,9 @@ void far bg_scroll_reset(void)
     int16_t d = (int8_t) bg_drift;
 
     bg_scroll_y = 0;
-    bg_step_y   = (uint8_t) ((uint16_t) (bg_h + 1 - d / 3) % (uint16_t) bg_h);
+    bg_step_y   = (uint8_t) ((uint16_t) (background.h + 1 - d / 3) % (uint16_t) background.h);
     bg_scroll_x = 0;
-    bg_step_x   = (uint8_t) ((uint16_t) (bg_w + 1 - d % 3) % (uint16_t) bg_w);
+    bg_step_x   = (uint8_t) ((uint16_t) (background.w + 1 - d % 3) % (uint16_t) background.w);
 }
 
 /* 0x0b0c5. Build the palette that goes to the DAC from the one on file: 768
@@ -4142,6 +4151,9 @@ void far game_srand(uint16_t seed)
  * rather than scaling. Reproduced with the cast.
  */
 int16_t          particle_cap;       /* 0x18cf */
+int16_t          particle_count;     /* 0x18cd - run_level clears it, the
+                                      * spawner fills it, particles draws it */
+particle_t far  *particle_array;     /* 0x18c1 - run_level's own allocation */
 int16_t          duck_count;         /* 0x2007 - what the HUD's second number
                                       * shows, and what the "not enough got
                                       * home" ending compares against */
@@ -4230,7 +4242,8 @@ int16_t combo_hi, combo_lo;      /* 0x1ff6, 0x1ff8 - the score bonus decays out
                                   * a frame by run_level */
 int16_t g_1ff2, g_1ff4;          /* what type 0x37 stashes */
 int16_t eaten_countdown;         /* 0x2005 */
-int16_t eaten_index;             /* 0xd7f - which object of scene 2 did it */
+/* 0x0d7f is scenes[2].flag - which object of scene 2 did it. scene_alloc
+ * clears it to 0xff, which is how a level starts with nothing being eaten. */
 
 static int16_t iabs(int32_t v)   { return (int16_t) (v < 0 ? -v : v); }
 
@@ -4339,7 +4352,7 @@ void far collide_scenes(void)
                 entity_set_type(o, (int16_t) (0x46 + (o->f14 == 1)));
                 sound_play_guarded(0x1d, 1);
                 eaten_countdown = 0x32;
-                eaten_index     = di;
+                scenes[2].flag     = di;
                 break;
 
             case 0x2d:                                  /* 0x09eda */
@@ -4445,10 +4458,6 @@ void far collide_scenes(void)
  *
  * A null format does nothing at all, which is how a caller says "no message".
  */
-/* The play area's edges, which native_particles reads as the clip for every
- * particle and which the ticker measures its line against. */
-int16_t      view_top, view_bottom;  /* 0x172d, 0x172f */
-int16_t      view_left, view_right;  /* 0x1731, 0x1733 */
 
 desc_t far  *message_image[3];   /* 0x210c */
 viewport_t   message_rect[3];    /* 0x2118 */
@@ -4517,10 +4526,193 @@ int16_t      g_507;              /* 0x507 - picks 0x10c06's level picker over
                                   * name and the level-select key on the map
                                   * screen. Zero in ordinary play */
 int16_t      level_seed;         /* 0x2039 - what run_level srand()s */
+uint8_t      too_deep_count;     /* 0x20ff - tool_use's complaint counter */
+int16_t      blink_enable;       /* 0x2157 - from the level's first flag */
+scene_t      tool_scene;         /* 0x178c - two entities: the tool cursor */
+int16_t      blink_toggle;       /* 0x0ddd */
+int16_t      blink_countdown;    /* 0x0ddf */
+int16_t      level_timer;        /* 0x2003 - counts down at one per [0x2001] */
+int16_t      can_finish;         /* 0x2009 - decides one of the four endings */
+int16_t      can_finish_alt;     /* 0x200b - and another */
+int16_t      level_outcome;      /* 0x200d - what run_level returns == 2 */
+int16_t      g_2016, g_2018, g_1fd8, g_1fda, g_da1;
 int16_t      play_log;           /* 0x51d - the fprintf gate, cleared here and
                                   * nothing has been seen to set it */
 int16_t      g_517;              /* 0x517 - with [0x1ffa], decides whether a
                                   * 0x4d entity is placed. Unread */
+
+/* ============================================================ 0x0d7ee: run_level
+ *
+ * Playing a level. 4,287 bytes, and two thirds of it is the frame - which is why
+ * this is written in two halves and only the first is finished.
+ *
+ * **The setup below is the original's, read out end to end.** Everything it calls
+ * exists: the level's own sprite set, the panel, the palette, the tool cursor's
+ * two-entity scene, the three message rectangles, the HUD drawn once into each
+ * video page, the particle pool, the camera snapped to the mouse, the ambience.
+ *
+ * **The frame is not.** What is here composes and flips so the level can be
+ * looked at; the real one at 0x0dcc9 spawns ducks, reads the input, applies the
+ * tool, collides, retires, moves the camera, animates, counts and decides which
+ * of four ways the level ended. Nineteen routines under it are unwritten, 7,464
+ * bytes, the largest being 0x07bb2 and 0x0d0c8. Until they exist this returns
+ * when ESC is pressed rather than when the level is over.
+ * ========================================================================= */
+int16_t far run_level(int16_t demo)
+{
+    static const int16_t layers[5] = { 1, 0, 2, 3, 5 };
+    desc_t  panel;
+    int16_t hud_x       = video_mode * 0x14 + 0x135;   /* [bp-2], and +5 */
+    int16_t shown_score = score;                       /* [bp-6] */
+    int16_t shown_ducks = duck_count;                  /* [bp-0xe] */
+    int16_t sparkle_x;                                 /* [bp-0x16] */
+    int16_t page, plane, i, edge;
+
+    (void) hud_x; (void) shown_score; (void) shown_ducks;   /* the frame's */
+
+    sparkle_x     = rand() & 0x3ff;                /* 0x0d837 */
+    blink_enable  = level_flags[0];                /* 0x0d850 - [0x201e] */
+    button_a_down = 0;
+
+    sprite_set_load(sprite_set_id, 0x43, &level_sprites, episode_egg_index);
+    too_deep_count = 0;
+    g_1ffe = g_1ffc;                               /* 0x0d876 */
+    g_1ffc = 0;
+    srand((unsigned) level_seed);                  /* 0x0d886 - the level's own */
+    clear_vram();
+    resource_load(&panel, 0x4d, 0x21, 0, 1, 0xff, 1);
+    level_palette_build();                         /* 0x0d5c5 */
+
+    /* 0x0d8af. The tool cursor: two entities in a scene of its own, the second
+     * carrying the selected tool's type, and its param says which is which. */
+    tool_at   = 0;
+    tool_type = tool_list[0];
+    scene_alloc(&tool_scene, 2);
+    scene_add(&tool_scene, 0x82, 0x10, 0x10, 5);
+    scene_add(&tool_scene, 0x82, 0x10, tool_type, 5);
+    tool_scene.entities[1].param = 1;              /* 0x0d902 */
+
+    /* 0x0d908. Three message slots stacked ten rows apart, the lowest 34 rows up
+     * from the bottom of the play area. Zero width until message_post measures a
+     * line into one. */
+    edge = viewport_game.bottom - 0x22;
+    for (i = 0; i < 3; i++) {
+        make_rect(&message_rect[i], edge + i * 10, edge + i * 10 + 0xf,
+                  viewport_game.left + 4, viewport_game.left + 4);
+        message_time[i] = 0;
+    }
+    if (tool_count)                                /* 0x0d95b - "you have got X" */
+        message_post(menu_text[7], tool_names[anim_c[tool_type]]);
+
+    eaten_countdown = 0;
+
+    /* 0x0d9a2. The HUD, once into each of the two pages with a flip between, and
+     * never again - so its two comparisons a level are the whole population. */
+    for (page = 0; page < 2; page++) {
+        for (plane = 0; plane < 4; plane++) {
+            static int16_t slot = 0x2a, s_score = 7, s_ducks = 0x4f, s_lives = 0xae;
+
+            set_plane((uint8_t) plane);
+            blit_rows(&panel, viewport_panel, 0);
+            for (i = 0; i < tool_count; i++) {
+                int16_t x   = 0x82 + (i << 4);
+                int16_t idx = anim_script[tool_list[i]][0];
+
+                draw_sprite(&slot, x, 0x10, &sprite_table, &viewport_panel, 0x90);
+                outline_sprite(&idx, x, 0x10, &sprite_table, &viewport_panel);
+                draw_sprite(&idx, x, 0x10, &sprite_table, &viewport_panel, 0x90);
+            }
+            draw_sprite(&s_score, 0x0d4, 0x23, &sprite_table, &viewport_panel, 0x90);
+            draw_sprite(&s_ducks, 0x105, 0x23, &sprite_table, &viewport_panel, 0x90);
+            draw_number2(score,      6, 0x080, 0x22);
+            draw_number2(duck_count, 2, 0x0e1, 0x22);
+            draw_number2(lives,      2, 0x113, 0x22);
+            draw_sprite(&s_lives, 0x135, 0x07, &sprite_table, &viewport_panel, 0x90);
+        }
+        page_flip();
+    }
+    resource_release(&panel);                      /* 0x0db42 */
+
+    bg_scroll_reset();
+    warp_step       = level_flags[6] ? 7 : 1;      /* 0x0db4c - [0x202a] */
+    g_2016          = 0;
+    blink_toggle    = 0;
+    blink_countdown = 0x28;
+    level_clock     = 0;
+    combo_hi        = 0xa00;
+    combo_lo        = 0;
+    level_timer     = 0x1b;
+
+    /* 0x0db86. Two flags the endings test, and they differ only in what they say
+     * about [0xda1]: whether the level can be finished at all without the tool
+     * that would be needed. */
+    can_finish     = (!tool_list_any_flagged() && !tool_list_has(0x12)
+                      && !level_flags[1] && !g_da1);
+    can_finish_alt = (g_da1 && !tool_list_any_flagged() && !tool_list_has(0x12)
+                      && !level_flags[1]);
+    if (!tool_list_has(0x12) && scenes[0].flag != 0xff)
+        quota_left++;                              /* 0x0dbf5 */
+
+    /* 0x0dbf9. The particle pool, sized from what scene 0 was allocated plus two
+     * per mirrored entity, forty records each. */
+    particle_cap   = (scenes[0].capacity + pair_slots) * 0x28;
+    particle_array = malloc((size_t) particle_cap * sizeof *particle_array);
+    if (!particle_array)
+        particle_cap = 0;
+    particle_count = 0;
+    g_1fda = g_1fd8 = level_outcome = g_2018 = 0;
+
+    fade_level     = 0;
+    fade_direction = 1;
+    cursor_to_centre(&backdrop);                   /* 0x0dc5b */
+    scroll_axis_snap(mouse_x, screen_width, &viewport_game.scroll_x,
+                     (int16_t) (level_w - screen_width));
+    scroll_axis_snap(mouse_y, viewport_game.bottom, &viewport_game.scroll_y,
+                     (int16_t) (level_h - viewport_game.bottom));
+    if (ambience_volume && ambience_on)            /* 0x0dca3 */
+        sound_play_loop(ambience_on, ambience_volume, episode_egg_index);
+
+    /* ------------------------------------------------------------ the frame
+     *
+     * Not the original's. 0x0dcc9 is the real one and it is 2,830 bytes; this
+     * composes what the setup built and waits for ESC, so that everything above
+     * can be seen. See docs/notes/run-level.md for the map of what belongs here.
+     */
+    do {
+        input_poll(level_w, level_h);
+        if (last_key == 0x1b)
+            fade_direction = -1;
+
+        cursor_scene.entities[0].x = mouse_x;
+        cursor_scene.entities[0].y = mouse_y;
+        animate_scene(&cursor_scene);
+        for (i = 0; i < 6; i++)
+            animate_scene(&scenes[i]);
+        animate_scene(&tool_scene);
+
+        for (plane = 0; plane < 4; plane++) {
+            set_plane((uint8_t) plane);
+            compose_scroll((int16_t) viewport_game.scroll_x,
+                           (int16_t) viewport_game.scroll_y);
+            for (i = 0; i < 5; i++)
+                draw_entities(&scenes[layers[i]], viewport_game, 0);
+            if (!demo)
+                draw_entities(&cursor_scene, viewport_game, 0x90);
+            if (tool_count)
+                draw_entities(&tool_scene, viewport_panel, 0x90);
+        }
+        page_flip();
+        palette_fade_step(0);
+    } while (fade_level != 0);
+
+    /* 0x0e7da's teardown, as far as it is written. */
+    free(particle_array);
+    particle_array = NULL;
+    free(tool_scene.entities);
+    sprite_set_free(&level_sprites);
+    set_buffer(default_buffer);                    /* 0x0e814 */
+    return level_outcome == 2;
+}
 
 /* --------------------------------------------------- 0x1102a: level_screens
  *

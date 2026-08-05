@@ -22,116 +22,6 @@
 
 /* --------------------------------------------------------------- gameplay */
 
-/* 0x0d7ee, and this is NOT it. run_level is 4,287 bytes and two thirds of it is
- * the frame loop - the spawns, the input, the tools, the collisions, the camera,
- * the four endings - none of which is written yet.
- *
- * What this does instead is draw the level the loader just built and hold it
- * until a key, so that level_load can be looked at rather than only diffed. The
- * plane loop below is the shape of the real one at 0x0e4e3 - the same five
- * scenes in the same back-to-front order, the same viewport, the same
- * compositor - but everything that would make the picture move is absent, and
- * so is the setup at 0x0d7ee that positions the camera and draws the HUD.
- *
- * It is bring-up, like egg_bringup_open below it, and it goes when the real one
- * lands. It returns 0, which tells game_main the run ended. */
-int16_t far run_level(int16_t arg)
-{
-    /* 0x0e4e3 draws them 1, 0, 2, 3, 5 - back to front - and then scene 4, the
-     * cursor, only when a person is playing. */
-    static const int16_t order[5] = { 1, 0, 2, 3, 5 };
-    /* The three fixed sprites on the panel, and the empty slot behind each
-     * collected item. draw_sprite takes the index by address. */
-    static int16_t slot = 0x2a, s_score = 0x07, s_ducks = 0x4f, s_lives = 0xae;
-    desc_t  panel;
-    int16_t plane, i;
-
-    /* 0x0d86b, and the first thing the real setup does. The set carries a
-     * palette slice of its own, so without it every sprite on the level - the
-     * cursor included - draws through whatever colours the menu left behind. */
-    sprite_set_load(sprite_set_id, 0x43, &level_sprites, episode_egg_index);
-
-    /* 0x0d868 in the real setup, and leaving it out left the menu behind the
-     * level: both pages still hold whatever the last screen drew, and the
-     * compositor only writes the rows of the game viewport. */
-    clear_vram();
-
-    /* 0x0d87f. The status panel, and the one resource the HUD is made of. */
-    panel.rows = NULL;
-    resource_load(&panel, 0x4d, 0x21, 0, 1, 0xff, 1);
-
-    /* 0x0d5c5, the last thing the real setup does before the frame: tint the
-     * level's palette and publish it. Everything drawn with a colour bias -
-     * the HUD numbers, the cursor - depends on it. */
-    level_palette_build();
-
-    fade_direction    = 1;
-    fade_start_colour = 0;
-    palette_build();
-
-    do {
-        input_poll(level_w, level_h);
-        if (last_key)
-            fade_direction = -1;
-
-        /* The cursor is an entity like any other: run_screen puts it where the
-         * mouse is and steps its script, and without that it neither moves nor
-         * animates. The real frame does this at 0x0e34e and animates all six
-         * scenes at 0x0e42d; here it is the cursor and the scenes, which is
-         * what makes the ducks flap. */
-        cursor_scene.entities[0].x = mouse_x;
-        cursor_scene.entities[0].y = mouse_y;
-        animate_scene(&cursor_scene);
-        for (i = 0; i < 6; i++)
-            animate_scene(&scenes[i]);
-
-        for (plane = 0; plane < 4; plane++) {
-            set_plane((uint8_t) plane);
-            compose_scroll((int16_t) viewport_game.scroll_x,
-                           (int16_t) viewport_game.scroll_y);
-            for (i = 0; i < 5; i++)
-                draw_entities(&scenes[order[i]], viewport_game, 0);
-            if (arg == 0)
-                draw_entities(&cursor_scene, viewport_game, 0x90);
-
-            /* The HUD, from the plane loop at 0x0d9a2 as native.py has it - the
-             * panel, the collected items each with an outline over an empty
-             * slot, three labels and three numbers. The real one draws this
-             * once into each page at level start and never again; drawing it
-             * every frame is this bring-up being simple, not the original. */
-            if (panel.rows)
-                blit_rows(&panel, viewport_panel, 0);
-            for (i = 0; i < tool_count; i++) {
-                int16_t x   = 0x82 + i * 16;
-                int16_t idx = anim_script[tool_list[i]][0];
-
-                draw_sprite(&slot, x, 0x10, &sprite_table, &viewport_panel, 0x90);
-                outline_sprite(&idx, x, 0x10, &sprite_table, &viewport_panel);
-                draw_sprite(&idx, x, 0x10, &sprite_table, &viewport_panel, 0x90);
-            }
-            draw_sprite(&s_score, 0x0d4, 0x23, &sprite_table, &viewport_panel, 0x90);
-            draw_sprite(&s_ducks, 0x105, 0x23, &sprite_table, &viewport_panel, 0x90);
-            draw_sprite(&s_lives, 0x135, 0x07, &sprite_table, &viewport_panel, 0x90);
-            draw_number2(score,      6, 0x080, 0x22);
-            draw_number2(duck_count, 2, 0x0e1, 0x22);
-            draw_number2(lives,      2, 0x113, 0x22);
-        }
-        page_flip();
-        palette_fade_step(0);
-    } while (fade_level != 0);
-
-    resource_release(&panel);
-    sprite_set_free(&level_sprites);               /* 0x088b3, as teardown does */
-    set_buffer(default_buffer);                    /* 0x0e814, likewise: the
-                                                    * level played through
-                                                    * level_palette, and the
-                                                    * shared buffer goes back */
-    return 0;
-}
-
-int16_t particle_count;
-particle_t far *particle_array;
-
 /* The four ending screens that have not been read out. cutscene_welcome_home and
  * cutscene_photos are real, in game.c. */
 void far cutscene_rocket_space(void)      { }
@@ -230,7 +120,6 @@ void far fatal(const char far *msg, const char far *arg)
 
 void far f_11bee(void far *name, int16_t egg) { (void) name; (void) egg; }
 int16_t far f_14e88(void far *fp)         { (void) fp; return 0; }
-void far f_15388(void far *o)             { (void) o; }
 
 /* The palette the DAC loops upload, and the washed copy the blink alternates
  * with: 0x10e1 and 0x0dad. palette_build fills the first; nothing fills the

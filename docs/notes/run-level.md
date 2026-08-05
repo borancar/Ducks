@@ -294,6 +294,106 @@ stub that silently does nothing is how a demo quietly stops matching.
 explicitly. That is not the restore-side fix that was rejected - there, our lie
 and a genuinely paused game are indistinguishable.)
 
+## The setup is written; the frame is not
+
+**2026-08-05.** `run_level` is a real function in `game.c` now rather than a stub,
+and its two halves are in different states. The **setup** - `0x0d7ee`-`0x0dcc6`,
+1,241 bytes - is read out and transcribed in full, because everything it calls
+exists. In order: the sparkle seed from `rand() & 0x3ff`, `blink_enable` from the
+level's first flag, the level's own sprite set, `srand(level_seed)`, `clear_vram`,
+the panel as `0x4d`:`0x21`, `level_palette_build`, the tool cursor as two entities
+in a scene of its own with the second carrying the tool type, three message slots
+ten rows apart starting 34 rows up from the bottom of the play area, the "you have
+got X" line, the HUD drawn **once into each video page with a flip between**, the
+background scroll reset, `warp_step` 7 or 1 on the level's last flag, the two
+flags the endings test, `quota_left++` when the level has a hero, the particle
+pool sized `(scene0.capacity + pair_slots) * 0x28`, the camera snapped to the
+mouse, and the ambience.
+
+The **frame** is a stand-in inside that function, marked as one: it composes what
+the setup built, animates the scenes and waits for ESC. The real one is 2,830
+bytes and needs nineteen routines that do not exist, 7,464 between them - the
+largest `0x07bb2` (3,082) and `0x0d0c8` (937). Until then a level can be looked at
+but not played, and pressing ESC is how it ends rather than one of the four
+endings clearing `[0x1798]`.
+
+Four globals that had been declared twice are gone with this: `view_top`,
+`view_bottom`, `view_left` and `view_right` were the first four fields of
+`viewport_game`, and `particle_count` and `particle_array` have moved out of
+`stubs.c`, since they are state the setup owns rather than something standing in.
+
+**And a fifth, which crashed the level.** `bg_w` and `bg_h` at `0x1717` and
+`0x1719` are `background.w` and `background.h` - `background` is the descriptor at
+`0x170b`, and `+0x0c`/`+0x0e` are a `desc_t`'s size fields. Declared separately
+they were always zero, and `bg_scroll_reset` divides by both, so the first thing
+the setup did after the HUD was raise SIGFPE. `load_background` in the original
+reads them rather than writing them, which is the tell: it computes
+`wrap_x = bg_w - 1` from a value `resource_load` had already filled in.
+
+Verified against `snap004`: the guest's tile is 128x64 with wraps 127 and 63 and
+both scroll steps 0 at drift 4, and the port now agrees on all five.
+
+That is the fifth instance of one pattern - a structure field declared a second
+time as a scalar - and every one of them was silent until something read the copy
+nobody wrote. When a DGROUP offset lands inside a record the port already has,
+it is that field.
+
+**The next crash was a table nobody loaded.** The setup's "you have got X" line is
+`message_post(menu_text[7], tool_names[anim_c[tool_type]])`, and `tool_names` was
+never filled: `load_string_tables` loaded three of the four tables and carried a
+note claiming the tool names went through a different loader that had not been
+read. They do not - `0x094cd` calls the same `load_string_table` with block `0xff`
+and "Can't find tool names" as its message, and it is the *first* of four, not
+absent. So the array was null and a level with tools read off it.
+
+Level 1 survived because it has no tools. Levels 11 and 12 have two each, which is
+what made this look like a scrolling fault - and scrolling is fine: the
+compositor's worst-case read on both is the last byte of the backdrop, 379 of 380
+and 439 of 440 across, 159 of 160 down.
+
+**Two more had to come out before a level with tools would start**, both found
+from a backtrace rather than by reading - build with `-ggdb` and let gdb name the
+frame, which took one run where markers took three:
+
+- `0x14284` in `init` calls `0x15388`, and that is **`alloc_image` at `0x05388`**:
+  a near call wraps inside its own 64 KB segment, so the offset on a listing is a
+  segment offset and not an image one. It had been a do-nothing stub named
+  `f_15388`, which left all three message images without rows.
+- `init_objects[3]` and `message_image[3]` both claimed `0x210c`. `init` filled
+  one, `message_post` read the other, so `image_clear` got a null descriptor. That
+  is the **sixth** instance of a structure or array declared twice - the fifth was
+  `bg_w`/`bg_h` an hour earlier.
+
+With those gone the setup runs to the frame on levels 1, 5, 11, 12, 40 and 80.
+
+### The sweep, and what it found
+
+Six bugs from one mistake was enough, so `test_dgroup.py` now reads every DGROUP
+offset out of `reconstruct/`'s own declaration comments, gives each declaration
+the size it has **in the guest** - a far pointer is four bytes there, the records
+are packed - and fails if one lands inside another. Ten pairs on the first run,
+and they were four different things:
+
+- **Five parallel tables are 111 entries, not 112.** `load_animations`'s bound is
+  `0x6f` and the offsets are `0x6f` apart: `anim_a` `0x25a`, `anim_b` `0x2c9`,
+  `anim_c` `0x338`, `type_flags` `0x3a7`, `next_type` `0x416`, which ends at
+  `0x4f4` right below the particle flag at `0x4f6`. `anim_script` at `0x9a` *is*
+  112, because `0x25a - 0x9a` is exactly 112 far pointers. The note above said 112
+  for all six and was wrong about five of them.
+- **`0x0d7f` is `scenes[2].flag`**, not a global of its own. That matters: the
+  guest's `scene_alloc` clears it to `0xff`, which is how a level starts with
+  nothing being eaten, and a separate copy would have kept the last level's value.
+- **`0x0d93` is `scenes[4]`**, which the port had as a parallel `cursor_scene`. It
+  is a `#define` onto `scenes[4]` now, so the frame's "draw scene 4" and the
+  menus' "draw the cursor" are the same object again.
+- **`text_colour[1]` and the font's first glyph share `0x54d`** - and that one is
+  the original's own doing, not a mistake here: nothing draws character 0, because
+  `charmap` sends everything unknown to `0x1b`. Marked `alias` so the test leaves
+  it alone.
+
+The last three were artefacts of reading `0x1894:0000` - a *segment* - as a
+DGROUP offset, which the test now knows not to do.
+
 ## The level format, and where a level comes from
 
 **Read out 2026-08-05**, all 2,607 bytes of `0x088fa`. It is not reached from
