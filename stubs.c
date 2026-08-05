@@ -37,8 +37,6 @@ void far cutscene_night_monster(void)     { }
 void far *egg_stream;
 void far *current_buffer;
 
-int16_t far load_demo(uint8_t index)      { (void) index; return 0; }
-int16_t far pick_random_demo(void)        { return 0; }
 /* 0x0b9ea. Eighteen bytes in the original: it stores the far pointer at [0x1721]
  * and returns. Real, because resource_load writes the palette through it. */
 void far set_buffer(void far *p)          { current_buffer = p; }

@@ -566,6 +566,12 @@ extern scene_t scenes[6];                /* 0x0d63 */
 extern int16_t level_clock;              /* 0x201a */
 extern uint8_t far *tool_event_table;    /* 0x203b */
 extern uint16_t    tool_event_count;     /* 0x2047 */
+extern uint8_t far *event_table;         /* 0x203f */
+extern uint16_t    event_count;          /* 0x2049 */
+extern uint8_t far *script_table;        /* 0x2043 */
+extern uint16_t    script_count;         /* 0x204b */
+extern int16_t     script_at;            /* 0x204d */
+int16_t far clock_seed(void);            /* 0x11013 */
 
 void far scroll_axis_snap(int32_t focus, int32_t extent, int32_t far *pos,
                           int16_t span);
