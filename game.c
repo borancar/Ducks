@@ -4567,6 +4567,7 @@ int16_t far run_level(int16_t demo)
     int16_t shown_ducks = duck_count;                  /* [bp-0xe] */
     int16_t sparkle_x;                                 /* [bp-0x16] */
     int16_t page, plane, i, edge;
+    int16_t hold = 0;                              /* [bp-0x28] */
 
     (void) hud_x; (void) shown_score; (void) shown_ducks;   /* the frame's */
 
@@ -4683,8 +4684,29 @@ int16_t far run_level(int16_t demo)
         if (last_key == 0x1b)
             fade_direction = -1;
 
+        /* 0x0e34e. The cursor entity takes the mouse, and then the camera
+         * follows it - which is what makes a level wider than the screen scroll.
+         * The demo path instead follows the entity at scenes[3] when [0x1fda]
+         * says so, or the hero duck while it is facing somewhere, each with a
+         * twenty-frame hold, and falls back to the flock's average - which is
+         * computed by the part of the frame that is not written, so a demo holds
+         * on the hero here and does not average. */
         cursor_scene.entities[0].x = mouse_x;
         cursor_scene.entities[0].y = mouse_y;
+        if (!demo) {
+            scroll_follow(mouse_x, mouse_y);       /* 0x0e427 */
+        } else if (g_1fda) {
+            hold = 0x14;
+            scroll_follow(scenes[3].entities[0].x, scenes[3].entities[0].y);
+        } else if (scenes[0].flag != 0xff
+                   && scenes[0].entities[scenes[0].flag].f14 != 0) {
+            entity_t far *hero = &scenes[0].entities[scenes[0].flag];
+
+            hold = 0x14;
+            scroll_follow(hero->x, hero->y);
+        } else if (hold) {
+            hold--;
+        }
         animate_scene(&cursor_scene);
         for (i = 0; i < 6; i++)
             animate_scene(&scenes[i]);
