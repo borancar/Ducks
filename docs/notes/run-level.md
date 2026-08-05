@@ -363,6 +363,31 @@ backdrop column under it is clear at 137-139 and solid at 140 - it is standing o
 the terrain, and the 1, 1, 2, 2, 1 spacing is the speed byte ramping to its cap and
 then being clipped by the ground. Three other ducks land at their own heights.
 
+### The selection and the tool are two different things
+
+**Found 2026-08-05, from "click action is missing from the demos".** A demo's tool
+table moves `tool_at` (`[0x1788]`) and nothing else; `level_event` dispatches on
+`tool_type` (`[0x1786]`); and **`0x0e088` is the only place one becomes the other**.
+Without it a demo's recorded tool changes are invisible - the selection moves and
+every click still acts with the first tool in the list.
+
+It also refuses a selection past the end of the list and puts the old one back,
+which is how the played input can walk off the end harmlessly, and it starts the
+announcement countdown at `[0x178a]` - `2n + 3` frames for slot n - while the tool
+scene's second entity becomes type `0x0f`.
+
+Checked on demo 2, which is level 11 with tools 25 and 12 and one tool event: at
+frame **355** the table moves the selection to slot 1 and `tool_type` becomes 12,
+the diagonal bridge, with the countdown starting at 4.
+
+The frame's tool section is now written properly around it: the selection is
+remembered first (`0x0de7c`), the events only fire **while no tool is in progress**
+(`0x0deaa`), the cursor entity's type follows the tool - `0x2a` plus which side the
+flock is on for a mirrored one, `0x14` otherwise, `0x16` while one is in use - and a
+selection made during a tool is put back at `0x0df24`. On the played path the same
+guard reaches `level_event(mouse_x, mouse_y)` when `[0x18e1]` says a button went
+down, so clicks will work there as soon as `0x0cf07` is written.
+
 ### What ends a level, and what ends a demo
 
 **Read 2026-08-05.** Nothing times a demo out. The frame's back edge at `0x0e7d7`
