@@ -4465,6 +4465,203 @@ int16_t      play_log;           /* 0x51d - the fprintf gate, cleared here and
 int16_t      g_517;              /* 0x517 - with [0x1ffa], decides whether a
                                   * 0x4d entity is placed. Unread */
 
+/* -------------------------------------------------- 0x1089b: episode_intro
+ *
+ * The screen before the first level of an episode: a picture of its own with
+ * the episode number bouncing in at the top and the episode's name at the
+ * bottom. It runs only when the level about to be played is an episode's first
+ * and the egg matches, which is the whole of its gate.
+ *
+ * It keeps its palette in a buffer on its own stack - 768 bytes of local - so
+ * the colours it loads at 0x20 do not disturb whatever the menus left in
+ * default_buffer. The picture is a 0x57 resource, one per episode ordinal, and
+ * if the egg has not got one it says the same two things with plain splashes
+ * instead.
+ *
+ * Verified against snapshots/snap005.snap: the picture with both banners over it
+ * is the captured screen, 64000 of 64000 pixels.
+ */
+void far episode_intro(void)
+{
+    uint8_t buffer[768];                           /* [bp-0x364] */
+    char    title[0x4c];                           /* [bp-0x64] */
+    desc_t  pic, top, bottom;
+    int16_t i;
+
+    set_buffer(buffer);                            /* 0x108aa */
+
+    for (i = 0; i < episode_count; i++) {
+        if (episode_index[i].first != level_attempted    /* 0x108c6 */
+            || episode_index[i].egg != episode_egg_index)
+            continue;
+
+        sprintf(title, "%s %i", menu_text[54],     /* d+0x24ca */
+                episode_index[i].ordinal + 1);
+        sound_play_guarded(0x21, 1);               /* 0x10926 */
+
+        if (!resource_load(&pic, 0x57, (uint8_t) episode_index[i].ordinal,
+                           0x20, 1, episode_egg_index, 1)) {
+            show_splash(title, 0x64);              /* 0x10962 - no picture */
+            show_splash(episode_index[i].name, 0x64);
+            continue;
+        }
+
+        clear_vram();
+        banner_build(&top, title, 0, 0);           /* 0x1099b */
+        banner_build(&bottom, episode_index[i].name, 0x10, 0x9b);
+        fade_start_colour = 0x20;
+        image_overlay(&top, &pic, 0);              /* 0x109d9 */
+        image_overlay(&bottom, &pic, 0x9b);
+
+        dac_set_black(0x30, 0);                    /* 0x109f8 */
+        fade_level     = 0;
+        fade_direction = 1;
+        do {                                       /* 0x10a09 */
+            int16_t plane;
+
+            input_poll(0x140, 0xc8);
+            if (fade_direction == 0 && (last_key || g_18e5)) {
+                fade_direction    = -1;
+                fade_start_colour = 0;
+            }
+            for (plane = 0; plane < 4; plane++) {
+                set_plane((uint8_t) plane);
+                blit_rows(&pic, viewport_screen, 0);
+            }
+            page_flip();
+            palette_fade_step(0);
+        } while (fade_level != 0);
+
+        resource_release(&pic);                    /* 0x10a86 */
+        resource_release(&top);
+        resource_release(&bottom);
+    }
+
+    /* 0x10ab3, and the whole reason this is safe: the buffer above is a local,
+     * so the shared one has to be published again before the frame goes away.
+     * Without this every later palette write - the level's tiles, its
+     * background, its solids, the status panel - lands in dead stack. */
+    set_buffer(default_buffer);
+}
+
+/* -------------------------------------------------- 0x103e2: banner_build
+ *
+ * The wavy title on the episode and level screens, and it is not a picture -
+ * it is an animation that runs to a standstill and leaves its last frame behind.
+ *
+ * Each character gets eight bytes of state: where it is, how fast it is moving,
+ * what amplitude it is bouncing at, and which side of y=0x1e it was on last
+ * time. They start off-screen - above, at -8 per character, or below at
+ * 0x5a + 8 per character when a colour is asked for - and fall in. Every time a
+ * character crosses the line the amplitude flips sign and loses one, so the
+ * bounce dies away; between crossings the speed walks toward the amplitude one
+ * step a frame. A character with both at zero has settled, and when every
+ * character has settled for four frames in a row the routine returns.
+ *
+ * So the letters drop in, bounce, and come to rest one after another, because
+ * each starts eight further out than the last. That is the animation.
+ *
+ * It draws into `dest`, a 320x45 image of its own, and blits that to the screen
+ * itself every frame through the clip rectangle it built - which is why the
+ * caller gets a finished image back and nothing else has to animate anything.
+ *
+ * `colour` doubles as the palette: non-zero and it first derives a second ramp
+ * at entries 0x10-0x1f from the first sixteen, with blue scaled by 0.8 and the
+ * other two by 1.4 - the two constants at d+0x24ba and d+0x24c2 are 0.6 and 0.8.
+ * That is why the two banners on the episode screen are different colours.
+ */
+void far banner_build(desc_t far *dest, const char far *text, uint8_t colour,
+                      int16_t top)
+{
+    struct { int16_t y, speed, amp, above; } far *state;
+    viewport_t rect;
+    table_t    set;
+    int16_t    i, n, width = 0, x, settled, still = 0;
+
+    if (top && video_mode)                         /* 0x103fa */
+        top += 0x28;
+    make_rect(&rect, top, top + 0x2d, screen_x0, screen_x0 + 0x140);
+    image_alloc(dest, 0x140, 0x2d);                /* 0x10432 */
+    sprite_set_load(1, 0x53, &set, 0xff);          /* the large font */
+
+    if (colour) {                                  /* 0x1044b */
+        uint8_t far *buf = current_buffer;
+
+        for (i = 0; i < 0x30; i++)
+            buf[0x30 + i] = (uint8_t) (buf[i] * ((i % 3 == 2) * 0.6 + 0.8));
+    }
+    /* 0x104bc, and it runs either way - the `je` above lands on this call, not
+     * past it. The large font's own first colour is a purple, and entry 0 is
+     * what image_clear fills the banner with, so without this the purple becomes
+     * the background the letters sit on and floods the screen. The root README
+     * records show_splash needing exactly the same thing. */
+    palette_set_black(0);
+
+    /* 0x104c6. The width, in quarter-pixels: each glyph advances by four times
+     * what it occupies past its own origin, less 0x1a. */
+    for (n = 0; text[n]; n++) {
+        sprite_t far *s = &set.base[charmap[(uint8_t) text[n]]];
+
+        width += ((s->w - s->ox) << 2) - 0x1a;
+    }
+    width >>= 2;
+    x = ((0x144 - width) << 1) - 0xd;              /* 0x10517 */
+
+    state = malloc((size_t) n * sizeof *state);    /* 0x1052d - eight bytes each */
+    for (i = 0; i < n; i++) {
+        state[i].y     = colour ? (i * 8 + 0x5a) : -(i * 8);
+        state[i].speed = 4;
+        state[i].amp   = 4;
+        state[i].above = 1;
+    }
+
+    palette_apply_gamma();                         /* 0x105b3 */
+    palette_upload();
+
+    do {
+        int16_t at = x, plane;
+
+        image_clear(dest, 0);                      /* 0x105c3 */
+        settled = 0;
+        for (i = 0; i < n; i++) {
+            sprite_t far *s = &set.base[charmap[(uint8_t) text[i]]];
+            int16_t       was = state[i].above;
+
+            sprite_to_image(at >> 2, state[i].y, s, dest, colour);
+            at += ((s->w - s->ox) << 2) - 0x1a;
+
+            state[i].y    += state[i].speed;       /* 0x1064f */
+            state[i].above = state[i].y < 0x1e;
+            if (state[i].above != was) {           /* 0x106b3 - it crossed */
+                if (state[i].amp < 0)
+                    state[i].amp = (int16_t) (-state[i].amp - 1);
+                else if (state[i].amp > 0)
+                    state[i].amp = (int16_t) (-(state[i].amp - 1));
+            } else if (state[i].speed < state[i].amp) {
+                state[i].speed++;                  /* 0x1073f */
+            } else if (state[i].speed > state[i].amp) {
+                state[i].speed--;                  /* 0x1076d */
+            }
+            if (state[i].speed == 0 && state[i].amp == 0)
+                settled++;
+        }
+
+        for (plane = 0; plane < 4; plane++) {      /* 0x107aa */
+            set_plane((uint8_t) plane);
+            blit_rows(dest, rect, 0);
+        }
+        page_flip();
+        palette_fade_step(0);
+
+        if (settled == n)                          /* 0x107e7 - four in a row */
+            still++;
+    } while (still < 4);
+
+    free(state);
+    sprite_set_free(&set);
+    fade_level = 0;                                /* 0x10812 */
+}
+
 /* ------------------------------------------------------ 0x1081c: image_overlay
  *
  * Stamp one image onto another, transparent where the source is zero, starting
