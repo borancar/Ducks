@@ -5332,6 +5332,7 @@ int16_t far run_level(int16_t demo)
     int16_t sparkle_x;                                 /* [bp-0x16] */
     int16_t page, plane, i, edge;
     int16_t hold = 0;                              /* [bp-0x28] */
+    int16_t over = 0;                              /* [bp-0x13] */
 
     (void) hud_x; (void) shown_score; (void) shown_ducks;   /* the frame's */
 
@@ -5445,7 +5446,28 @@ int16_t far run_level(int16_t demo)
      */
     do {
         input_poll(level_w, level_h);
-        if (last_key == 0x1b)
+
+        /* 0x0de5c. Once the ducks are gone - or [0x2016] says the level is over -
+         * a counter runs for 0x20 frames and then sets the outcome to 3, which is
+         * what fades out a level that has simply run out of ducks. */
+        if (duck_count == 0 || g_2016)
+            over++;
+        if (over >= 0x20)
+            level_outcome = 3;
+        if (level_outcome == 3) {                   /* 0x0df46 */
+            can_finish     = 0;
+            fade_direction = -1;
+        }
+
+        /* 0x0de7f. A demo ends the moment anything is touched - that is attract
+         * mode's whole exit - and the four endings at 0x0df5d are skipped for a
+         * demo, so otherwise it runs until the ducks are gone. */
+        if (demo && (g_18e5 || last_key))
+            fade_direction = -1;
+
+        /* ESC, for a played level: the four endings that would finish one are not
+         * written. */
+        if (!demo && last_key == 0x1b)
             fade_direction = -1;
 
         /* 0x0e34e. The cursor entity takes the mouse, and then the camera
