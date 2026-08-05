@@ -595,6 +595,8 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted);
 void far scene_update_all(scene_t far *s);           /* 0x0d715 */
 void far level_event(int16_t x, int16_t y);          /* 0x0d0c8 */
 void far demo_events(void);                          /* 0x0d471 */
+void far tool_selected(int16_t slot);                /* 0x0e088 */
+extern uint8_t tool_prev, tool_announce;             /* 0x1789, 0x178a */
 extern int16_t g_2100, g_dab;
 
 /* stubs.c - stubbed until run_level(1) needs them; see the note there */

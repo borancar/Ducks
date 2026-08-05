@@ -4537,6 +4537,8 @@ int16_t      g_217d;             /* 0x217d - a once-only gate on tool 0x15 */
 int16_t      g_2100;             /* 0x2100 - what the level script last set */
 int16_t      g_dab;              /* 0x0dab - is the flock right of the cursor */
 uint8_t      too_deep_count;     /* 0x20ff - tool_use's complaint counter */
+uint8_t      tool_prev;          /* 0x1789 - the selection last frame */
+uint8_t      tool_announce;      /* 0x178a - frames of "you have got X" */
 int16_t      blink_enable;       /* 0x2157 - from the level's first flag */
 scene_t      tool_scene;         /* 0x178c - two entities: the tool cursor */
 int16_t      blink_toggle;       /* 0x0ddd */
@@ -4656,6 +4658,43 @@ int16_t far pick_random_demo(void)
     score = 0;
     lives = 5;
     return load_demo((uint8_t) (rand() % g_2038));  /* 0x12711 */
+}
+
+/* ---------------------------------------------------- 0x0e088: tool_selected
+ *
+ * The selection and the tool are two different things, and this is the only place
+ * one becomes the other. tool_events and the played input move `tool_at`; nothing
+ * looks at that except here, which turns it into `tool_type` - and `tool_type` is
+ * what level_event dispatches on. Without this a demo's recorded tool changes are
+ * invisible: the selection moves and every click still uses the first tool.
+ *
+ * A selection past the end of the list is refused and put back, which is how the
+ * played input can walk off the end harmlessly.
+ *
+ * The announcement is `[0x178a]`, a countdown of 2n+3 frames set from whichever
+ * slot was chosen; run_level's arrival check reads it, and while it runs the tool
+ * scene's second entity is a type 0xf.
+ */
+void far tool_selected(int16_t slot)
+{
+    if (tool_at != tool_prev) {
+        /* 0x0e091 logs "%05u TOOL %i" to the play log, which nothing enables. */
+        if (tool_at >= tool_count) {               /* 0x0e0b9 - out of range */
+            tool_at = tool_prev;
+        } else {
+            tool_type = tool_list[tool_at];        /* 0x0e0d7 */
+            scenes[3].count = 0;                   /* drop the highlight */
+            tool_announce = (uint8_t) (slot * 2 + 3);
+            entity_set_type(&tool_scene.entities[1], 0x0f);
+            sound_play_guarded(3, 1);
+        }
+    }
+    if (tool_announce) {                           /* 0x0e106 */
+        tool_announce--;
+        /* 0x0e111 clears the word at +0x48 of the tool scene's entities, which is
+         * entity 1's +0x1f - its animation frame. */
+        tool_scene.entities[1].frame = 0;
+    }
 }
 
 /* ------------------------------------------------------ 0x0d471: demo_events
@@ -5497,13 +5536,32 @@ int16_t far run_level(int16_t demo)
          * with it - rand() & 0x7f - is part of the spawn section and not written. */
         level_clock++;
 
-        /* 0x0de79. The tool, and on the demo path the events: the level's own
-         * recorded input. A played level reads 0x0cf07 instead, which is not
-         * written, so the tool only changes on a demo for now. */
-        if (demo) {
+        /* 0x0de79. The tool. The selection is remembered first, because
+         * tool_selected below compares against it, and then the demo's table
+         * moves it - a played level reads 0x0cf07 instead, which is not written.
+         *
+         * The events only fire while no tool is in progress, which is the guard at
+         * 0x0deaa, and the cursor entity's type follows the tool: 0x2a plus which
+         * side of the cursor the flock is on for a mirrored tool, 0x14 otherwise,
+         * and 0x16 while one is being used. */
+        tool_prev = tool_at;                        /* 0x0de7c */
+        if (demo)
             tool_events();                         /* 0x0d4c2 */
-            demo_events();                         /* 0x0d471 */
+
+        if (!g_1fd8 && !g_1fda) {                   /* 0x0deaa */
+            entity_set_type(cursor_scene.entities,
+                            (type_flags[tool_type] & 2) ? g_dab + 0x2a : 0x14);
+            if (demo)
+                demo_events();                      /* 0x0def3 */
+            else if (g_18e1)
+                level_event((int16_t) mouse_x, (int16_t) mouse_y);
+        } else {
+            entity_set_type(cursor_scene.entities, 0x16);
+            tool_at = tool_prev;                    /* 0x0df24 - put it back */
         }
+
+        /* 0x0e088. And now the selection becomes the tool. */
+        tool_selected(tool_at);
 
         /* 0x0e11b. Every entity of scenes 0, 1 and 2 walks and falls. This is
          * what gravity is: entity_update prefers the largest fall it can take,
