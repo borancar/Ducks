@@ -86,7 +86,7 @@ worth having as source.
 | [`sound.c`](sound.c) | the sound module, code segments 0x1462 and 0x149e: the id-to-sample map, the eight-voice table, and the mixer. A sample lives in extended memory in the original and in a `malloc` here, which is the only difference that matters - the game asks about sounds by id either way |
 | [`sdl_io.c`](sdl_io.c) | the same interface on SDL3: a linear framebuffer, an SDL palette, a 70 Hz deadline in place of the retrace spin, SDL events counted into the INT 33h wrappers' shape, the mouse capture, and the audio device the mixer feeds |
 | [`egg.c`](egg.c) | the egg reader: the directory, `egg_find_block`, the chunk decoder and the shifted-string reader. The port maps the file and walks it with a cursor where the original seeks a `FILE *`, which is why the readers take a stream and treat NULL as the egg |
-| [`stubs.c`](stubs.c) | what is left: 25 declarations, and the list is the to-do list in dependency order. `run_level` is the large one, deliberately a no-op that reports "the run ended" - 33 of the 91 routines it reaches are unwritten, 13.1 KB of them, and its loop exits on a flag only the unread part clears, so a skeleton would hang rather than partly play |
+| [`stubs.c`](stubs.c) | what is left, and the list is the to-do list in dependency order. `run_level` is the large one, deliberately a no-op that reports "the run ended" - **24** of the 91 routines it reaches are unwritten, 12.6 KB of them, and its loop exits on a flag only the unread part clears, so a skeleton would hang rather than partly play. Earlier counts of 51 and 33 were both too high: they matched on `symbols.py` names instead of image offsets, so four routines that were written under names `symbols.py` lacked read as missing |
 
 `game.c` keeps its functions in **address order**, which within a module is the
 order the compiler emits them and therefore the order they were defined in - a
@@ -95,9 +95,15 @@ free piece of information, so it is worth not throwing away. `dos_io.c` is group
 the address space, which is a reminder that this split is ours and the original
 had one module here, or several we cannot see.
 
-Still missing and worth adding as they are read: the in-game frame at `0x0d7ee`
-with two of the four plane loops inside it, the 44 routines under it that are not
-ported yet, and the four remaining cutscene screens.
+Still missing and worth adding as they are read: `run_level` itself at `0x0d7ee`
+with two of the four plane loops inside it, the 24 routines under it that are not
+written yet, and the four remaining cutscene screens.
+
+**The level loader is in, and is the first thing here that no comparison has
+seen.** `level_load` (`0x088fa`) and `stamp_solid` (`0x07490`) were read out of
+the disassembly rather than transcribed from a byte-compared native, so unlike
+everything above them they rest on one reading. The check they are waiting for is
+a dump of the guest's loaded state against this one's.
 [run_level](../docs/notes/run-level.md) has the shape of that work and
 the order to take it.
 
