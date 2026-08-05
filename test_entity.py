@@ -141,6 +141,72 @@ def main():
                           print(f"  scene {si} entity {i} type {ours['type']:#04x}"
                                 f" field {name}: port {want} guest {got}")
 
+    # ---------------------------------------------------------------- events
+    #
+    # level_event is the click handler, and what a demo's table fires. Its effects
+    # are all over DGROUP - a scene gains an entity, a type changes, the score
+    # moves - so the comparison watches the three scenes it touches and the
+    # scalars, rather than one entity.
+    WATCH = [(0x0D63, 0x48), (0x2036, 2), (0x2007, 2), (0x2005, 2),
+             (0x1FF2, 4), (0x1FDA, 2), (0x217D, 2)]
+    ev_checked = ev_differ = ev_changed = 0
+    tools = ctypes.POINTER(ctypes.c_int16).in_dll(lib, "tool_list")
+    n_tools = ctypes.c_uint8.in_dll(lib, "tool_count").value
+    for t in range(max(1, n_tools)):
+        tool = tools[t] if n_tools else 0
+        for (px, py) in ((40, 60), (80, 100), (160, 120), (200, 40)):
+            for at, n in WATCH:
+                pass
+            m.uc.mem_write(g + 0x1786, struct.pack("<h", tool))
+            ctypes.c_int16.in_dll(lib, "tool_type").value = tool
+            # The port has a freshly loaded level and the guest a played one, so
+            # anything level_event only *adds to* has to start equal - comparing a
+            # score of 0 against one with 2368 banked says nothing about the code.
+            for off, nm in ((0x2036, "score"), (0x2007, "duck_count"),
+                            (0x2005, "eaten_countdown"), (0x1FDA, "g_1fda"),
+                            (0x217D, "g_217d"), (0x18F3, "picked_index")):
+                ctypes.c_int16.in_dll(lib, nm).value = \
+                    struct.unpack("<h", m.read(g + off, 2))[0]
+            # both sides start from the guest's current DGROUP for what is watched
+            before = [bytes(m.read(g + a, n)) for a, n in WATCH]
+            for (a, n), b in zip(WATCH, before):
+                if a == 0x0D63:
+                    for si in range(6):
+                        cap, cnt, flag, k6 = struct.unpack("<4h", b[si*12:si*12+8])
+                        scenes[si].capacity, scenes[si].count = cap, cnt
+                        scenes[si].flag, scenes[si].keep_order = flag, k6
+            lib.level_event(ctypes.c_int16(px), ctypes.c_int16(py))
+            ours = [(scenes[si].count, scenes[si].flag) for si in range(6)]
+            ours_score = ctypes.c_int16.in_dll(lib, "score").value
+
+            test_gameplay.guest_call(m, 0x0D0C8, struct.pack("<hh", px, py))
+            after = [bytes(m.read(g + a, n)) for a, n in WATCH]
+            theirs = [struct.unpack("<4h", after[0][si*12:si*12+8]) for si in range(6)]
+            theirs_score = struct.unpack("<h", after[1])[0]
+            for (a, n), b in zip(WATCH, before):
+                m.uc.mem_write(g + a, b)
+
+            for si in range(6):
+                ev_checked += 2
+                if theirs[si][:2] != (0,)*0 and (ours[si][0] != theirs[si][1]
+                                                 or ours[si][1] != theirs[si][2]):
+                    ev_differ += 1
+                    if ev_differ <= 8:
+                        print(f"  tool {tool:#04x} at ({px},{py}) scene {si}: "
+                              f"port count/flag {ours[si]} "
+                              f"guest {(theirs[si][1], theirs[si][2])}")
+                if (theirs[si][1], theirs[si][2]) != tuple(struct.unpack("<4h", before[0][si*12:si*12+8])[1:3]):
+                    ev_changed += 1
+            ev_checked += 1
+            if ours_score != theirs_score:
+                ev_differ += 1
+                if ev_differ <= 8:
+                    print(f"  tool {tool:#04x} at ({px},{py}) score: "
+                          f"port {ours_score} guest {theirs_score}")
+
+    print(f"level_event: {ev_checked} checks over {max(1, n_tools) * 4} cases, "
+          f"{ev_differ} differ, {ev_changed} changed something")
+
     print(f"\n{checked} fields compared, {differ} differ, "
           f"{moved} of them changed by the call - a comparison over "
           f"fields nothing touches proves nothing")

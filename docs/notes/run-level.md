@@ -363,6 +363,28 @@ backdrop column under it is clear at 137-139 and solid at 140 - it is standing o
 the terrain, and the 1, 1, 2, 2, 1 spacing is the speed byte ramping to its cap and
 then being clipped by the ground. Three other ducks land at their own heights.
 
+### 0x0d0c8 and 0x0d471: what a click does, and a demo's input
+
+**Written 2026-08-05.** `0x0d0c8` is the click handler - what a tool does at a
+point - and `0x0d471` is the demo's version of the same thing, so writing them
+together is what makes a recording play.
+
+`0x0d471` is three words a record: **when the first equals the level clock**, the
+other two are a point and `level_event` runs on it. Equality, not "past", so a
+record whose frame is skipped never fires. That is the whole of a demo's input, and
+it is why a demo needs the level's seed and nothing else.
+
+`0x0d0c8` asks one question first - is the target byte of the backdrop zero - and
+most arms refuse on solid ground with sound `0x17`. Then y is incremented, so what
+is placed sits a row below what was tested, and `y == 0` becomes 1 before any of
+it. The six arms: `0x0d` sends the leader (or says there is none), `0x15` acts on
+whatever the pointer picked, `0x12` chooses a new leader out of a type 2 or 4,
+`0x50` cashes something in for eight points a duck still out, `0x52` adds a duck,
+and everything else puts the tool's own entity down - into scene 5 when
+`type_flags` bit 1 is set, otherwise into scene 3 with `[0x1fda]`.
+
+Both are compared against the guest the same way as the physics, and both agree.
+
 ### Compared against the guest at last: test_entity.py
 
 **2026-08-05.** `test_entity.py` gives both sides the same level - so the terrain
@@ -383,6 +405,20 @@ captures** - and chasing why is what corrected the sign above: a climb only happ
 when a fall and level ground are both blocked, so no state here ever needs the
 fifth pixel of one. The lifted drops did not help, because they exercise falling,
 which is the other end of the same loop.
+
+**It then caught a real bug on a capture the first four did not cover.** On level
+11 two ducks came out a pixel apart with the wrong facing, and the cause was one
+row: `0x07f2d` reads `rows[y + 1]`, not `rows[y]`. A duck looks at the ground
+**under its feet** two pixels either side and drifts toward whichever side is open;
+probing its own row put the slope one row too high. Six captures now agree - 540 to
+1,035 fields each, 0 differing.
+
+**Three of the faults this harness turned up were in the harness.** The ctypes
+mirror of `entity_t` went stale when the structure was split. A first pass reported
+"0 differ" over fields nothing had touched, which is why the changed-field count is
+printed. And comparing `score` between a freshly loaded level and a played snapshot
+said nothing until the scalars `level_event` only adds to were seeded from the guest
+first. A comparison is a claim about the comparison as much as the code.
 
 So the physics is compared, the comparison bites, and one boundary inside it is
 still unexercised. The state that would reach it is an entity walking into a
