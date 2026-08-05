@@ -609,6 +609,9 @@ void far level_load(void);
 void far level_palette_build(void);   /* 0x0d5c5 */
 int16_t far episode_for_level(void);  /* 0x10ba4 */
 void far level_map_draw(desc_t far *dest);  /* 0x0b284 */
+void far episode_intro(void);   /* 0x1089b */
+void far banner_build(desc_t far *dest, const char far *text, uint8_t colour,
+                      int16_t top);   /* 0x103e2 */
 void far image_overlay(desc_t far *src, desc_t far *dst, int16_t row);  /* 0x1081c */
 void far draw_level_status(desc_t far *dest);  /* 0x0b739 */
 extern uint8_t level_palette[768];   /* 0x0de1 */

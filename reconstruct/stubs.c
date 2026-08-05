@@ -122,6 +122,10 @@ int16_t far run_level(int16_t arg)
 
     resource_release(&panel);
     sprite_set_free(&level_sprites);               /* 0x088b3, as teardown does */
+    set_buffer(default_buffer);                    /* 0x0e814, likewise: the
+                                                    * level played through
+                                                    * level_palette, and the
+                                                    * shared buffer goes back */
     return 0;
 }
 
@@ -256,6 +260,12 @@ int16_t far f_1102a(int16_t a)
      *
      * Not here: the level's name over the picture when [0x507] is set, and the
      * collected tools at y=0xb4, which need 0x7259 (323 bytes, unwritten). */
+    /* 0x1105f. The episode intro, when the level about to be played is an
+     * episode's first - which is the gate inside it, not here. The original
+     * picks between this and 0x10c06's level picker on [0x507]; the picker is
+     * not written, and normal play does not reach it. */
+    episode_intro();
+
     level_load();                                  /* 0x1108b */
 
     i = episode_for_level();                       /* 0x10ba4 */

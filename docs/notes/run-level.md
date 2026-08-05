@@ -453,6 +453,84 @@ the collected tools at y=0xb4 through `0x7259` (323 bytes, unwritten), and the
 status line from `0x0b739` - `"%s: %i  -  %s: %i  -  %s: %i"` with the game's own
 words for LEVEL, SCORE and LIVES, centred on its own measured width.
 
+### The episode intro, and the banner that animates
+
+**Read and verified 2026-08-05.** The screen before an episode's first level is
+`0x1089b`, not `0x10c06` - the two are alternative branches at the top of
+`f_1102a` and `[0x507]` picks between them, with normal play always taking this
+one because `[bp+6]` is `g_21a3`, which starting a game sets. It runs only when
+`level_attempted` is an episode's `first` and the egg matches.
+
+It keeps its palette in **768 bytes of its own stack**, published with
+`set_buffer`, so the colours it loads at 0x20 leave `default_buffer` alone -
+**and puts `default_buffer` back at `0x10ab3` before it returns**, which it has
+to, because the buffer it published is about to stop existing. `run_level`'s
+teardown does the same at `0x0e814`, after a level has been played through
+`level_palette`.
+
+So the current buffer is a stack discipline, not one global: each screen
+publishes its own and hands the shared one back. The captures show all three -
+`snap001` points at a stack address, `snap002` and `snap003` at
+`default_buffer` (`d+0x13f1`), `snap004` at `level_palette` (`d+0x0de1`).
+Leaving out either restore is not a palette that looks slightly wrong, it is
+every later palette write landing in dead stack: the level's tiles, its
+background, its solids and the status panel all load through whatever
+`current_buffer` says. The
+picture is resource **`0x57`:ordinal**; if the egg has none it falls back to two
+plain `show_splash` calls.
+
+**`0x103e2` is not a picture, it is an animation.** Each character of the title
+gets eight bytes of state - position, speed, amplitude, and which side of y=0x1e
+it was on - and starts off-screen, at `-8` per character or `0x5a + 8` per
+character when a colour is asked for. Every crossing of that line flips the
+amplitude and takes one off it, so the bounce dies away; between crossings the
+speed walks toward the amplitude one step a frame. When every character has been
+still for four frames in a row it returns, leaving its last frame in a 320x45
+image the caller then overlays. That is why the titles bounce in one after
+another, and why the caller gets a finished picture and animates nothing itself.
+
+Its `colour` argument doubles as the palette: non-zero and it first derives a
+second ramp at entries `0x10`-`0x1f` from the first sixteen, blue scaled by 0.8
+and the rest by 1.4. That is why the two banners on the episode screen differ.
+
+**Checked against `snapshots/snap005.snap`: the picture with both banners over it
+is the captured screen, 64000 of 64000 pixels.** That covers `0x103e2`,
+`image_overlay`, the resource load and the glyph advance in one comparison.
+
+**And it was still wrong, in a way that comparison cannot see.** `0x104bc` calls
+`palette_set_black(0)`, and the branch above it lands *on* that call rather than
+past it, so it runs whether or not a colour was asked for. Transcribed inside the
+`if` instead, the large font's own first colour - a purple - stayed in entry 0,
+which is what `image_clear` fills the banner with, so the whole background went
+purple behind the letters. The root README records `show_splash` needing exactly
+the same call for exactly the same reason.
+
+A pixel comparison is blind to this: the indices written are identical either
+way, and only the palette differs. Comparing the **palette buffer** as well
+catches it - 255 of 256 entries agree now, and the one that does not is entry
+0xff, which nothing writes and which in the guest holds whatever was on its
+stack, since that buffer is a stack local.
+
+### 0x10c06, the other branch, is a level picker
+
+**Read 2026-08-05, partly.** `0x10c06` is not a title card. It loads the same
+`0x4d`:1 picture, draws four centred strings into it - `menu_text[55]` at y=10,
+`menu_text[63]` at 0xa8, the **episode's own name** out of `episode_index[si]` at
+0xb2, and `menu_text[64]` at 0xbc - and then draws **one box per level in the
+episode** through `0x10abc`, ten to a row, 32 pixels apart, at
+`x = 2 + col * 32`, `y = 0x16 + row * 32`, each 0x1a tall. The box colour comes
+from a two-entry table at `d+0x204f`, chosen by whether that level is the one
+being pointed at.
+
+Then it loops on the mouse: `level_attempted` is set to -1, `input_poll` runs,
+the previously highlighted box is redrawn, and the box under the pointer -
+`(mouse_y - 0x14) / 0x20` by `mouse_x / 0x20` - becomes the new
+`level_attempted`. So the screen the capture shows as "EPISODE 1" is where a
+level is chosen, which is why `snap001` has the level set but nothing loaded.
+
+`0x10abc` is read. The hover-and-click half of `0x10c06`, its scene animation and
+its exit are not, and neither is written.
+
 Written: `0x0b284`, `0x10ba4`, `0x0b739`, and `0x1081c` - `image_overlay`, which
 stamps one image onto another transparent-where-zero and slides by twenty rows in
 the 360x240 mode, which is how 320x200 artwork lands right in either resolution.
