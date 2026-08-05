@@ -330,10 +330,11 @@ counts down from the movement amount to **-5**, and at each value it probes
 is blocked; a zero means it checks every row from `di - 1` down to 0 is also clear
 before committing. On a commit it moves x by the facing - clamped to 0 and
 `level_w - 1` - adds `di` to y, stores the speed byte, counts a step in `+0x21`,
-and resets `di` to -5. So **gravity is not a velocity at all**: an entity simply
-tries the largest upward step first and settles for the deepest clear row down to
-five, every frame, which is why a duck walks up a small ledge and falls off a big
-one at the same five-pixel rate.
+and resets `di` to -5. So **gravity is not a velocity at all** - and the sign is
+the other way round from how it first reads: **y grows downward**, so it tries the
+largest *fall* first, then smaller falls, then level, and only then a *climb* of up
+to five pixels. One loop, in that order of preference, for falling off a ledge,
+walking along, and stepping up onto something.
 
 `[bp-4]` carries the facing and loses one unit of `e->f14` per pass, so the whole
 thing runs once per pixel of intended movement.
@@ -361,6 +362,31 @@ Exercised on level 1: duck 0 goes 132, 133, 134, 136, 138, 139 and stops, and th
 backdrop column under it is clear at 137-139 and solid at 140 - it is standing on
 the terrain, and the 1, 1, 2, 2, 1 spacing is the speed byte ramping to its cap and
 then being clipped by the ground. Three other ducks land at their own heights.
+
+### Compared against the guest at last: test_entity.py
+
+**2026-08-05.** `test_entity.py` gives both sides the same level - so the terrain
+they probe is identical by construction, which `compare_level.py` already proves -
+then walks scenes 0, 1 and 2 entity by entity: the guest's own `0x07bb2` runs from
+a hand-built far-call frame with the natives unhooked, the port's C runs on the same
+input, and all fifteen fields of the entity are compared. It reuses
+`test_gameplay.py`'s `guest_call`, which is what makes the guest side trustworthy.
+
+Four level captures, **0 fields differing**: `snap004` 720, `level-start` 1,035,
+`click-cave-1` 780, `teleporter-level` 480. Each entity is run four times - as
+found, and lifted 8, 20 and 40 rows so the fall is a long one.
+
+**Two things the sabotage pass established, and one it could not.** Inverting the
+terrain test gives 26 differences; making the step counter count twice gives 5. But
+**widening the climb limit from five pixels to four is invisible on all four
+captures** - and chasing why is what corrected the sign above: a climb only happens
+when a fall and level ground are both blocked, so no state here ever needs the
+fifth pixel of one. The lifted drops did not help, because they exercise falling,
+which is the other end of the same loop.
+
+So the physics is compared, the comparison bites, and one boundary inside it is
+still unexercised. The state that would reach it is an entity walking into a
+five-pixel step, which none of these captures contains.
 
 **Seen working, 2026-08-05**: the monster prowls, turns around when it hits a
 wall, and falls under gravity - which is the whole of `the-monster.md`'s claim
