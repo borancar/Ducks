@@ -531,7 +531,7 @@ void egg_bringup_open(void);
 void far hold_frames(int16_t n);   /* 0x04dcd */
 void far f_09329(void);
 void far bonus_screen(void);   /* 0x0becb */
-void far f_0f8bd(void);
+void far photo_fade_step(void);
 void far f_11bee(void far *name, int16_t egg);
 extern char far *owner_name;
 extern int16_t   owner_key;

@@ -67,10 +67,9 @@ uint8_t    bg_step_x, bg_step_y;        /* 0x1780, 0x1781 - added to the scroll
                                          * creeps upward at one row a frame */
 uint8_t    warp_phase, warp_step;       /* 0x17bf, 0x17c0 - compose_scroll's */
 
-/* There are no ports here. The game still writes the DAC directly in one place -
- * cutscene_photos flashes the screen white - so these exist to let that link, and
- * the flash is a palette operation waiting to be written. */
-void outp(uint16_t port, uint8_t v)    { (void) port; (void) v; }
+/* There are no ports here, but the DAC ones are not decoration: three places
+ * still program the palette through them rather than through palette_upload.
+ * `outp` is defined below dac_to_rgb, which is what it needs. */
 void outpw(uint16_t port, uint16_t v)  { (void) port; (void) v; }
 uint8_t inp(uint16_t port)             { (void) port; return 0; }
 void far delay(int16_t ms)             { SDL_Delay((Uint32) ms); }
@@ -219,6 +218,38 @@ static uint32_t dac_to_rgb(uint8_t r, uint8_t g, uint8_t b)
 {
     return SDL_MapSurfaceRGB(surface, (Uint8) (r * 255 / 63),
                              (Uint8) (g * 255 / 63), (Uint8) (b * 255 / 63));
+}
+
+/* Three places still program the palette through the DAC ports rather than
+ * through palette_upload - cutscene_photos' white flash, the photograph fade at
+ * 0x0f8bd under it, and menu_screen_driver's cheat flash. A no-op `outp` left
+ * all three doing nothing, which is why the photos came out with whatever
+ * palette the cutscene before them had left.
+ *
+ * 0x3c8 selects an entry and resets to the red channel; 0x3c9 takes red, green
+ * and blue in turn and steps to the next entry after the third. The values are
+ * the DAC's own six bits, which is what dac_to_rgb expects.
+ */
+static int     dac_index;               /* which entry 0x3c9 is filling */
+static int     dac_channel;             /* 0 red, 1 green, 2 blue */
+static uint8_t dac_rgb[3];
+
+void outp(uint16_t port, uint8_t v)
+{
+    if (port == 0x3c8) {
+        dac_index   = v;
+        dac_channel = 0;
+        return;
+    }
+    if (port != 0x3c9)
+        return;
+
+    dac_rgb[dac_channel] = v;
+    if (++dac_channel == 3) {
+        dac_channel = 0;
+        palette[dac_index] = dac_to_rgb(dac_rgb[0], dac_rgb[1], dac_rgb[2]);
+        dac_index = (dac_index + 1) & 0xff;
+    }
 }
 
 void far palette_upload(void)

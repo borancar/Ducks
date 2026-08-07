@@ -2973,6 +2973,47 @@ void far cutscene_rocket_landing(void)
     resource_release(&sky);
 }
 
+/* ------------------------------------------- 0x0f8bd: the photograph's fade
+ *
+ * cutscene_photos slams the whole DAC to white and then calls this once a frame
+ * for 150 frames. It is not palette_fade_step: that one fades toward black and
+ * this fades *from white*, which is what a photograph developing looks like and
+ * why the flash is part of the effect rather than a glitch.
+ *
+ * Per channel, `(c * fade_level) >> 6` plus `(0xf - fade_level) * 4`: the
+ * colour scaled up as the white washes out. At fade_level 0 every channel is
+ * 0x3c, near the DAC's maximum of 0x3f. The loop only runs below 0xf - the
+ * moment fade_level reaches it the real palette is uploaded and fade_direction
+ * is cleared, so that upload is both the last step of the fade and its end.
+ *
+ * palette_apply_gamma runs first, so what gets scaled is the gamma-corrected
+ * palette at d+0x10e1 rather than the buffer it came from.
+ *
+ * All of the arithmetic is 8-bit except the multiply, which is a signed 16-bit
+ * imul of the byte by fade_level before the shift.
+ */
+void far photo_fade_step(void)
+{
+    int16_t i;
+
+    fade_level += fade_direction;                  /* 0x0f8c5 */
+    palette_apply_gamma();
+
+    if (fade_level >= 0xf) {                       /* 0x0f8cd */
+        palette_upload();
+        fade_direction = 0;                        /* 0x0f8d8 */
+        return;
+    }
+
+    outp(0x3c8, 0);                                /* 0x0f8df */
+    for (i = 0; i < 768; i++) {                    /* 0x0f90a */
+        uint8_t white = (uint8_t) ((uint8_t) (0xf - fade_level) << 2);
+        int16_t lit   = (int16_t) (palette_stored[i] * fade_level) >> 6;
+
+        outp(0x3c9, (uint8_t) (white + (uint8_t) lit));   /* 0x0f903 */
+    }
+}
+
 /* ----------------------------------------------- 0x0f913: cutscene_photos */
 void far cutscene_photos(void)
 {
@@ -2998,7 +3039,7 @@ void far cutscene_photos(void)
         }
         for (i = 0; i < 150; i++) {        /* hold, fading in */
             page_flip();
-            f_0f8bd();
+            photo_fade_step();             /* 0x0f8bd */
         }
         resource_release(&desc);
     }
