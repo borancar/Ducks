@@ -164,14 +164,31 @@ int16_t    registered;           /* 0x0548 */
 char far  *owner_name;           /* 0x0542 - who the copy is registered to */
 int16_t    owner_key;            /* 0x0546 */
 int16_t    lives;                /* 0x2034 - decremented on a lost run */
-uint16_t   max_save_value;       /* 0x2055 - scan_save_slots' only output;
-                                  * compared with `jbe` */
+/* 0x2055. The high-water mark of the serial below. load_settings takes the max
+ * over the hall of fame's ten rows and scan_save_slots over the five save
+ * files, so by the time main is past them it is the largest serial anything on
+ * disk holds - and that is why it is read out of settings.dat AND out of every
+ * save: the counter is shared between them. Compared with `jbe`, so unsigned. */
+uint16_t   serial_high;
 /* 0x2057. The hall of fame - ten rows, best first. The names are malloc'd and
  * str_copy'd, and load_settings is what fills them from settings.dat. */
 score_t    score_table[10];
-int16_t    save_serial;          /* 0x2053 - which save is the newest: written
-                                  * into the file, and given max_save_value + 1
-                                  * when the slot has none of its own */
+/* 0x2053. This game's serial, and what ties a save to the hall of fame.
+ *
+ * It is minted from serial_high the first time a game is saved and then KEPT
+ * across every later save of the same game (0x13433 only mints when it is
+ * zero), so it identifies the game rather than the file. That is what makes the
+ * check work: score_set writes it into the board row when a game is finished,
+ * and save_note looks for it there when a save is loaded. A match means this
+ * game has been finished already, and the player gets resource 0xfa -
+ *
+ *     Attention!
+ *     The game you're loading has already been finished, and has resulted
+ *     in a score being added to the high score table.
+ *
+ * so it is a monotonic index across saves, settings.dat and the board together,
+ * not a slot number. */
+int16_t    save_serial;
 
 /* ------------------------------------------------------- the animation tables
  *
@@ -3905,8 +3922,12 @@ void far menus_resume(void)
 
 /* 0x12916. d+0x205d is not an array of its own: it is the serial field of the
  * hall of fame, so this asks whether the game being loaded is already on the
- * board - and if it is, says so. That is the "this game has already been
- * finished, and has resulted in a score being added" page. */
+ * board - and if it is, says so. See save_serial: the serial follows the game
+ * rather than the file, so a save that was finished once carries the serial
+ * score_set put on the board, and this finds it. Resource 0xfa is the page.
+ *
+ * Note it does not stop at the first match, and does not need to: one serial
+ * can only be on the board once, so the loop shows the page at most once. */
 void far save_note(int16_t serial)
 {
     uint8_t i;
@@ -4346,7 +4367,7 @@ void far save_game_screen(void)
     write_string(fp, egg_files[episode_egg_index].name);
 
     if (save_serial == 0)                          /* a slot that had none */
-        save_serial = ++max_save_value;
+        save_serial = ++serial_high;
 
     write_word(save_serial, fp);
     write_word(score, fp);
@@ -4406,8 +4427,8 @@ void far scan_save_slots(void)
         s = egg_read_string(fp);  free(s);         /* 0x1406b */
 
         v = egg_read_word(fp);                     /* 0x14082 -> 0x04e88 */
-        if ((uint16_t) v > max_save_value)         /* 0x1408e is jbe, unsigned */
-            max_save_value = (uint16_t) v;         /* [0x2055], the only output */
+        if ((uint16_t) v > serial_high)            /* 0x1408e is jbe, unsigned */
+            serial_high = (uint16_t) v;            /* [0x2055], the only output */
         fclose(fp);                                /* 0x1409a */
     }
 }
@@ -4430,7 +4451,7 @@ int16_t far load_settings(void)
     int16_t   i;
     int       n;
 
-    max_save_value = 0;
+    serial_high = 0;
     fp = fopen(settings_name, "rb");
     if (!fp)
         return 0;
@@ -4492,8 +4513,8 @@ int16_t far load_settings(void)
         score_table[i].score  = egg_read_word(fp);
         score_table[i].name   = egg_read_string(fp);
         score_table[i].serial = egg_read_word(fp);
-        if ((uint16_t) score_table[i].serial > max_save_value)
-            max_save_value = score_table[i].serial;
+        if ((uint16_t) score_table[i].serial > serial_high)
+            serial_high = score_table[i].serial;
     }
     fclose(fp);
     return 1;
