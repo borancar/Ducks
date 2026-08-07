@@ -34,7 +34,21 @@ libducks.so: $(SRCS)
 
 lib: libducks.so
 
-clean:
-	rm -f $(OBJS) ducks libducks.so
+# The same thing under AddressSanitizer, for when something corrupts the heap.
+# The port allocates each image row separately where the original had one block,
+# so a write a few pixels past a row was harmless there and is a mangled malloc
+# header here - which surfaces as "double free or corruption" at the next free, a
+# long way from whatever did it. ASan reports it where it happens.
+#
+#   make asan && ./ducks-asan
+ducks-asan: $(SRCS) dos.h
+	$(CC) -std=c99 -Wall -Wextra -O1 -ggdb -fsanitize=address,undefined \
+	      -fno-omit-frame-pointer $(shell pkg-config --cflags sdl3) \
+	      $(SRCS) $(shell pkg-config --libs sdl3) -o $@
 
-.PHONY: run clean lib
+asan: ducks-asan
+
+clean:
+	rm -f $(OBJS) ducks ducks-asan libducks.so
+
+.PHONY: run clean lib asan

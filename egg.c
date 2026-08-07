@@ -152,13 +152,26 @@ char far *far egg_read_string(void far *s)
     return buf;
 }
 
-/* The glyph pixels are stored raw, so the original reads them with the
- * runtime's fread(buf, size, n, egg) rather than through the chunk decoder. */
-void far egg_fread(void far *buf, int16_t size, int16_t n)
+/* The glyph pixels are stored raw, so the original reads them with the runtime's
+ * fread(buf, size, n, egg) rather than through the chunk decoder.
+ *
+ * Both counts are UNSIGNED, as Borland's size_t is. They were int16_t here, and
+ * a sound is the one caller that can exceed 32767 - the biggest sample in this
+ * egg is 45,818 bytes - so the length arrived negative, the product became
+ * astronomical, `cursor + want` wrapped past the guard, and the memcpy either
+ * ran wild or clamped to "the rest of the egg" and poured 1.7 MB into a 45 KB
+ * buffer. That smashed every allocation after it: the sounds loaded next were
+ * overwritten with file bytes, which is why the audio was noise, and the mangled
+ * malloc headers surfaced later as "double free or corruption (out)" on the
+ * first free after restarting a level.
+ *
+ * The clamp is written so it cannot overflow either: cursor <= egg_len always,
+ * so the subtraction is the safe side to do first. */
+void far egg_fread(void far *buf, uint16_t size, uint16_t n)
 {
     size_t want = (size_t) size * (size_t) n;
 
-    if (cursor + want > egg_len)
+    if (want > egg_len - cursor)
         want = egg_len - cursor;
     memcpy(buf, egg + cursor, want);
     cursor += want;

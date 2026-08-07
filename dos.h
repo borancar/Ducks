@@ -520,7 +520,7 @@ void far retire_entity(void far *e);
 void far f_0580b(void);
 uint8_t egg_next_pixel(void);
 char far *far egg_read_string(void far *s);
-void far egg_fread(void far *buf, int16_t size, int16_t n);
+void far egg_fread(void far *buf, uint16_t size, uint16_t n);
 void far egg_block_end(void);
 int egg_open(const char *path);
 void egg_bringup_open(void);
