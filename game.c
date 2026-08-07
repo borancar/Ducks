@@ -5513,6 +5513,7 @@ int16_t far run_level(int16_t demo)
      * is not written - so in a demo it stays 0, the half-rate mode never fires,
      * and the tool announcement is always three frames. */
     int16_t tool_slot = 0;
+    int16_t ending_said = 0;                       /* [bp-0x22], 0x0d846 */
     int16_t hold = 0;                              /* [bp-0x28] */
     int16_t over = 0;                              /* [bp-0x13] */
     /* The flock's average, and what the camera followed last. Both are the
@@ -5652,10 +5653,47 @@ int16_t far run_level(int16_t demo)
         if (demo && (g_18e5 || last_key))
             fade_direction = -1;
 
-        /* ESC, for a played level: the four endings that would finish one are not
-         * written. */
+        /* ESC, for a played level. The four endings below post a message and
+         * say the attempt is lost; they do not end it, so this is still how a
+         * played level is left. */
         if (!demo && last_key == 0x1b)
             fade_direction = -1;
+
+        /* 0x0df5d. The four ways an attempt becomes unwinnable. Each posts one
+         * line plus "Press ESCAPE to abort this attempt", and `ending_said` -
+         * a frame local, cleared once in the setup - makes that at most one
+         * message per level however long it runs.
+         *
+         * They only say so. Nothing here clears level_running or touches the
+         * outcome, which is why the panel keeps counting and the player is the
+         * one who decides to give up.
+         *
+         * Skipped entirely for a demo (0x0df70), and while g_2016 or g_1ffe say
+         * the level is already over. */
+        if (!ending_said && !g_2016 && !demo && !g_1ffe) {
+            if (scenes[0].flag == 0xff && can_finish) {         /* 0x0df83 */
+                message_post(menu_text[76], menu_text[80]);
+                ending_said = 1;
+            }
+            /* [0xda1] is scenes[5].count, and can_finish_alt was only set when
+             * that count was non-zero at setup - so this is "the level had
+             * mirrored entities and now has none". */
+            if (scenes[0].flag == 0xff && !scenes[5].count && can_finish_alt) {
+                message_post(menu_text[77], menu_text[80]);     /* 0x0dfc6 */
+                ending_said = 1;
+            }
+            /* An unsigned compare in the original, and it is the one the panel
+             * makes visible: quota_left is how many still have to get home, and
+             * duck_count how many are left to do it with. */
+            if ((uint16_t) quota_left > (uint16_t) duck_count) {  /* 0x0e010 */
+                message_post(menu_text[78], menu_text[80]);
+                ending_said = 1;
+            }
+            if (g_2018) {                                       /* 0x0e04d */
+                message_post(menu_text[79], menu_text[80]);
+                ending_said = 1;
+            }
+        }
 
         /* 0x0de79. The tool. The selection is remembered first, because
          * tool_selected below compares against it, and then the demo's table
