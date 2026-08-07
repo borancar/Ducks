@@ -44,3 +44,9 @@ Current, and kept current. Where these disagree with
   instead of playing to it every time; all four plane loops verified from one
 - [editing-conventions](editing-conventions.md) — the three layers, why behaviour
   goes in `native.py`, and the anchored one-shot edit scripts
+
+**On the coverage figure.** `creport` counts a function as written if any `.c`
+outside `stubs.c` mentions its offset — including in a *comment*. `0x10c06`,
+the cheat's level picker, was counted as done for months because
+`0x507`'s comment said "picks 0x10c06's level picker over the episode intro".
+Whenever the number is quoted, check the routine has a body.

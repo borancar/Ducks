@@ -497,6 +497,8 @@ int16_t far glyph_to_screen(uint8_t ch, int16_t x, int16_t y);
 int16_t far glyph_to_image(desc_t far *desc, uint8_t ch, int16_t x, int16_t y);
 int16_t far text_width(const char far *s);
 void far draw_string(desc_t far *desc, const char far *s, int16_t x, int16_t y);
+void far picker_cell(int16_t slot, int16_t number, desc_t far *page,
+                     int16_t current, int16_t hard);   /* 0x10abc */
 void far load_text_page(desc_t far *desc, uint8_t type, uint8_t index,
                         uint8_t colour_base, int16_t max_width, int16_t egg);
 void far str_copy(const char far *s, char far **dest);
