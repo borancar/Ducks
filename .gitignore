@@ -56,7 +56,10 @@ __pycache__/
 # The control socket, created by --control-socket.
 control.sock
 
-# reconstruct/ build output
+# reconstruct/ build output. Named by pattern rather than one by one: ducks-asan
+# was committed by a `git add -A` because the list said `reconstruct/ducks` and
+# nothing wider, and a 1.2 MB binary is exactly what this file exists to stop.
 reconstruct/*.o
+reconstruct/*.so
 reconstruct/ducks
-reconstruct/libducks.so
+reconstruct/ducks-*
