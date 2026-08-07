@@ -5507,6 +5507,12 @@ int16_t far run_level(int16_t demo)
     int16_t shown_ducks = duck_count;                  /* [bp-0xe] */
     int16_t sparkle_x;                                 /* [bp-0x16] */
     int16_t page, plane, i, edge;
+    int16_t score_redraw = 2, ducks_redraw = 2;    /* [bp-8], [bp-0xa] */
+    uint8_t half = 0;                              /* [bp-0x20] */
+    /* [bp-0x12]. An out-parameter of the played tool handler at 0x0cf07, which
+     * is not written - so in a demo it stays 0, the half-rate mode never fires,
+     * and the tool announcement is always three frames. */
+    int16_t tool_slot = 0;
     int16_t hold = 0;                              /* [bp-0x28] */
     int16_t over = 0;                              /* [bp-0x13] */
     /* The flock's average, and what the camera followed last. Both are the
@@ -5516,7 +5522,6 @@ int16_t far run_level(int16_t demo)
     int32_t avg_x = 0, avg_y = 0;                  /* [bp-0x18]..[bp-0x1e] */
     int16_t follow_x = 0, follow_y = 0;            /* [bp-0x24], [bp-0x26] */
 
-    (void) hud_x; (void) shown_score; (void) shown_ducks;   /* the frame's */
 
     sparkle_x     = game_rand() & 0x3ff;                /* 0x0d837 */
     blink_enable  = level_flags[0];                /* 0x0d850 - [0x201e] */
@@ -5677,7 +5682,7 @@ int16_t far run_level(int16_t demo)
         }
 
         /* 0x0e088. And now the selection becomes the tool. */
-        tool_selected(tool_at);
+        tool_selected(tool_slot);                  /* 0x0e0e0 takes [bp-0x12] */
 
         /* 0x0e11b. Where everything was when the frame began, on five of the six
          * scenes - scene 4 is the cursor's and does not move by itself - and
@@ -5781,18 +5786,97 @@ int16_t far run_level(int16_t demo)
             animate_scene(&scenes[i]);
         animate_scene(&tool_scene);
 
-        for (plane = 0; plane < 4; plane++) {
-            set_plane((uint8_t) plane);
-            compose_scroll((int16_t) viewport_game.scroll_x,
-                           (int16_t) viewport_game.scroll_y);
-            for (i = 0; i < 5; i++)
-                draw_entities(&scenes[layers[i]], viewport_game, 0);
-            if (!demo)
-                draw_entities(&cursor_scene, viewport_game, 0x90);
-            if (tool_count)
-                draw_entities(&tool_scene, viewport_panel, 0x90);
+        /* 0x0e485. The two panel numbers, and they are not kept the same way.
+         * The score CHASES its target - a quarter of the gap plus one a frame -
+         * so it rolls up rather than jumping, and what is drawn is that rolling
+         * copy. The duck count does not: shown_ducks exists only to notice a
+         * change, and what is drawn is the live counter.
+         *
+         * Their redraw flags differ too, and the asymmetry is the original's.
+         * Both start at 2 in the setup; only the score's is decremented (at
+         * 0x0e717), so it stops redrawing two frames after the score settles.
+         * Nothing anywhere decrements the ducks' flag, so from the first frame
+         * of the level that number is redrawn every frame for ever. */
+        if (shown_score != score) {                /* 0x0e485 */
+            score_redraw = 2;
+            shown_score = (int16_t) (shown_score + ((score - shown_score) >> 2) + 1);
         }
-        page_flip();
+        if (shown_ducks != duck_count) {           /* 0x0e4a0 */
+            ducks_redraw = 2;
+            shown_ducks  = duck_count;
+        }
+
+        /* 0x0e4b4. Every other frame draws nothing at all when tool_slot is
+         * set - the half-rate mode. tool_slot is an out-parameter of the played
+         * tool handler, so in a demo it stays 0 and no frame is ever skipped. */
+        half ^= 1;
+        if (half || !tool_slot) {
+            for (i = 0; i < 3; i++)                /* 0x0e4c7 */
+                if (message_time[i])
+                    message_time[i]--;
+
+            for (plane = 0; plane < 4; plane++) {
+                set_plane((uint8_t) plane);
+                compose_scroll((int16_t) viewport_game.scroll_x,
+                               (int16_t) viewport_game.scroll_y);
+                if (settings[1])                   /* 0x0e4fd - [0x4f6] */
+                    particles();
+                for (i = 0; i < 5; i++)
+                    draw_entities(&scenes[layers[i]], viewport_game, 0);
+                if (!demo)
+                    draw_entities(&cursor_scene, viewport_game, 0x90);
+                if (tool_count)
+                    draw_entities(&tool_scene, viewport_panel, 0x90);
+
+                /* 0x0e5cd. The three message slots, while their timers last. */
+                for (i = 0; i < 3; i++)
+                    if (message_time[i])
+                        blit_rows_masked(message_image[i], message_rect[i], 0);
+
+                if (score_redraw)                  /* 0x0e608 */
+                    draw_number(shown_score, 0x080, 0x22, &viewport_panel, 0x90, 6);
+                if (ducks_redraw)                  /* 0x0e626 */
+                    draw_number(duck_count, 0x0e1, 0x22, &viewport_panel, 0x90, 2);
+
+                /* 0x0e645. The timer bar: a run of pixels from the HUD's left
+                 * edge, as long as the time left is short. */
+                edge = (int16_t) (screen_height + 0xfff9 - level_timer);
+                for (i = hud_x; i < hud_x + 5; i++)
+                    plot(i, edge, 0);
+            }
+
+            /* 0x0e673. One sparkle pixel down a column, which then walks by one
+             * either way - or is thrown somewhere new every 32nd frame. */
+            /* level_flags[3], and the sparkle's column starts at screen row 0
+             * rather than at the top of the play area: the address is the page
+             * base plus (x >> 2) with no row term, and only the COUNT comes from
+             * the viewport. Reproduced rather than tidied. */
+            if (level_flags[3]) {                   /* 0x0e673 - [0x2024] */
+                if (sparkle_x >= viewport_game.left
+                        && sparkle_x < viewport_game.right) {
+                    set_plane((uint8_t) (sparkle_x & 3));
+                    for (i = 0; i < viewport_game.bottom - viewport_game.top; i++)
+                        plot(sparkle_x, i, 0x6f);
+                }
+                /* Sequenced deliberately. C does not order the operands of a
+                 * subtraction, and these two draws are observable: they move the
+                 * shared seed, so the wrong order changes every later rand() in
+                 * the frame. The guest pushes the first and subtracts the
+                 * second. */
+                if (game_rand() & 0x1f) {
+                    int16_t lo = (int16_t) (game_rand() & 1);
+                    int16_t hi = (int16_t) (game_rand() & 1);
+
+                    sparkle_x = (int16_t) (sparkle_x + (lo - hi));
+                } else {
+                    sparkle_x = game_rand() & 0x3ff;
+                }
+            }
+
+            if (score_redraw)                      /* 0x0e711 */
+                score_redraw--;
+            page_flip();
+        }
         palette_fade_step(0);
     } while (fade_level != 0);
 
