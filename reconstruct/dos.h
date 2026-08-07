@@ -516,7 +516,7 @@ extern uint8_t sound_state;
 int16_t far audio_open(int16_t rate);
 void far audio_close(void);
 void far install_int23(void far *h);
-void far ctrl_break_handler(void);
+int16_t far ctrl_break_handler(void);      /* 0x144cd - returns 1, "carry on" */
 void far crt_exit(void);       /* 0:0x1e6b - Borland's exit; the backend's */
 void far set_text_colour(int16_t c);
 void far retire_entity(void far *e);

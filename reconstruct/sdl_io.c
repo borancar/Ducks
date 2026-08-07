@@ -25,6 +25,8 @@
  */
 
 #include <SDL3/SDL.h>
+#include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -87,6 +89,66 @@ void far crt_exit(void)
     audio_close();
     SDL_Quit();
     exit(0);
+}
+
+/* 0x04de6. The fatal error reporter. The original puts the screen back into
+ * text mode, prints the message and the argument, and exits(1) - and the mode
+ * restoration is the whole reason it is here rather than in game.c: a message
+ * printed while a full-screen graphics mode is up is a message nobody reads.
+ *
+ * SDL_Quit is that restoration. It gives the display back and closes the audio
+ * device, so what follows lands on the terminal the game was started from,
+ * which is where the equivalent of "back to text mode" is here.
+ *
+ * The exit status is 1 and not 0, unlike crt_exit: a port that dies on a
+ * missing egg should say so to whatever ran it.
+ */
+void far fatal(const char far *msg, const char far *arg)
+{
+    audio_close();
+    SDL_Quit();
+    if (arg)
+        fprintf(stderr, "%s: %s\n", msg, arg);
+    else
+        fprintf(stderr, "%s\n", msg);
+    exit(1);
+}
+
+/* 0x144cd, ten bytes: `mov ax, 1; retf`. A DOS Ctrl-Break handler returning
+ * non-zero means "do not abort", so the game's answer to Ctrl-Break is to
+ * ignore it and carry on. It is in the game's own module rather than the
+ * runtime's, but what it *means* only has an implementation down here, which is
+ * why it sits with the installer rather than in game.c.
+ */
+int16_t far ctrl_break_handler(void)
+{
+    return 1;
+}
+
+/* 0:0x0eb5. The original keeps the handler's far pointer at d+0x3da2 and points
+ * the INT 23h vector at the runtime's own trampoline, which calls it and aborts
+ * or resumes on what it returns.
+ *
+ * SIGINT is the same signal here, and honouring the handler's answer means
+ * Ctrl-C in the terminal does NOT kill the game - which is the original's
+ * behaviour and worth knowing before you reach for it. The window close button
+ * and QUIT DUCKS still work, and SIGTERM and SIGQUIT are untouched, so `kill`
+ * and Ctrl-\ both still end it.
+ */
+static int16_t (far *break_handler)(void);
+
+static void on_sigint(int sig)
+{
+    (void) sig;
+    if (break_handler && break_handler())
+        return;                            /* the handler said carry on */
+    crt_exit();
+}
+
+void far install_int23(void far *h)
+{
+    break_handler = (int16_t (far *)(void)) h;
+    signal(SIGINT, on_sigint);
 }
 
 /* ------------------------------------------------------------ private state */

@@ -45,15 +45,6 @@ void far buffer_init(void)                { current_buffer = default_buffer; }
 
 /* --------------------------------------------------------------- startup */
 
-void far install_int23(void far *h)       { (void) h; }
-void far ctrl_break_handler(void)         { }
-/* 0x14974. The original's is the Sound Blaster probe - reset the DSP at the
- * base address BLASTER names, and then the XMS check that prints "Free XMS
- * memory: %uk". Its answer gates AUDIO SETTINGS and whether sound_init runs.
- *
- * Here the only question is whether a device opens, and sound_init answers that
- * by leaving sound_state clear when it does not. So this says yes and lets it. */
-int16_t far detect_hardware(void)         { return 1; }
 
 /* The original opens its eggs during startup and builds an index over them -
  * 0x11657, which prints "Using file EGGS\\MAIN.EGG - 303 slices". Until that is
@@ -94,18 +85,6 @@ void far set_text_colour(int16_t c)       { (void) c; }
 /* ------------------------------------------------ unnamed, by image offset */
 
 /* 0x088fa is level_load, in game.c */
-
-/* 0x04de6. The fatal error reporter: it puts the screen back into text mode,
- * prints the message and the argument, and exits(1). Only the printing and the
- * exit are read out; the mode restoration in the middle is not. */
-void far fatal(const char far *msg, const char far *arg)
-{
-    if (arg)
-        fprintf(stderr, "%s: %s\n", msg, arg);
-    else
-        fprintf(stderr, "%s\n", msg);
-    exit(1);
-}
 
 void far f_11bee(void far *name, int16_t egg) { (void) name; (void) egg; }
 
