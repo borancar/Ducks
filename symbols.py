@@ -250,6 +250,13 @@ FUNCTIONS = {
                                         # does nothing while g_509 is set, so
                                         # g_509 is "ducks do not die"; a demo
                                         # clears it, which is when they do
+    0x07646: "bridge_step_end",          # (end, dir): walks one end of a bridge
+                                        # and stops it dead on solid backdrop
+    0x076E2: "bridge_grow",              # one frame of a bridge building itself
+    0x0739C: "stamp_sprite_into",        # blast_terrain's twin: writes the
+                                        # sprite's pixels instead of zeroes
+    0x0799C: "ground_check",             # the anti-bridge-stacking warning
+    0x078A6: "tool_step",                # one line of the frame: grow a bridge
     0x0751B: "blast_terrain",            # (x, y, sprite): writes 0 through a
                                         # sprite into the backdrop - the bomb's
                                         # hole - then stamps every solid back

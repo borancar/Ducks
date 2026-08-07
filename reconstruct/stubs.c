@@ -145,14 +145,35 @@ uint8_t palette_washed[48];
  * Each complains the first time it is called. A stub that silently does nothing
  * is how a demo quietly stops matching the original.
  */
-static void demo_stub(const char *what, int *said)
+/* Two reasons a routine is missing, and they are not the same claim.
+ *
+ * `unwritten` means nobody has read it out yet: reaching it is expected and the
+ * message says what will not happen. `wrong_about_demos` means it was left out
+ * because a demo was believed never to reach it - so reaching one IS the news,
+ * and the message says the belief was wrong.
+ *
+ * These were one function until 2026-08-07, and the bridge footing check
+ * announced itself with the demo wording, which was false twice over: it was
+ * stubbed for the first reason, and there are demos with bridges. A diagnostic
+ * that misstates its own reason is worse than none.
+ */
+static void unwritten(const char *what, int *said)
 {
     if (*said)
         return;
     *said = 1;
-    fprintf(stderr, "  [stub] %s was reached - it was stubbed on the "
-                    "understanding that a demo never gets here, so that is "
-                    "wrong and the demo is no longer faithful\n", what);
+    fprintf(stderr, "  [stub] %s is not written yet\n", what);
+}
+
+static void wrong_about_demos(const char *what, int *said)
+{
+    if (*said)
+        return;
+    *said = 1;
+    fprintf(stderr, "  [stub] %s was reached - it was left out on the "
+                    "understanding that a demo never gets here, so that "
+                    "understanding is wrong and a demo is no longer "
+                    "faithful\n", what);
 }
 
 /* 0x0cf07, 449 bytes. run_level's PLAYED branch: with its argument zero it is
@@ -164,20 +185,9 @@ void far played_tool_events(uint8_t far *flash)
 {
     static int said;
     (void) flash;
-    demo_stub("0x0cf07, the played tool handler", &said);
+    wrong_about_demos("0x0cf07, the played tool handler", &said);
 }
 
-/* 0x0af95, 304 bytes, from 0x0d4fc - which does run, four times a frame, but
- * only reaches this when the selected tool is 0x12, 0x15 or 0x50. The four
- * captures hold tools 0x36, 0x19, 0x0c and 0x0d, and a demo from the menu did
- * not reach it either. Not observed, so not proven: a demo whose level offers
- * one of those three tools will land here. */
-void far tool_apply(scene_t far *s, int16_t n)
-{
-    static int said;
-    (void) s; (void) n;
-    demo_stub("0x0af95, the tool applicator", &said);
-}
 
 /* 0x07955, 71 bytes, called from run_level's frame loop when the level is not
  * paused, and from 0x0799c and 0x0cf07. Not observed in any demo, from a
@@ -185,31 +195,6 @@ void far tool_apply(scene_t far *s, int16_t n)
 void far f_07955(void)
 {
     static int said;
-    demo_stub("0x07955", &said);
-}
-
-/* 0x0739c, 244 bytes: the counterpart of blast_terrain - it stamps a sprite INTO
- * the backdrop rather than erasing through one, which is how the bridges and the
- * brick build terrain. Not read yet, so those tools place nothing. */
-void far stamp_sprite_into(int16_t x, int16_t y, sprite_t far *sp,
-                           desc_t far *dest)
-{
-    static int said;
-
-    (void) x; (void) y; (void) sp; (void) dest;
-    demo_stub("0x0739c, the terrain stamper - bridges and bricks build nothing",
+    unwritten("0x07955, what a third bridge-stacking warning does",
               &said);
-}
-
-/* 0x0799c, 154 bytes: a bridge's footing. It scans down for sixteen pixels of
- * water within 28 rows and complains through message_post if the drop is longer,
- * giving up after three. Only the complaint writes anything, so leaving it out
- * costs the message and nothing else - but it also nudges x, which it does not.
- */
-void far ground_check(int16_t far *x, int16_t y)
-{
-    static int said;
-
-    (void) x; (void) y;
-    demo_stub("0x0799c, the bridge footing check", &said);
 }

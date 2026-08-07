@@ -1364,6 +1364,49 @@ Two of the four arms are still stubs and say so: `0x0739c`, the counterpart that
 stamps a sprite *into* the backdrop, which is how the bridges and the brick build
 terrain, and `0x0799c`, a bridge's footing check.
 
+### The bridges, and a stub that lied about why it existed
+
+**2026-08-07.** Reported: on level 3 the bridge draws nothing, and the stub said
+*"it was stubbed on the understanding that a demo never gets here, so that is
+wrong and the demo is no longer faithful"* - which was false twice. It was left
+out because nobody had read it, not because of any belief about demos, and there
+are demos with bridges. **A diagnostic that misstates its own reason is worse
+than none**, so `stubs.c` now has two helpers: `unwritten` says what will not
+happen, and `wrong_about_demos` says a belief has been disproved. Only `0x0cf07`
+still deserves the second.
+
+**A bridge is two ends walking apart.** `tool_use`'s `0x0c`/`0x19` arm puts both
+at the click and marks them alive; `tool_step` (`0x078a6`), one line of the frame
+after `input_poll`, grows it while a tool is in progress; `bridge_grow`
+(`0x076e2`) steps both ends and lays a sprite where each one *was*; and
+`bridge_step_end` (`0x07646`) walks one end `bridge_span` pixels - 4 level, 3
+sloping - stopping it dead the moment it is over solid backdrop, with sound
+`0x11`. So a bridge stops on the side that hit something while the other carries
+on, and there is no bridge object anywhere: it is backdrop, the same as the
+ground.
+
+**Each segment's sprite is chosen at random from the level's own set**, which is
+what stops a bridge being a row of identical tiles.
+
+`stamp_sprite_into` (`0x0739c`) is `blast_terrain`'s twin, and they differ in
+three places: it writes the sprite's pixel where the other writes 0, it clips
+against the destination's size rather than the level's, and it takes a pointer
+rather than an index. One carves terrain away, the other builds it.
+
+`ground_check` (`0x0799c`) turns out not to be a footing check at all - it is the
+anti-stacking warning. It counts non-solid pixels down the column and complains
+if it took more than 28 rows to find sixteen, and the three messages escalate:
+"Careful... don't stack bridges...", "THIS IS YOUR LAST WARNING! NO BRIDGE
+STACKING!", "Oops, how did that happen?". The third calls `0x07955`, which is
+still unread. It takes x by pointer and never writes through it.
+
+**Checked by driving it**: level 3, a bridge placed over a gap finishes in 8
+frames and leaves 148 pixels of new terrain, and stops itself rather than running
+on. The first attempt divided by zero - `level_sprites.count` is 0 until
+`run_level`'s setup loads the level's sprite set, which the probe was not doing.
+
+With these, **every routine a demo reaches is written**: 98 of 98.
+
 ## The order to take it
 
 The event tables and the tool list are filled by the level loader, so reading

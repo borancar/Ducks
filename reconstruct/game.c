@@ -5064,15 +5064,17 @@ void far scene_update_all(scene_t far *s)
         entity_update(&s->entities[i], 0, 0);
 }
 
-/* tool_use's published state, and the drag it leaves running. */
+/* tool_use's published state, and the bridge it leaves growing.
+ *
+ * A bridge is two ends walking away from where it was placed, and 0x07646 takes
+ * a pointer to one of them - so the two are records rather than loose words. */
 int16_t tool_in_use;             /* 0x1fd6 - which tool, for the frame to read */
-int16_t drag_anchor_x, drag_anchor_y;   /* 0x1fe0, 0x1fe2 - where it started */
-int16_t drag_step_a;             /* 0x1fe4 */
-int16_t drag_x, drag_y;          /* 0x1fe6, 0x1fe8 - where it is now */
-int16_t drag_step_b;             /* 0x1fea */
-int16_t drag_kind;               /* 0x1fdc - 4 for horizontal, 3 for diagonal */
-int16_t drag_diagonal;           /* 0x1fde */
-int16_t g_20fb, g_20fd;          /* raised with the drag */
+bridge_end bridge_left;          /* 0x1fe0 - x, y, alive */
+bridge_end bridge_right;         /* 0x1fe6 */
+int16_t bridge_span;             /* 0x1fdc - pixels an end walks a frame */
+int16_t bridge_drop;             /* 0x1fde - rows it falls per pixel: 1 or 0 */
+int16_t bridge_left_live;        /* 0x20fb - was it alive at the frame's start */
+int16_t bridge_right_live;       /* 0x20fd */
 
 /* ------------------------------------------------------ 0x0751b: blast_terrain
  *
@@ -5130,6 +5132,178 @@ void far blast_terrain(int16_t x, int16_t y, int16_t index)
         stamp_solid(&solids[i], &backdrop);
 }
 
+/* ------------------------------------------------- 0x0739c: stamp_sprite_into
+ *
+ * blast_terrain's twin, and the two differ in exactly three places: this writes
+ * the sprite's own pixel where that one writes 0, it clips against the
+ * DESTINATION's width and height rather than the level's, and it takes the
+ * sprite as a pointer rather than an index. So one carves terrain away and this
+ * builds it, which is how a bridge or a brick becomes ground the ducks can walk
+ * on - there is no separate notion of a bridge, only backdrop.
+ */
+void far stamp_sprite_into(int16_t x, int16_t y, sprite_t far *sp,
+                           desc_t far *dest)
+{
+    int16_t skip = 0;                              /* [bp-4] */
+    int16_t src  = 0;                              /* di */
+    int16_t right, bottom, row, col;
+
+    x -= sp->ox;                                   /* 0x073ae */
+    y -= sp->oy;
+    right  = (int16_t) (x + sp->w);
+    bottom = (int16_t) (y + sp->h);
+
+    if (x < 0) {                                   /* 0x073d8 */
+        skip -= x;
+        src  -= x;
+        x     = 0;
+    } else if ((uint16_t) dest->w < (uint16_t) right) {
+        skip += (int16_t) (right - dest->w);
+        right = dest->w;
+    }
+
+    if (y < 0) {                                   /* 0x07416 */
+        src -= (int16_t) (y * sp->w);
+        y    = 0;
+    } else if ((uint16_t) dest->h < (uint16_t) bottom) {
+        bottom = dest->h;
+    }
+
+    for (row = y; row < bottom; row++) {           /* 0x07444 */
+        for (col = x; col < right; col++) {
+            uint8_t px = sp->pixels[src++];
+
+            if (px)
+                dest->rows[row][col] = px;
+        }
+        src += skip;
+    }
+}
+
+/* ----------------------------------------------------- 0x0799c: ground_check
+ *
+ * Whether there is enough water under a bridge, and the anti-stacking warning.
+ * From the row below the point it scans down the same column of the backdrop
+ * counting pixels below 0xc8 - anything that is not solid - and stops at sixteen
+ * of them or at the bottom of the level. If that took more than 28 rows it
+ * complains, and the three messages escalate:
+ *
+ *     "Careful... don't stack bridges..."
+ *     "THIS IS YOUR LAST WARNING! NO BRIDGE STACKING!"
+ *     "Oops, how did that happen?"
+ *
+ * The third is the last: too_deep_count reaching 3 calls 0x07955 instead of
+ * making a noise, and that routine is not written.
+ *
+ * It takes x by pointer and never writes through it - the pointer buys nothing,
+ * and an earlier note here guessed that it nudged the point, which it does not.
+ */
+void far ground_check(int16_t far *x, int16_t y)
+{
+    int16_t found = 0;                             /* [bp-2] */
+    int16_t rows  = 0;                             /* di */
+    int16_t row   = (int16_t) (y + 1);             /* si */
+
+    while (row < level_h && found < 0x10) {        /* 0x079d4 */
+        if (backdrop.rows[row][*x] < 0xc8)
+            found++;
+        row++;
+        rows++;
+    }
+    if (rows <= 0x1c)                              /* 0x079e0 */
+        return;
+
+    message_post(menu_text[41 + too_deep_count], 0);
+    too_deep_count++;
+    if (too_deep_count == 3)
+        f_07955();                                 /* 0x07a22 - not written */
+    else
+        sound_play_guarded(0x2d, 1);
+}
+
+/* --------------------------------------------------- 0x07646: one bridge end
+ *
+ * Walks one end of a bridge `bridge_span` pixels in `dir`, dropping `bridge_drop`
+ * rows for each - so 4 pixels level for a horizontal one, 3 pixels down a slope
+ * for a diagonal. It stops for good the moment it is over solid backdrop, or
+ * once it leaves the level, and returns whether it is still going.
+ *
+ * The bump when it stops is sound 0x11, played once because `alive` is cleared
+ * with it.
+ */
+static int16_t bridge_step_end(bridge_end far *end, int16_t dir)
+{
+    int16_t i;
+
+    if (!end->alive)                               /* 0x07651 */
+        return 0;
+    if ((uint16_t) end->y >= (uint16_t) level_h || end->x < 0) {
+        end->alive = 0;                            /* 0x0766e - off the level */
+        return 0;
+    }
+
+    for (i = 0; i < bridge_span; i++) {            /* 0x0767b */
+        if (backdrop.rows[end->y][end->x] && end->alive) {
+            sound_play_guarded(0x11, 1);           /* 0x076aa - it hit something */
+            end->alive = 0;
+        }
+        end->x += dir;                             /* 0x076c1 */
+        end->y += bridge_drop;
+    }
+    return end->alive;
+}
+
+/* ------------------------------------------------------ 0x076e2: bridge_grow
+ *
+ * One frame of a bridge building itself. Both ends step, and each that was alive
+ * when the frame began stamps a sprite where it was - so the bridge is laid down
+ * behind the ends as they travel, and stops growing on the side that hit
+ * something while the other carries on.
+ *
+ * **The sprite is picked at random from the level's own set**, one per segment,
+ * which is what stops a bridge being a row of identical tiles.
+ *
+ * The right end does not stamp while it is still on top of the left one, which
+ * is only true on the first frame, when both are at the click.
+ */
+static void bridge_grow(void)
+{
+    int16_t lx = bridge_left.x,  ly = bridge_left.y;    /* si, [bp-2] */
+    int16_t rx = bridge_right.x, ry = bridge_right.y;   /* di, [bp-4] */
+    int16_t still_left  = bridge_step_end(&bridge_left, -1);
+    int16_t still_right = bridge_step_end(&bridge_right, 1);
+
+    g_1fd8 = (bridge_left_live || bridge_right_live) ? 1 : 0;   /* 0x0771e */
+
+    if (bridge_left_live)                          /* 0x07736 */
+        stamp_sprite_into(lx, ly,
+                          &level_sprites.base[game_rand() % level_sprites.count],
+                          &backdrop);
+    if (bridge_right_live && lx != rx)             /* 0x07768 */
+        stamp_sprite_into(rx, ry,
+                          &level_sprites.base[game_rand() % level_sprites.count],
+                          &backdrop);
+
+    bridge_left_live  = still_left;                /* 0x0779e */
+    bridge_right_live = still_right;
+}
+
+/* -------------------------------------------------------- 0x078a6: tool_step
+ *
+ * One line of run_level's frame, right after input_poll: if a tool is in progress
+ * and is not being applied, either grow it - only the two bridges grow - or
+ * declare it finished. Everything else's effect happened when it was used.
+ */
+void far tool_step(void)
+{
+    if (!g_1fd8 || g_1fda)                         /* 0x078a9 */
+        return;
+    if (tool_in_use == 0x0c || tool_in_use == 0x19)
+        bridge_grow();                             /* 0x078c7 */
+    else
+        g_1fd8 = 0;                                /* 0x078cc */
+}
+
 /* ========================================================= 0x07a36: tool_use
  *
  * What a tool does where it is used, and the only place a tool has an effect.
@@ -5166,16 +5340,16 @@ void far tool_use(int16_t x, int16_t y, int16_t tool)
         int16_t diagonal = (tool == 0x0c);
 
         ground_check(&x, y);                       /* 0x07ab4 */
-        drag_anchor_x  = x;                        /* 0x1fe0 */
-        drag_anchor_y  = (int16_t) (y - 1);
-        drag_x         = x;                        /* 0x1fe6 */
-        drag_y         = (int16_t) (y - 1);
-        drag_step_a    = 1;
-        drag_step_b    = 1;
-        drag_kind      = (int16_t) (4 - diagonal);
-        drag_diagonal  = diagonal;
-        g_20fb         = 1;
-        g_20fd         = 1;
+        bridge_left.x  = x;                        /* 0x1fe0 */
+        bridge_left.y  = (int16_t) (y - 1);
+        bridge_right.x = x;                        /* 0x1fe6 */
+        bridge_right.y = (int16_t) (y - 1);
+        bridge_left.alive  = 1;
+        bridge_right.alive = 1;
+        bridge_span    = (int16_t) (4 - diagonal); /* 0x1fdc */
+        bridge_drop    = diagonal;                 /* 0x1fde */
+        bridge_left_live  = 1;
+        bridge_right_live = 1;
         break;
     }
 
@@ -6069,6 +6243,7 @@ int16_t far run_level(int16_t demo)
      */
     do {
         input_poll(level_w, level_h);
+        tool_step();                               /* 0x0de4f */
 
         /* 0x0de53. Everything from here to the outcome check is behind
          * `running`. Once an outcome is settled the level stops reacting - no
