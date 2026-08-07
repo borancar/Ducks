@@ -495,7 +495,7 @@ def main():
     # walking into anything at all goes through this code.
     SCALARS = [(0x2036, "score"), (0x2007, "duck_count"), (0x2013, "quota_left"),
                (0x1FF6, "combo_hi"), (0x1FF8, "combo_lo"), (0x1FF2, "g_1ff2"),
-               (0x1FF4, "g_1ff4"), (0x2005, "eaten_countdown"), (0x0509, "g_509")]
+               (0x1FF4, "g_1ff4"), (0x2005, "eaten_countdown")]
     co_checked = co_differ = co_changed = 0
     if mirrored and scene_live(2) and scenes[2].count == \
             struct.unpack("<h", m.read(g + 0x0D63 + 2 * 12 + 2, 2))[0]:
@@ -534,6 +534,12 @@ def main():
             for off, nm in SCALARS:
                 ctypes.c_int16.in_dll(lib, nm).value = \
                     struct.unpack("<h", m.read(g + off, 2))[0]
+            # [0x505..0x518] is cheat_state, ten words. [0x509] used to be
+            # synced here under the name g_509 and is element 2 of it; duck_dies
+            # reads that one, so the whole array goes across rather than one
+            # word of it under a name that no longer exists.
+            (ctypes.c_int16 * 10).in_dll(lib, "cheat_state")[:] = list(
+                struct.unpack("<10h", m.read(g + 0x0505, 20)))
 
             seed_sync()
             lib.collide_scenes()

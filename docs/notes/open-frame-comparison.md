@@ -198,3 +198,46 @@ Two things not to repeat while chasing it. The types are not the suspect - that
 was checked twice. And a probe that copies scene 0 and scene 2 between the two
 address spaces and nothing else will report a difference that is its own; see the
 section above.
+
+## Found: 0x40 and 0x41 were missing from a JUMP TABLE (2026-08-08)
+
+The report was right and my reading of it was wrong twice over.
+
+`entity_update`'s dispatch on `e->type` is **two** things, not one. Types up to
+0x36 go through a compare chain at `0x07c10`; `0x07c1f`'s `jg` goes to
+`0x07c6e`, which is `sub bx, 0x40` and a **jump table at cs:0x3a9a** covering
+0x40..0x53. Extracting only the chain - which is what I did, and then said the
+switch handled nine types - misses every entry in that table:
+
+    0x40 -> 0x07e47      0x4a -> 0x07c80      0x51 -> 0x07d94
+    0x41 -> 0x07e64      0x4f -> 0x07d94      0x52 -> 0x07cf4
+    0x43 -> 0x080a3                           0x53 -> 0x07d04
+
+`0x07e47` and `0x07e64` are the arms for `0x1c` and `0x33` - the hero's sprung
+types. So **an ordinary sprung duck shares the hero's handler** and gets the
+same `f14`, and the port had every other entry in that table but not those two.
+With no case at all it fell to the default and kept whatever facing it was
+walking with: the hero flew off sideways and the flock went straight up, which
+is precisely what was reported twice.
+
+Confirmed in the guest alone before touching the port - load level 53, put a
+duck on a spring, collide, step - and type 0x41 comes out with `f14 = -2`,
+identical to the hero's 0x33.
+
+**The harness lesson, again, and it is the same one.** The port's `entity_t` is
+not 0x29 bytes: `lead` is an 8-byte host pointer where the guest has a 4-byte
+far one. So `memmove`ing a guest entity into a port entity puts every field
+after `lead` in the wrong place, and the port then behaves differently for
+reasons that look like a game bug. That is what made the first spring probe
+report a difference that was its own, and it did it a second time here before
+being caught. **Set fields by name; never copy an entity across the two address
+spaces as bytes.**
+
+Still open: with both sides minimal - one duck, one spring - they now agree on
+type and `f14`, but the guest's `f15` reads 0 after the collide where the port's
+reads 0xf9, and the guest's duck falls immediately where the port's rises. The
+disassembly has `mov byte ptr es:[bx + 0x15], 0xf9` at 0x0a228, so 0xf9 is what
+the arm writes; why the guest does not show it is unexplained. The minimal guest
+state may be the thing at fault - `scenes[0].flag` and the rest of level 53's
+globals are still set around it - so prove the instrument before believing this
+one too.
