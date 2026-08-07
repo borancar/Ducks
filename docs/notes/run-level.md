@@ -1192,6 +1192,51 @@ killing ducks one at a time through the port's own `duck_dies`, the condition
 first holds after the seventh - 4 left against 5 still needed. The setup adds one
 to the quota when the level has a hero, so in play it is 6 and 5.
 
+### The rocket, and the switch inside animate_scene
+
+**2026-08-07.** Reported: the rocket does not fill up or fly away. It was one
+`TODO` - `0x0a58e`-`0x0a7ed`, a switch on the entity's type that `animate_scene`
+runs when a script reaches its end, before the `next_type` default. The comment
+against it said "none of which any menu entity reaches", which was true and is
+exactly why it stayed unwritten while the menus were the whole port. A good deal
+of the game's behaviour is in there.
+
+**The rocket is a count worn as a type.** `param` is how many ducks it still
+wants, and the type it shows is `param + 5` - so `6` to `0x0a` are "five more"
+down to "one more", and those are the types `collide_scenes` collides a duck
+with. The cycle is three-cornered:
+
+1. a duck arrives - `collide_scenes` sets the rocket to `0x1a` and takes one off
+   `param`;
+2. `0x1a` here gives it an upward nudge (`f15 = 0xfc`), and `next_type` walks it
+   to `0x1b`;
+3. `0x1b` puts `param + 5` back on, which is the next sprite down.
+
+When `param` reaches zero it goes instead: `scenery_count` - the rockets the
+loader counted at `0x2000` - comes down by one, and **if that was the last one
+the level is won**, `level_outcome = 1`, which the frame at `0x0df27` turns into
+the 2 `run_level` returns. The rocket becomes type 5, posts `menu_text[44]`
+("Rocket launched!"), adds 25 and plays sound `0x0c`.
+
+The type each arm sets survives the default only because `next_type` is the
+identity for 5 and for 6..0x0a. That is not a coincidence to rely on quietly, so
+it is written down where the arm is.
+
+**Checked by driving it**: on level 1 the rocket starts type `0x0a` with
+`param` 5, and feeding it ducks one at a time through the port's own
+`entity_set_type`/`animate_scene` walks the type `0xa, 9, 8, 7, 6` and then to 5
+on the fifth, with `scenery_count` 1 to 0, `level_outcome` 1 and the score up 25.
+
+Written with it, since a switch is one thing: `0x54` faces either way at random,
+`0x46`/`0x47` face left and right, `0x2f` swaps the mirrored pair, `0x20` is the
+teleporter's far end (the point `collide_scenes`' `0x37` arm stashed), `0x23`
+rises ten, `0x24` is drowning, and `0x4e` is the other way a level is won.
+
+`0x24` is the one with a subtlety: `duck_dies` has already set the type to 3, so
+the default must not overwrite it - and the original expresses that by loading
+`di` from `g_509`. When ducks do not die `duck_dies` did nothing, and the type
+does still have to move on. That is what `chain` is.
+
 ## The order to take it
 
 The event tables and the tool list are filled by the level loader, so reading

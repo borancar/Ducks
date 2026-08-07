@@ -620,6 +620,10 @@ extern solid_t far *solids;              /* 0x202d */
 extern int16_t     level_flags[7];       /* 0x201e - one per word. The third,
                                           * [0x2022], is the background warp */
 extern uint8_t     scenery_count;        /* 0x2000 - a byte */
+extern int16_t     level_outcome;        /* 0x200d - 1 = won, and run_level
+                                          * turns that into the 2 it returns */
+extern int16_t     g_1ffa, g_1ffc;       /* what a 0x4e win hands to the menu */
+extern int16_t     g_1ff2, g_1ff4;       /* the teleporter's far end */
 extern int16_t     timer_period;         /* 0x2001 */
 extern uint8_t     next_level;           /* 0x2102 */
 extern char far   *level_text;           /* 0x200f */
