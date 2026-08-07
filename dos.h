@@ -557,7 +557,6 @@ extern uint8_t      tool_count;     /* 0x178b */
 int16_t far tool_list_has(int16_t type);
 int16_t far tool_list_any_flagged(void);
 extern int16_t      next_type[111];
-extern int16_t      left_handed;
 extern uint8_t      cursor_divider, cursor_phase;
 void far load_animations(void);
 extern void far *egg_stream, *current_buffer;
