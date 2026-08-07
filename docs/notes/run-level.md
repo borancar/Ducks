@@ -1507,6 +1507,24 @@ was reported. It sits outside the frame skip, because `0x0e4c4` jumps to it.
 Checked: on level 10 the highlight walks `0x82`, `0x92`, `0xa2` and back, and
 entity 1 carries `0x12`, `0x19`, `0x18` with it.
 
+**And then the other tools vanished, which was one wrong entity index.** The two
+entities are the box and the icon, and `0x0e0ea` pushes `[0x1794]` - **entity
+zero**, the box - when it sets type `0x0f` for the length of the countdown. This
+had entity *one*.
+
+Why that matters is the whole design of the thing. Because the panel is painted
+once at level start, the pair sitting on the old slot has to keep drawing what
+was already there, and it does: entity 1 still carries the *old* tool's type, so
+for those three frames it redraws exactly the icon the HUD put there. Only the
+box is hidden. Then both move.
+
+Blanking entity 1 instead paints `0x0f` - sprite 42, the empty slot - over the
+old icon for three frames, and the pair then leaves the hole behind for good.
+Nothing repaints the panel, so it is permanent. That is "changing the tool clears
+the other tools".
+
+So `0x0f` is not "the tool is arriving", it is "hide the box while it does".
+
 ## The order to take it
 
 The event tables and the tool list are filled by the level loader, so reading

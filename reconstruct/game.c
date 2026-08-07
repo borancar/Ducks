@@ -4872,7 +4872,18 @@ void far tool_selected(int16_t slot)
             tool_type = tool_list[tool_at];        /* 0x0e0d7 */
             scenes[3].count = 0;                   /* drop the highlight */
             tool_announce = (uint8_t) (slot * 2 + 3);
-            entity_set_type(&tool_scene.entities[1], 0x0f);
+            /* 0x0e0ea sets entity ZERO to 0x0f, and which of the two matters
+             * more than it looks. Entity 1 is the tool's icon and entity 0 the
+             * box around it, so this hides the box for the length of the
+             * countdown and leaves the icon alone - and the icon is still
+             * sitting on the OLD slot, drawing the same picture the HUD drew
+             * there once at level start, so nothing is damaged.
+             *
+             * Setting entity 1 instead paints 0x0f - which is sprite 42, the
+             * empty slot - over the old tool's icon for three frames, and then
+             * the pair moves away and leaves the hole. That is exactly how "the
+             * HUD clears the other tools" was reported. */
+            entity_set_type(&tool_scene.entities[0], 0x0f);
             sound_play_guarded(3, 1);
         }
     }
