@@ -46,36 +46,6 @@ void far buffer_init(void)                { current_buffer = default_buffer; }
 /* --------------------------------------------------------------- startup */
 
 
-/* The original opens its eggs during startup and builds an index over them -
- * 0x11657, which prints "Using file EGGS\\MAIN.EGG - 303 slices". Until that is
- * read out, open the one egg here so the resource loader has a file to seek in.
- * DUCKS_GAME_DIR matches the tooling's own environment variable. */
-void egg_bringup_open(void)
-{
-    const char *dir = getenv("DUCKS_GAME_DIR");
-    char        path[512];
-    int         n;
-
-    snprintf(path, sizeof path, "%s/Eggs/Main.egg", dir ? dir : "../game");
-    n = egg_open(path);
-    printf("Using file %s - %d slices\n", path, n);
-
-    /* The count the original keeps at [0x20ad], which egg_load_all loops
-     * over. One egg here. Without this the pass has nothing to iterate and the
-     * version page never draws - which is exactly what it did.
-     *
-     * The array itself has to exist as well as the count: close_egg_files is
-     * real, and it walks one record per count on the way out. */
-    egg_file_count = (n > 0) ? 1 : 0;
-    egg_files      = calloc(1, sizeof *egg_files);
-    egg_files[0].fp = fopen(path, "rb");
-    /* The name is what build_episode_index prints and what the demo records are
-     * built from, and the original has it from opening the file. Everything else
-     * in the record - the kind, whether it contributes, the version, the limit -
-     * is filled in for real, by load_animations and build_episode_index. */
-    egg_files[0].name = malloc(sizeof "MAIN.EGG");
-    strcpy(egg_files[0].name, "MAIN.EGG");
-}
 void far set_text_colour(int16_t c)       { (void) c; }
 
 /* 0x07a36, 380 bytes: what a tool actually does where it is used. It exists as a

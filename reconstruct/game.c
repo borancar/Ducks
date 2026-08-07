@@ -347,6 +347,81 @@ void far build_charmap(void)
     charmap['0'] = charmap['O'];                 /* 0x04cfc: a zero is an O */
 }
 
+/* The five paths EGGS.INI can name.
+ *
+ * In the original this array is reached through a far pointer at d+0x21cc, and
+ * that pointer is NEVER WRITTEN - it is zero in the image and zero in every
+ * snapshot, so the five slots live at 0000:0000, in the interrupt vector table.
+ * Watched from cold: with no EGGS.INI on disk the fallback stores its string
+ * through `str_copy("EGGS\\MAIN.EGG", 0000:0000)` and open_egg reads the same
+ * four bytes straight back, so it works by landing on INT 0's vector and taking
+ * it away again before anything divides by zero.
+ *
+ * A null dereference is not something to be faithful to, so here it is an array.
+ */
+char far  *egg_ini_paths[5];
+int16_t    egg_ini_count;        /* 0x21d0 */
+
+/* ==================================================== 0x13ccd: load_eggs_ini
+ *
+ * EGGS.INI, read a line at a time, and only the lines under `[EGGS]` are taken.
+ * A line beginning with `[` is a section header and switches the section on or
+ * off; anything else while the section is on is an egg to open, in order.
+ *
+ * Two details do the work. Forward slashes are turned into backslashes as the
+ * line is read (0x13d36), so an INI written on either kind of machine names the
+ * same file. And end of line is a newline OR the end of the file, which is what
+ * lets the last line count without a trailing newline.
+ *
+ * There is no EGGS.INI in this copy of the game, so what actually runs is
+ * init's fallback below - but the file is the supported way to add episodes and
+ * PickEggs.exe writes it, so this is not dead.
+ */
+void far load_eggs_ini(const char far *path)
+{
+    char    line[0x104];                       /* [bp-0x10a] */
+    FILE   *fp;
+    int16_t in_eggs = 0;                       /* [bp-6] */
+    int16_t reading, i;                        /* di, si */
+    int     c;
+
+    fp = fopen(path, "rt");                    /* 0x13ce5, d+0x2789 */
+    if (!fp)
+        return;
+
+    while (!feof(fp)) {                        /* 0x13ddb */
+        reading = 1;
+        i = 0;
+        while (reading) {                      /* 0x13d55 */
+            if (i == 0xff)                     /* 0x13d08 */
+                fatal("Line too long in INI file", 0);
+            c = fgetc(fp);
+            line[i] = (char) c;
+            if (line[i] == '/')                /* 0x13d2f */
+                line[i] = '\\';
+            if (line[i] == '\n' || feof(fp) || c == EOF) {
+                reading = 0;                   /* 0x13d4d */
+                line[i] = 0;
+            }
+            i++;
+        }
+
+        if (line[0] == '[') {                  /* 0x13d59 - a section header */
+            in_eggs = (strcasecmp("[EGGS]", line) == 0);   /* 0x13d6a */
+            continue;
+        }
+        if (!in_eggs || line[0] == 0)          /* 0x13d7c, 0x13d8f */
+            continue;
+        if (egg_ini_count >= 5)                /* 0x13d96 */
+            fatal("Can't load that many eggs", 0);
+        else {
+            str_copy(line, &egg_ini_paths[egg_ini_count]);   /* 0x13db3 */
+            egg_ini_count++;
+        }
+    }
+    fclose(fp);
+}
+
 /* ------------------------------------------------ 0x051b7: close_egg_files */
 void far close_egg_files(void)
 {
@@ -4573,9 +4648,12 @@ void far init(void)
     int16_t i;
 
     puts("DUCKS v1.21");                           /* DGROUP+0x2808 */
-    egg_bringup_open();                            /* stands in for the egg
-                                                    * opening and indexing the
-                                                    * original does here */
+
+    /* 0x14291. The only hardware gate that can stop the game starting. */
+    i = mouse_init();
+    if (!i)
+        fatal("No mouse driver", 0);               /* 0x142a6 */
+    printf("%i button mouse found\r\n\r\n", i);  /* d+0x2828 */
     for (i = 0; i < 3; i++) {                      /* three 22-byte objects */
         message_image[i] = malloc(sizeof(desc_t));  /* [0x210c], stride 4 */
         message_image[i]->w = 316;
@@ -4594,8 +4672,26 @@ void far init(void)
     for (i = 0; i < 10; i++)
         score_set((int16_t) ((10 - i) * 1000), "TIM FURNISH", i);  /* d+0x2842 */
 
+    /* 0x142e1. Which eggs to open, and where from. */
+    load_eggs_ini("EGGS.INI");
+    if (egg_ini_count == 0 && egg_ini_count < 5)   /* 0x142e7, 0x14302 */
+        str_copy("EGGS\\MAIN.EGG",                 /* d+0x2857, the fallback */
+                 &egg_ini_paths[egg_ini_count++]);
+
     load_settings();                               /* 0x1432c - the settings and
                                                     * the hall of fame */
+
+    /* 0x14380. One record per named egg, then open each in turn. Only the FIRST
+     * one failing is fatal - the rest are episode packs and the game runs
+     * without them, which is what the `si == 0` at 0x143ac says. The path is
+     * freed as soon as it has been opened. */
+    egg_table_alloc(egg_ini_count);
+    for (i = 0; i < egg_ini_count; i++) {
+        if (!open_egg(egg_ini_paths[i]) && i == 0)
+            fatal("Couldn't load primary data file", 0);   /* d+0x2889 */
+        free(egg_ini_paths[i]);                    /* 0x143d1 */
+    }
+
     build_charmap();                               /* 0x143e5 */
     font_load();                                   /* 0x143e9 - the one 'F'
                                                     * block, before anything

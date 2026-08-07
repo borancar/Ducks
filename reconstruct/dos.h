@@ -210,7 +210,8 @@ typedef struct {
                                  *         same one is fatal; freed on the way
                                  *         out by close_egg_files */
     int16_t   slices;           /* +0x0c - what the open banner prints */
-    int16_t   unread_e;         /* +0x0e */
+    int16_t   data_at;          /* +0x0e - slices * 7 + 2, where the
+                                 *         directory ends */
     uint8_t   limit;            /* +0x10 - this egg's shareware limit */
     uint8_t   demo_base;        /* +0x11 - the running demo total after it */
     uint8_t   kind;             /* +0x12 - from its 'Z' block, or 1 */
@@ -239,6 +240,9 @@ extern int16_t    flip_phase;
 extern uint8_t    game_speed;
 extern int16_t    last_key;      /* 0x18f6 - what init spins on */
 extern int16_t    g_18e5;        /* 0x18e5 - any button; escapes the fades */
+extern int16_t    button_a_down; /* 0x18df */
+extern int16_t    button_b_down; /* 0x18e7 */
+extern int16_t    g_18e1, g_18e3;
 extern int16_t    fade_level;
 extern int8_t     fade_direction;
 extern int16_t    fade_start_colour;
@@ -278,6 +282,7 @@ void far outline_sprite(int16_t far *index, int16_t x, int16_t y,
 int16_t far key_pending(void);
 int16_t far key_read(void);
 
+int16_t far mouse_init(void);       /* 0x067e6 */
 void far mouse_motion(int16_t far *dx, int16_t far *dy);
 int16_t far mouse_presses(int16_t button);
 int16_t far mouse_releases(int16_t button);
@@ -439,6 +444,12 @@ int16_t far run_level(int16_t arg);
 item_t far *far run_screen(menu_t far *menu, void far *a, int16_t b);
 int16_t far egg_find_block(uint8_t type, uint8_t index, int16_t arg);
 int16_t far egg_read_word(void far *s);
+void far egg_table_alloc(int16_t n);        /* 0x05005 */
+void far load_eggs_ini(const char far *path);  /* 0x13ccd */
+extern char far *egg_ini_paths[5];
+extern int16_t   egg_ini_count;             /* 0x21d0 */
+int16_t far open_egg(char far *path);       /* 0x05044 */
+extern int block_open;                      /* 0x20b6 */
 uint8_t far egg_read_byte(void far *s);
 int16_t far alloc_image(void far *d, int16_t a, int16_t b, int16_t c, int16_t e);
 int16_t far load_demo(uint8_t index);
@@ -526,7 +537,6 @@ char far *far egg_read_string(void far *s);
 void far egg_fread(void far *buf, uint16_t size, uint16_t n);
 void far egg_block_end(void);
 int egg_open(const char *path);
-void egg_bringup_open(void);
 void far hold_frames(int16_t n);   /* 0x04dcd */
 void far level_free(void);
 void far bonus_screen(void);   /* 0x0becb */

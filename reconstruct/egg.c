@@ -34,9 +34,13 @@
  * sizes by hand and let the compiler write the offsets.
  */
 
+#include <dirent.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
 
 #include "dos.h"
 
@@ -55,7 +59,8 @@ static int      dir_count;
 static size_t   data_base;      /* where the directory ends */
 
 static size_t   cursor;         /* the open "stream" every read advances */
-static int      block_open;     /* [0x20b6] - egg_find_block's lock */
+int             block_open;     /* 0x20b6 - egg_find_block's lock, and
+                                 * what egg_table_alloc clears */
 
 /* the decoder's state, which is [0x20ce], [0x20d2], [0x20d3] and [0x20d4] */
 static uint8_t  table[16];
@@ -275,4 +280,165 @@ void far resource_release(void far *d)
         free(desc->rows[y]);
     free(desc->rows);
     desc->rows = NULL;
+}
+
+/* =========================================================== opening an egg
+ *
+ * The original streams every read straight off the FILE it opens here. This
+ * port reads the file once into `egg` above and serves from that, so open_egg
+ * has to do both: keep the FILE the original keeps, because egg_read_byte takes
+ * one and close_egg_files closes it, and hand the path to the buffered reader.
+ * That second call is the port's and is marked where it happens.
+ */
+
+/* DOS is case-blind and has backslashes; this is neither. The game asks for
+ * `EGGS\MAIN.EGG` - open_egg upper-cases the path itself, at 0x05085 - and what
+ * is on disk is `Eggs/Main.egg`. So the separators are swapped and each
+ * component is matched without regard to case, one directory at a time.
+ *
+ * Entirely the port's: there is nothing to be faithful to here, because the
+ * original's fopen was already looking at a filesystem that did this for it. */
+static void join(char *out, size_t max, const char *part)
+{
+    size_t n = strlen(out);
+
+    if (n == 0 || out[n - 1] == '/')
+        snprintf(out + n, max - n, "%s", part);
+    else
+        snprintf(out + n, max - n, "/%s", part);
+}
+
+static int host_path_from(const char *want_in, char *out, size_t max)
+{
+    char        want[512];
+    char       *p, *slash;
+    struct stat st;
+
+    snprintf(want, sizeof want, "%s", want_in);
+    if (stat(want, &st) == 0) {                /* already right */
+        snprintf(out, max, "%s", want);
+        return 1;
+    }
+
+    p = want;
+    out[0] = 0;
+    if (*p == '/') {                           /* absolute: keep the root */
+        snprintf(out, max, "/");
+        p++;
+    }
+
+    for (; p && *p; p = slash) {
+        DIR           *d;
+        struct dirent *e;
+        char           here[512];
+        int            found = 0;
+
+        slash = strchr(p, '/');
+        if (slash)
+            *slash++ = 0;
+        if (!*p)                               /* "//" or a trailing slash */
+            continue;
+
+        snprintf(here, sizeof here, "%s", out);
+        join(here, sizeof here, p);
+        if (stat(here, &st) == 0) {
+            snprintf(out, max, "%s", here);
+            continue;
+        }
+
+        d = opendir(out[0] ? out : ".");
+        if (!d)
+            return 0;
+        while ((e = readdir(d)) != NULL)
+            if (strcasecmp(e->d_name, p) == 0) {
+                join(out, max, e->d_name);
+                found = 1;
+                break;
+            }
+        closedir(d);
+        if (!found)
+            return 0;
+    }
+    return out[0] != 0 && stat(out, &st) == 0;
+}
+
+/* The path as the game gives it, then the same path under DUCKS_GAME_DIR. The
+ * first is how a shipped copy finds its own Eggs directory beside the binary;
+ * the second is how the harnesses do, since they run from the repo root. */
+static int host_path(const char far *dos, char *out, size_t max)
+{
+    char        want[512];
+    const char *dir;
+    size_t      i;
+
+    for (i = 0; dos[i] && i + 1 < sizeof want; i++)
+        want[i] = (dos[i] == '\\') ? '/' : dos[i];
+    want[i] = 0;
+
+    if (host_path_from(want, out, max))
+        return 1;
+
+    dir = getenv("DUCKS_GAME_DIR");
+    if (dir) {
+        char rooted[512];
+
+        snprintf(rooted, sizeof rooted, "%s/%s", dir, want);
+        return host_path_from(rooted, out, max);
+    }
+    return 0;
+}
+
+/* 0x05005. One record per egg the INI named, and the lock cleared with them.
+ * 0x17 is sizeof(egg_file_t) and the original writes it as a literal. */
+void far egg_table_alloc(int16_t n)
+{
+    egg_files = malloc((size_t) n * sizeof *egg_files);
+    if (!egg_files)
+        fatal(out_of_memory, 0);               /* 0x05036 */
+    block_open = 0;                            /* 0x0503c, [0x20b6] */
+}
+
+/* 0x05044. Open one egg and fill in its record, or say why not.
+ *
+ * The path is upper-cased IN PLACE as it is walked, and the walk is also what
+ * finds the basename: every backslash moves `name` past it, so what ends up in
+ * the record at +4 is `MAIN.EGG` and not `EGGS\MAIN.EGG`. The two jobs share one
+ * loop, which is why the upper-casing skips the separator.
+ *
+ * `slices` is the count the banner prints, and +0x0e is where the data starts:
+ * seven bytes a directory entry after the two-byte count.
+ */
+int16_t far open_egg(char far *path)
+{
+    char far       *name = path;               /* [bp-4] */
+    char far       *p    = path;               /* [bp-8] */
+    egg_file_t far *e;
+    char            host[512];
+
+    while (*p) {                               /* 0x05096 */
+        if (*p == '\\')
+            name = p + 1;                      /* 0x0506d - past the separator */
+        else
+            *p = (char) toupper((unsigned char) *p);   /* 0x05085 */
+        p++;
+    }
+
+    e = &egg_files[egg_file_count];
+    e->fp = host_path(path, host, sizeof host) ? fopen(host, "rb") : NULL;
+    if (!e->fp) {                              /* 0x050d8 */
+        printf("Can't open file %s\n", path);  /* d+0x229a */
+        return 0;
+    }
+
+    str_copy(name, &e->name);                  /* 0x0510c, the record's +4 */
+    e->slices  = egg_read_word(e->fp);         /* 0x05128 */
+    e->data_at = (int16_t) (e->slices * 7 + 2);/* 0x05159 */
+
+    /* The port's, not the original's: its reader is buffered where this one
+     * streams, so the same file is handed to egg_open as well. */
+    egg_open(host);
+
+    printf("Using file %s - %i slices\n", path, e->slices);   /* d+0x227f */
+    egg_file_count++;                          /* 0x05194 */
+    return 1;
 }
