@@ -6245,6 +6245,15 @@ int16_t far run_level(int16_t demo)
     free(tool_scene.entities);
     sprite_set_free(&level_sprites);
     set_buffer(default_buffer);                    /* 0x0e814 */
+
+    /* 0x0e81a. The other half of level_palette_build's `+= 0x90`: together they
+     * are 0x100, so text_colour comes back to what it was. A level's text draws
+     * through the copy of entries 0x50-0x6f that the palette grade puts at
+     * 0xe0-0xff, and the screens after a level do not - the bonus screen sets no
+     * text colour at all, it inherits this one. Without this line its labels are
+     * drawn 0x90 up the palette and are not there. */
+    text_colour[0] += 0x70;
+
     return level_outcome == 2;
 }
 

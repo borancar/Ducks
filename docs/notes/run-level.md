@@ -1307,6 +1307,19 @@ skip one row: every later row sees it set and finishes instantly.
 `bonus_numbers` (`0x0bd00`) draws each digit twice - sprite `0x70` to wipe the
 cell, then `0x71 + digit` over it - into both pages, five rows of six digits.
 
+**The labels needed one line somewhere else.** The bonus screen sets no text
+colour at all - it inherits - and `level_palette_build` adds `0x90` to
+`text_colour[0]` while `run_level`'s teardown at `0x0e81a` adds `0x70`. Together
+they are `0x100`, so the pair cancels and text comes back to where it started.
+The port had the first and not the second, so every label was drawn `0x90` up the
+palette, into the slice a level uses and the screens after it do not, and none of
+them appeared. `0x6f` to `0xff` and back to `0x6f`.
+
+That is the third time a palette bias has hidden something rather than corrupted
+it - the same shape as the missing `0xe0`-`0xff` copy that made the HUD numbers
+invisible. A colour that lands outside the palette in use does not look wrong, it
+looks absent.
+
 **Checked by replaying the arithmetic**: 27 on the clock, 7 ducks home, 5 lives
 and a score of 1234 gives 135 + 70 + 50, and Total pours 255 into Score for 1489.
 Every pass terminates - 43, 33, 29, 43, 33, 29, 52 steps - which was the thing
