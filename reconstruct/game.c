@@ -2417,6 +2417,86 @@ void far menus_after_game(void)
     menu_idle_suppress = 0;
 }
 
+/* -------------------------------------------- 0x0f5b1: cutscene_rocket_space
+ *
+ * The first of the six endings, and the only one that animates by arithmetic
+ * rather than by holding a picture: the rocket crosses a starfield from the
+ * bottom right, and everything about its path is in seven words of state.
+ *
+ * Position is 1/8th of a pixel, so `si`/`di` are eight times the screen
+ * coordinates and the draw shifts them down by three. It starts at (0xb7c,
+ * 0x802) travelling up and left, and both steps are SUBTRACTED each frame -
+ * `dx` 16 and `dy` 8 - so the rocket flies up-left until something changes them.
+ *
+ * Crossing x = 0x320 is what changes them. That arms two things at once: the
+ * flame animation, which walks the sprite index up and adds 2 to `dy` a frame,
+ * and the braking, which takes `dx` down to zero and `dy` with it. So the rocket
+ * decelerates, the flame lights, and it arcs over and falls back down the screen
+ * until `di` passes 0xaf0 and the scene ends.
+ *
+ * `frame = counter` is a `sar ax, 0` in the original - a shift by zero, which is
+ * what Turbo C emitted for whatever the expression was. Written as the
+ * assignment it is.
+ */
+void far cutscene_rocket_space(void)
+{
+    desc_t  desc;
+    table_t set;
+    int16_t frame   = 0;                           /* [bp-0xa] */
+    int16_t counter = 0;                           /* [bp-0xc] */
+    int16_t dy      = 8;                           /* [bp-0xe] */
+    int16_t dx      = 0x10;                        /* [bp-0x10] */
+    int16_t braking = 0;                           /* [bp-0x12] */
+    int16_t flaming = 0;                           /* [bp-0x14] */
+    int16_t armed   = 1;                           /* [bp-0x16] */
+    int16_t x = 0xb7c, y = 0x802;                  /* si, di - eighths */
+    int16_t plane;
+
+    clear_vram();
+    if (!resource_load(&desc, 0x4d, 0x32, 0, 1, 0xff, 1))
+        return;
+    sprite_set_load(0x32, 0x53, &set, 0xff);
+    clear_vram();
+    palette_apply_gamma();
+    palette_upload();
+    sound_play_guarded(0x0c, 0x2710);
+
+    do {
+        for (plane = 0; plane < 4; plane++) {      /* 0x0f637 */
+            set_plane((uint8_t) plane);
+            blit_rows(&desc, viewport_screen, 0);
+            draw_sprite(&frame, (int16_t) (x >> 3), (int32_t) ((y >> 3) - 50),
+                        &set, &viewport_screen, 0);
+        }
+
+        if (flaming) {                             /* 0x0f68e */
+            counter++;
+            frame = counter;
+            dy   += 2;
+            if (frame == 6)
+                flaming = 0;
+        }
+        if (braking) {                             /* 0x0f6af */
+            if (dx)
+                dx--;
+            dy--;
+        }
+        x -= dx;                                   /* 0x0f6c1 */
+        y -= dy;
+
+        if (armed && x < 0x320) {                  /* 0x0f6c7 - it arrives */
+            sound_play_guarded(0x64, 0x2710);
+            flaming = 1;
+            braking = 1;
+            armed   = 0;
+        }
+        page_flip();
+    } while (y < 0xaf0);                           /* 0x0f6f2 */
+
+    sprite_set_free(&set);
+    resource_release(&desc);
+}
+
 /* ------------------------------------------- 0x0f825: cutscene_welcome_home
  *
  * One of the six ending screens; the others have the same shape with different

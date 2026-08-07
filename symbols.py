@@ -167,6 +167,9 @@ FUNCTIONS = {
     # episode_end_gate below decides. See docs/notes/homecoming-sequence.md
     0x0F5B1: "cutscene_rocket_space",    # id 0x32: the rocket crossing a
                                          # starfield, then leaving the frame
+    0x0F5B1: "cutscene_rocket_space",    # the rocket over a starfield: 1/8th
+                                        # pixel position, and crossing x=0x320
+                                        # arms both the flame and the braking
     0x0F825: "cutscene_welcome_home",    # id 0x36: the flock under a
                                          # "Welcome Home!" banner
     0x0F913: "cutscene_photos",          # ids 0x3a-0x3c: three polaroids, one

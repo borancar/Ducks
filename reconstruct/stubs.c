@@ -24,7 +24,6 @@
 
 /* The four ending screens that have not been read out. cutscene_welcome_home and
  * cutscene_photos are real, in game.c. */
-void far cutscene_rocket_space(void)      { }
 void far cutscene_rocket_landing(void)    { }
 void far cutscene_doorstep(void)          { }
 void far cutscene_night_monster(void)     { }
