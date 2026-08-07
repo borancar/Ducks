@@ -444,7 +444,6 @@ int16_t far alloc_image(void far *d, int16_t a, int16_t b, int16_t c, int16_t e)
 int16_t far load_demo(uint8_t index);
 int16_t far pick_random_demo(void);
 int16_t far detect_hardware(void);
-int16_t far f_14e88(void far *fp);
 void far show_readme_section(uint8_t n);
 void far console_rule(void);
 void far build_episode_index(void);

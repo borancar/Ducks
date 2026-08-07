@@ -108,7 +108,6 @@ void far fatal(const char far *msg, const char far *arg)
 }
 
 void far f_11bee(void far *name, int16_t egg) { (void) name; (void) egg; }
-int16_t far f_14e88(void far *fp)         { (void) fp; return 0; }
 
 /* The palette the DAC loops upload, and the washed copy the blink alternates
  * with: 0x10e1 and 0x0dad. palette_build fills the first; nothing fills the

@@ -4366,23 +4366,49 @@ done:
  * Takes nothing, returns nothing; its only output is one global. The names are
  * not five constants - save_name holds the template "GAME-.SG" and the loop
  * patches the digit into offset 4.
+ *
+ * The read order matters and was wrong here: a leading string is skipped byte
+ * by byte, then THREE strings are read and thrown away, and only the word after
+ * all of that is the one compared. Reading the word first, as this did, reads
+ * the front of a string.
+ *
+ * That word was going through a stub called `f_14e88`, which is 0x04e88 with
+ * the segment wrapped into the name - and 0x04e88 is two fgetc calls, `hi << 8`
+ * then `+ lo`. It is egg_read_word on a FILE, which egg.c has had all along.
  */
 void far scan_save_slots(void)
 {
-    FILE   *fp;
-    int16_t i, v;
+    FILE     *fp;
+    int16_t   i, v;
+    char far *s;
 
     for (i = 1; i < 6; i++) {
-        save_name[4] = '0' + i;                    /* [0x21a9] */
-        fp = fopen(save_name, "rb");
-        if (fp) {
-            v = f_14e88(fp);                       /* a value out of the save */
-            if (v > max_save_value)                /* [0x2055], the only output */
-                max_save_value = v;
-            /* two more values are fetched through 0x14f4b and freed: read a
-             * string, free it */
-            fclose(fp);
+        save_name[4] = (char) ('0' + i);           /* [0x21a9] */
+        fp = fopen(save_name, "rb");               /* 0x14009 */
+        if (!fp)
+            continue;                              /* 0x1401f */
+
+        /* 0x14024. Bytes until a zero. The original would spin here on a save
+         * that ended first, since fgetc keeps handing back EOF; the second test
+         * is the port's and nothing else. */
+        {
+            int c;
+
+            while ((c = fgetc(fp)) != 0 && c != EOF)
+                ;
         }
+
+        /* Three of them, and the file says what they are: "BORAN", ten bytes
+         * of something, and "MAIN.EGG" - the owner, a key and the egg the save
+         * belongs to. Reading two left the word eleven bytes early. */
+        s = egg_read_string(fp);  free(s);         /* 0x1403d */
+        s = egg_read_string(fp);  free(s);         /* 0x14054 */
+        s = egg_read_string(fp);  free(s);         /* 0x1406b */
+
+        v = egg_read_word(fp);                     /* 0x14082 -> 0x04e88 */
+        if ((uint16_t) v > max_save_value)         /* 0x1408e is jbe, unsigned */
+            max_save_value = (uint16_t) v;         /* [0x2055], the only output */
+        fclose(fp);                                /* 0x1409a */
     }
 }
 
