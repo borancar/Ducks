@@ -1449,6 +1449,47 @@ than playing the data at the device's rate.
 resample" is the one failure that would produce exactly this symptom and cannot
 be seen from outside.
 
+### Changing tools while playing
+
+**2026-08-07.** Reported: on a level with several tools the arrow keys do
+nothing. `0x0cf07` is a played level's whole input and it was the last real stub -
+and worse, nothing called it: when the frame was restructured for the outcome
+gate, the `else` that reaches it was dropped, so a played level had no key handler
+at all.
+
+It is `tool_events`' counterpart. That one moves the selection from a demo's
+table; this one moves it from the keyboard and the mouse, and `run_level` calls
+exactly one of the two.
+
+**Three ways to change tool**, none of them bounds-checked:
+
+| | |
+| --- | --- |
+| the cycle button | `button_map[1]`, steps on and wraps at the end |
+| left / right arrow | `tool_at--` / `tool_at++`, no wrap |
+| digits 1-9 | `tool_at = key - '1'` |
+
+They do not need checking because `tool_selected` refuses a selection past the
+end of the list and puts the old one back - which is the same mechanism that lets
+a demo's table name a slot the level does not have.
+
+Extended keys arrive as `0x100 | scan code`: `input_poll` folds the BIOS's
+zero-then-scancode pair into that, so left is `0x14b` and right `0x14d`. That was
+already right; there was simply nothing reading it.
+
+The rest of the switch is the display and debug keys - `,`/`.` walk the gamma and
+rebuild the palette, `[`/`]` the game speed, `c` toggles the camera between easing
+and the hard window, `D` doubles the sample rate, `#` finishes the level and `P`
+pauses. The last two are behind `cheat_state[0]` and `cheat_state[5]`.
+
+`fast`, the caller's local, is **not** a tool slot - `D` toggles it, and it both
+doubles the sound rate and lengthens the tool announcement, which is why
+`tool_selected` is handed it. An earlier note here called it `tool_slot`.
+
+Checked on level 10, which has three: right, right, right gives 0, 1, 2, 2 - the
+fourth refused - then left gives 1, `3` gives 2, `1` gives 0, and left from 0 is
+refused.
+
 ## The order to take it
 
 The event tables and the tool list are filled by the level loader, so reading

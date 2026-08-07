@@ -4930,6 +4930,105 @@ static uint8_t terrain_at(int32_t y, int32_t x)
     return backdrop.rows[y][x];
 }
 
+/* ============================================== 0x0cf07: played_tool_events
+ *
+ * A played level's input, and the counterpart of tool_events: that one moves the
+ * selection from the demo's table, this one from the keyboard and the mouse.
+ * run_level calls exactly one of the two.
+ *
+ * **The tool changes three ways** - the cycle button, the arrow keys and the
+ * digits - and none of them bounds-checks. They do not have to: tool_selected
+ * refuses a selection past the end of the list and puts the old one back, so
+ * walking off either end is harmless by design.
+ *
+ * Extended keys arrive as `0x100 | scan code`, which input_poll builds from the
+ * BIOS's zero-then-scancode pair - so left is 0x14b and right 0x14d.
+ *
+ * The rest are the debug and display keys, two of them behind cheats. `fast` is
+ * the caller's own flag and not a tool slot: D toggles it, and it both doubles
+ * the sound rate and lengthens the tool announcement, which is why
+ * tool_selected is given it.
+ */
+void far played_tool_events(int16_t far *fast)
+{
+    /* 0x0cf0d. The cycle button - button_map[1], whatever it is bound to -
+     * steps to the next tool and wraps. */
+    if (g_18e3 && tool_count) {
+        tool_at++;
+        if (tool_at == tool_count)
+            tool_at = 0;
+    }
+
+    switch (last_key) {
+    case 0:                                        /* 0x0cfec - nothing typed */
+        break;
+
+    case 0x14b:  tool_at--;  break;                /* 0x0d004 - left arrow */
+    case 0x14d:  tool_at++;  break;                /* 0x0d00b - right arrow */
+
+    case 0x1b: case 0x51: case 0x71:               /* ESC, Q, q */
+        f_07955();                                 /* 0x0cffd */
+        break;
+
+    case 0x50: case 0x70:                          /* P, p - pause, if allowed */
+        if (cheat_state[5])                        /* 0x0cfef - [0x50f] */
+            pause_screen();                        /* 0x0ce2e */
+        break;
+
+    case 0x23:                                     /* 0x0d012 - '#' */
+        if (cheat_state[0])                        /* [0x505] */
+            level_outcome = 1;                     /* finish the level outright */
+        break;
+
+    case 0x44: case 0x64: {                        /* 0x0d022 - D, d */
+        int16_t rate;
+
+        *fast = !*fast;
+        rate  = (int16_t) (11000 << *fast);        /* 0x2af8, doubled */
+        if (sound_available)
+            sound_set_rate(rate);                  /* 0x149e:0x346 */
+        break;
+    }
+
+    case 0x63:                                     /* 0x0d057 - c */
+        scroll_smooth = !scroll_smooth;
+        break;
+
+    case 0x2e: case 0x3e:                          /* 0x0d064 - . and > */
+        if (gamma_level < 0x1f) {
+            gamma_level++;
+            palette_apply_gamma();
+            build_washed_ramp();
+            palette_upload();
+        }
+        break;
+
+    case 0x2c: case 0x3c:                          /* 0x0d07d - , and < */
+        if (gamma_level) {
+            gamma_level--;
+            palette_apply_gamma();
+            build_washed_ramp();
+            palette_upload();
+        }
+        break;
+
+    case 0x5d: case 0x7d:                          /* 0x0d096 - ] and } */
+        if (game_speed < 0x1f)
+            game_speed++;
+        break;
+
+    case 0x5b: case 0x7b:                          /* 0x0d0a3 - [ and { */
+        if (game_speed)
+            game_speed--;
+        break;
+
+    default:                                       /* 0x0d0b0 */
+        if (last_key >= 0x31 && last_key <= 0x39)  /* 1..9 pick a tool */
+            tool_at = (uint8_t) (last_key - 0x31);
+        break;
+    }
+}
+
 /* --------------------------------------------------------- 0x0d0c8: level_event
  *
  * What a tool does at a point - the click handler, and on the demo path what the
@@ -6282,6 +6381,8 @@ int16_t far run_level(int16_t demo)
                 if (g_18e5 || last_key)
                     fade_direction = -1;
                 tool_events();                     /* 0x0d4c2 */
+            } else {
+                played_tool_events(&tool_slot);    /* 0x0dea4 */
             }
 
             /* ESC, for a played level. The four endings below only post a

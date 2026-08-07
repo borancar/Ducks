@@ -131,6 +131,11 @@ FUNCTIONS = {
                                         # whole of playing a level and returns
                                         # when the level is over. One argument,
                                         # non-zero for a demo
+    0x0CF07: "played_tool_events",       # a played level's input: the cycle
+                                        # button, the arrows, the digits, and the
+                                        # debug keys. tool_events is the demo's
+                                        # counterpart and run_level calls one
+    0x0CE2E: "pause_screen",             # P, behind cheat_state[5]
     0x0D4C2: "tool_events",              # native
     0x0D55D: "tool_list_has",            # native
     0x0D591: "tool_list_any_flagged",    # native

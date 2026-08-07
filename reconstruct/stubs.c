@@ -176,16 +176,27 @@ static void wrong_about_demos(const char *what, int *said)
                     "faithful\n", what);
 }
 
-/* 0x0cf07, 449 bytes. run_level's PLAYED branch: with its argument zero it is
- * this that reads the input and drives the tool, where a demo takes 0x0d4c2 and
- * the level's own table instead. Off the demo path by reading, not by absence -
- * see docs/notes/run-level.md on the [bp+6] fork. 0x0ce2e (217 bytes) is called
- * only from here, so it goes with it. */
-void far played_tool_events(uint8_t far *flash)
+/* 0x0ce2e, 217 bytes: what P does when the pause cheat is on. It builds a
+ * 320x200 image, draws over the screen and waits on getch. Off the demo path by
+ * reading - played_tool_events is its only caller - and behind cheat_state[5]
+ * besides, so nothing reaches it without being asked for twice. */
+void far pause_screen(void)
 {
     static int said;
-    (void) flash;
-    wrong_about_demos("0x0cf07, the played tool handler", &said);
+
+    unwritten("0x0ce2e, the pause screen", &said);
+}
+
+/* 0x149e:0x346: the DSP's rate register, which D toggles between 11000 and
+ * 22000. The port opens its device once at the rate sound_init chose, and SDL
+ * resamples from there, so there is nothing to reprogram - but the game asking
+ * is worth not swallowing. */
+void far sound_set_rate(int16_t rate)
+{
+    static int said;
+
+    (void) rate;
+    unwritten("0x149e:0x346, changing the sample rate mid-level", &said);
 }
 
 
