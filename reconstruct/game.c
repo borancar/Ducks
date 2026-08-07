@@ -210,6 +210,9 @@ int16_t      next_type[111];     /* 0x0416 - what a type becomes when its script
 /* the menu and the attract cycle */
 int16_t    attract_choice;       /* 0x21ae - 0 demos, non-zero shows a screen */
 int16_t    game_in_progress;   /* 0x2177 - a game is under way, so no idle demo */
+/* The rest of the flags that block declared. [0x509] and [0x50b] left it when
+ * they turned out to be cheat_state[2] and [3]. */
+int16_t    g_1ffa, g_1ffc, g_1ffe, g_18e1, g_18e3;
 uint8_t    g_2038;               /* 0x2038 - how many demos to choose from;
                                   * byte, high half zeroed */
 
@@ -230,11 +233,33 @@ uint8_t    extra_text_count;     /* 0x0098 */
 char far **cheat_text;           /* 0x0519 */
 uint8_t    cheat_text_count;     /* 0x0504 */
 /* 0x0505. One flag per cheat word, toggled by typing it. Ten words, twenty
- * bytes, and the array ends exactly where cheat_text begins. What run_screen
- * reads as "[0x515]" is element 8 of this, not a variable of its own. */
-int16_t    cheat_state[10];
-int16_t    left_handed;          /* 0x0511 - LEFT HANDED, which swaps the side of
-                                  * the pen the cursor's tool is drawn on */
+ * bytes, and the array ends exactly where cheat_text begins.
+ *
+ * EVERY [0x505 + 2i] in the listing is an element of this and not a variable of
+ * its own, and two of them had been declared as variables anyway: [0x507] as
+ * `g_507` and [0x511] as `left_handed`. typed_push writes cheat_state[i], so
+ * nothing ever wrote any shadow - typing the word toggled the array and the
+ * code read a different word that stayed zero, which is a cheat that silently
+ * does nothing.
+ *
+ * Five more had been declared as variables of their own, and none of them was
+ * ever written either. All ten, and what each does:
+ *
+ *     [0]  0x0505  BUSHKANGAROO      '#' finishes the level outright
+ *     [1]  0x0507  THECROWDSAYBO     the level picker, and the level-select key
+ *     [2]  0x0509  NOSCHOOLCUSTARD   ducks do not die; cleared for a demo
+ *     [3]  0x050b  ONLYFOREVER       a lost attempt costs no life
+ *     [4]  0x050d  KEYCODE
+ *     [5]  0x050f  COLOURMAP         P pauses
+ *     [6]  0x0511  NODNOL            LEFT HANDED: which side the tool is drawn
+ *     [7]  0x0513  INGLESHFELDOR
+ *     [8]  0x0515  PLAYBACKTIME      the demo picker
+ *     [9]  0x0517  YOUINTSEENME
+ *
+ * The offset is on the declaration so test_dgroup can see the array; without it
+ * every one of these overlaps was invisible to the one test that exists to
+ * catch exactly this, which is why there were seven of them. */
+int16_t    cheat_state[10];      /* 0x0505 */
 /* 0x179d, 0x179e. The cursor's animation: a two-frame divider and a phase that
  * runs 0..3, both stepped by palette_fade_step's tail, and the phase is added to
  * the sprite index the two cursor types compute. */
@@ -288,7 +313,6 @@ extern uint8_t bg_scroll_x, bg_scroll_y;/* 0x177e, 0x177f */
 extern uint8_t bg_step_x, bg_step_y;    /* 0x1780, 0x1781 */
 
 /* used but not identified */
-int16_t  g_509, g_50b, g_1ffa, g_1ffc, g_1ffe, g_18e1, g_18e3;
 int16_t  g_2016;                 /* 0x2016 - the attempt is over; see 0x07955 */
 /* 0x0da1 is scenes[5].count: whether the level has any mirrored entities,
  * which is what the setup's two ending flags and one of the four endings
@@ -1232,11 +1256,11 @@ void far animate_scene(scene_t far *scene)
             break;
 
         /* 0x0a6f0. Drowned. duck_dies has already set the type to 3, so the
-         * default must not run - unless g_509 says ducks do not die, in which
+         * default must not run - unless cheat_state[2] says ducks do not die, in which
          * case duck_dies did nothing and the type still has to move on. */
         case 0x24:
             duck_dies(e, 0, 1);
-            chain = g_509;
+            chain = cheat_state[2];
             break;
 
         /* 0x0a71d. The other way a level is won. */
@@ -1325,7 +1349,7 @@ void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour)
         case 2:
             /* Left-handed swaps which side of the pen the tool sits on, which is
              * the whole difference between the two arms. */
-            if (left_handed)
+            if (cheat_state[6])
                 index = (2 - e->type) * 12 + e->f14 * 4 + cursor_phase + 6;
             else
                 index = (2 - e->type) * 12 + 6 - e->f14 * 4 + cursor_phase;
@@ -1354,7 +1378,7 @@ void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour)
             if (type_flags[e->type] & 4) {
                 /* The mirrored script lives in the next slot, and which of the
                  * two is used depends on the facing matching the handedness. */
-                int16_t mirror = (e->f14 == (left_handed ? -1 : 1));
+                int16_t mirror = (e->f14 == (cheat_state[6] ? -1 : 1));
 
                 index = anim_script[e->type + mirror][e->frame >> 1];
             } else {
@@ -1909,8 +1933,10 @@ void far typed_clear(char far *buf)
  * just went off. Returns non-zero when a word matched, which is how run_screen
  * knows to hold that flash for five frames.
  *
- * The flash is four OUTs straight at the DAC. The SDL backend cannot see them,
- * so a cheat there toggles silently.
+ * The flash is four OUTs straight at the DAC - green when the flag just came on,
+ * red when it just went off. That used to go nowhere, because `outp` was a no-op
+ * in sdl_io.c; it decodes the two DAC ports now, so the flash is the only
+ * feedback a cheat gives and it works.
  */
 int16_t far typed_push(char far *buf, uint8_t ch)
 {
@@ -3268,9 +3294,9 @@ item_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
                 level_load();                  /* 0x088fa */
                 free(level_text);
                 scroll_shift = 5;  g_1ffc = 0;
-                saved = g_509;  g_509 = 0;     /* switched off for the demo */
+                saved = cheat_state[2];  cheat_state[2] = 0;     /* switched off for the demo */
                 run_level(1);                  /* 0x1279d - it IS the game */
-                g_509 = saved;
+                cheat_state[2] = saved;
                 free(script_table);  free(event_table);  free(tool_event_table);
                 /* Not the original's, which leaves the counts standing and
                  * the pointers dangling. Nothing outside a demo reads them
@@ -3296,9 +3322,9 @@ item_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
                 level_load();                      /* 0x12817 */
                 free(level_text);
                 scroll_shift = 5;  g_1ffc = 0;
-                saved = g_509;  g_509 = 0;
+                saved = cheat_state[2];  cheat_state[2] = 0;
                 run_level(1);                  /* 0x1283a */
-                g_509 = saved;
+                cheat_state[2] = saved;
                 free(script_table);  free(event_table);  free(tool_event_table);
                 /* Not the original's, which leaves the counts standing and
                  * the pointers dangling. Nothing outside a demo reads them
@@ -3413,7 +3439,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                     /* 0x139b8. Only the decrement is guarded - the splash, and
                      * the game-over that follows it, are outside. [0x50b] is
                      * therefore "this attempt was free", not "say nothing". */
-                    if (!g_50b)
+                    if (!cheat_state[3])
                         --lives;                       /* 0x139bf, [0x2034] */
                     sprintf(buf, "%s: %i", menu_text[53], lives);  /* "LIVES LEFT" */
                     show_splash(buf, 100);             /* 0x139f6 */
@@ -5213,7 +5239,7 @@ void far particles_spawn(int16_t x, int16_t y, int16_t n)
  *
  * The first test is the interesting one, and it is easy to read inside out:
  * `jne` on [0x509] jumps to the RETURN, so this does nothing when force is clear
- * and g_509 is SET. g_509 is therefore "ducks do not die", and
+ * and cheat_state[2] is SET. cheat_state[2] is therefore "ducks do not die", and
  * menu_screen_driver clears it for the duration of a demo - which is exactly
  * when they do. Getting it backwards made both sides of the comparison silent
  * for object types 0x0b and 0x58.
@@ -5223,7 +5249,7 @@ void far particles_spawn(int16_t x, int16_t y, int16_t n)
  */
 void far duck_dies(entity_t far *e, int16_t force, int16_t noisy)
 {
-    if (!force && g_509)
+    if (!force && cheat_state[2])
         return;
     if (e->type == 3)
         return;
@@ -5403,7 +5429,7 @@ void far collide_scenes(void)
                 break;
 
             case 0x39: case 0x4b:                       /* 0x09e64 - eaten */
-                if (g_509)
+                if (cheat_state[2])
                     break;
                 entity_set_type(d, 0);
                 duck_count--;
@@ -5416,7 +5442,7 @@ void far collide_scenes(void)
                 break;
 
             case 0x2d:                                  /* 0x09eda */
-                if (g_509)
+                if (cheat_state[2])
                     break;
                 sound_play_guarded(0x0f, 1);
                 entity_set_type(d, 0x35);
@@ -5451,7 +5477,7 @@ void far collide_scenes(void)
             case 0x42: {                                /* 0x0a07c */
                 int16_t at;
 
-                if (g_509)
+                if (cheat_state[2])
                     break;
                 entity_set_type(d, 0);
                 duck_count--;
@@ -5581,10 +5607,6 @@ uint8_t      ambience_on;        /* 0x2015 */
 int16_t      pair_slots;         /* 0x18d1 - two per mirrored entity, and what
                                   * run_level's far allocation is sized from */
 float        level_frac[4];      /* 0x13e1, 0x13e5, 0x13e9, 0x13ed */
-int16_t      g_507;              /* 0x507 - picks 0x10c06's level picker over
-                                  * the episode intro, and enables the level
-                                  * name and the level-select key on the map
-                                  * screen. Zero in ordinary play */
 int16_t      level_seed;         /* 0x2039 - what run_level srand()s */
 int16_t      picked_index;       /* 0x18f3 - which entity the pointer is over */
 entity_t far *picked;            /* 0x18ef - and a pointer to it */
@@ -5605,8 +5627,6 @@ int16_t      level_outcome;      /* 0x200d - what run_level returns == 2 */
 int16_t      g_2018, g_1fd8, g_1fda;
 int16_t      play_log;           /* 0x51d - the fprintf gate, cleared here and
                                   * nothing has been seen to set it */
-int16_t      g_517;              /* 0x517 - with [0x1ffa], decides whether a
-                                  * 0x4d entity is placed. Unread */
 
 /* ------------------------------------------------------- 0x11013: clock_seed
  *
@@ -7708,7 +7728,7 @@ int16_t far level_screens(int16_t fresh)
      * after a level was completed, 0 after an attempt was abandoned - so
      * retrying a level plays its own intro and not the episode's. It was called
      * unconditionally here, which replayed the episode intro on every retry. */
-    if (!g_507 && fresh)                           /* 0x11058 */
+    if (!cheat_state[1] && fresh)                           /* 0x11058 */
         episode_intro();                           /* 0x1105f -> 0x1089b */
 
     i       = episode_for_level();                 /* 0x11063 */
@@ -7734,7 +7754,7 @@ int16_t far level_screens(int16_t fresh)
     }
 
     level_map_draw(&pic);                          /* 0x11131 */
-    if (g_507) {                                   /* 0x1113e */
+    if (cheat_state[1]) {                                   /* 0x1113e */
         const char far *s = menu_text[65];
 
         draw_string(&pic, s, 0xa0 - text_width(s) / 2, 0x5f);
@@ -7774,7 +7794,7 @@ int16_t far level_screens(int16_t fresh)
 
         input_poll(0x140, 0xc8);
         if (fade_direction == 0) {
-            if (g_507 && last_key == 0x20) {       /* 0x1129b - level select */
+            if (cheat_state[1] && last_key == 0x20) {       /* 0x1129b - level select */
                 leave    = 1;
                 has_page = 0;
                 fresh    = 0;                      /* 0x112a9, and dead: the
@@ -8339,7 +8359,7 @@ void far level_load(void)
             wide_scene1 = 1;
             continue;
         case 0x4d:                                    /* 0x08bdb */
-            if (g_517 || level_attempted != g_1ffa)
+            if (cheat_state[9] || level_attempted != g_1ffa)
                 scene_add(&scenes[2], x, y, type, layer);
             continue;
         case 6: case 7: case 8: case 9: case 0x0a:    /* 0x08c04 - all one arm,
