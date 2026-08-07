@@ -183,3 +183,40 @@ one run.
 
 See [drawing-port-goal](drawing-port-goal.md) and
 [running-a-session](running-a-session.md).
+
+## A stub whose name was the bug (f_14e88)
+
+`f_14e88` was a stub returning 0, called by `scan_save_slots` for "a value out
+of the save". There is no routine at `0x14e88`. The name is `0x04e88` with the
+segment wrapped into it - the same 64 KB wrap
+[address-spaces](address-spaces.md) records for near calls, here folded into a
+symbol - and `0x04e88` is two `fgetc` calls, `hi << 8` then `+ lo`. It is
+`egg_read_word` on a FILE, which `egg.c` has had all along.
+
+So the stub was a duplicate of a written routine, and the tell was in the name.
+Worth checking the other `f_` names for the same thing.
+
+Fixing the call exposed the real fault, which the stub had been hiding.
+`scan_save_slots` reads, in order: a NUL-terminated header skipped byte by byte,
+**three** strings read and thrown away, and then the word it compares. The port
+read the word first and only two strings, so once it read anything at all it
+read eleven bytes early.
+
+Three readings, and they only agreed after the third string was put back:
+
+| | before | after |
+| --- | --- | --- |
+| the file, read in Python | 8 (two strings) | 1 (three) |
+| the port | 8 | 1 |
+| the guest's own `0x13fea` | 1 | 1 |
+
+The guest was the only one that was right, and the two that agreed with each
+other were both wrong - the Python reading was written from the same
+misunderstanding as the C, so it confirmed it. **Two readings that share an
+author are one reading.** The guest is what settled it, and the way in was to
+hook `0x1402f` and print the bytes: the skip loop consumed exactly 22, which
+matched, so the disagreement had to be further on.
+
+`GAME1.SG` is 61 bytes and says what the three strings are: `CPSBO` is "BORAN"
+under the +1 cipher, then ten bytes of key, then `4e 42 4a 4f 2f 46 48 48` -
+"MAIN.EGG". The owner, a key, and the egg the save belongs to.
