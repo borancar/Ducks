@@ -6759,10 +6759,20 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
             active = 1;
         }
         break;
-    case 0x1c:                                     /* 0x07e47 */
+    /* 0x40 and 0x41 share these two, and that is the whole of the spring's
+     * horizontal kick. The dispatch for types 0x40..0x53 is a JUMP TABLE at
+     * cs:0x3a9a, not the compare chain above it - `sub bx, 0x40` at 0x07c6e -
+     * and reading only the chain is how they came to be missing here. An
+     * ordinary duck then had no case in this switch at all, so it fell to the
+     * default and kept whatever facing it was walking with, while the hero flew
+     * off sideways: exactly what a spring looked like.
+     *
+     * They also appear in the settled switch below, at 0x08427, which is where
+     * a sprung duck lands. Both are real; this one runs while it is in the air. */
+    case 0x1c: case 0x40:                          /* 0x07e47 */
         e->f14 = (int8_t) ((e->f21 < 0xf) + 1);
         break;
-    case 0x33:                                     /* 0x07e64 */
+    case 0x33: case 0x41:                          /* 0x07e64 */
         e->f14 = (int8_t) (-(e->f21 < 0xf) - 1);
         break;
     case 0x4f: case 0x51:                          /* 0x07d94 - toward the cursor */
