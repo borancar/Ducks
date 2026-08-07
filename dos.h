@@ -264,6 +264,8 @@ void far plot_pixel(int16_t x, int16_t y, uint8_t colour);
 void far plot_pixel_wide(int16_t x, int16_t y, uint8_t colour);
 void far blit_rows(desc_t far *desc, viewport_t rect, int16_t srcrow);
 void far blit_rows_masked(desc_t far *desc, viewport_t rect, int16_t srcrow);
+void far blit_warped(desc_t far *desc, viewport_t rect, uint8_t step,
+                     uint8_t mask);
 void far compose_layer(void);
 void far compose_scroll(int16_t sx, int16_t sy);
 void far draw_sprite(int16_t far *index, int16_t x, int32_t y,
@@ -410,8 +412,8 @@ int16_t far typed_push(char far *buf, uint8_t ch);
 void far slider_screen(item_t far *it, int16_t y);
 void far image_clear(desc_t far *desc, uint8_t value);
 void far load_background(uint8_t index, int16_t egg);
-void far resource_load_at(desc_t far *desc, uint8_t type, uint8_t index,
-                          int16_t pal_at, int16_t row, int16_t egg);
+int16_t far resource_load_at(desc_t far *desc, uint8_t type, uint8_t index,
+                             int16_t pal_at, int16_t row, int16_t egg);
 void far entity_set_type(entity_t far *e, int16_t type);
 void far animate_scene(scene_t far *scene);
 void far scene_alloc(scene_t far *s, int16_t capacity);
