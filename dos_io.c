@@ -754,3 +754,41 @@ void far install_int23(void far *h)
 {
     break_handler = (int16_t (far *)(void)) h;   /* d+0x3da2 */
 }
+
+/* ------------------------------------------------------ 0x067e6: mouse_init
+ *
+ * INT 33h AX=0 - reset the driver - and its answer is the game's only hardware
+ * gate that can stop it starting: main calls fatal("No mouse driver") on a
+ * zero, and prints "%i button mouse found" on anything else. AX comes back
+ * 0xffff when a driver is there and BX is the button count, so the return is
+ * "BX if AX, else 0".
+ *
+ * Everything after the reset is state this side of the driver: mouse_motion is
+ * called once to throw away whatever movement was queued, the five button
+ * globals are cleared, and the press and release counters for buttons 0 and 1
+ * are read to drain them - INT 33h 5 and 6 clear on read, so reading is how you
+ * empty them.
+ */
+int16_t far mouse_init(void)
+{
+    int16_t dx, dy;
+    union REGS r;
+
+    r.x.ax = 0;                            /* 0x067fd - INT 33h reset */
+    int86(0x33, &r, &r);
+
+    mouse_motion(&dx, &dy);                /* 0x06810 - drop queued movement */
+
+    button_a_down = 0;                     /* 0x18df */
+    g_18e1 = 0;
+    g_18e3 = 0;
+    button_b_down = 0;                     /* 0x18e7 */
+    g_18e5 = 0;
+
+    mouse_presses(0);                      /* 0x06837 - drained, not read */
+    mouse_presses(1);
+    mouse_releases(0);
+    mouse_releases(1);
+
+    return r.x.ax ? r.x.bx : 0;            /* 0x06858 */
+}
