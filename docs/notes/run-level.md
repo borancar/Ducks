@@ -1237,6 +1237,41 @@ the default must not overwrite it - and the original expresses that by loading
 `di` from `g_509`. When ducks do not die `duck_dies` did nothing, and the type
 does still have to move on. That is what `chain` is.
 
+### What an outcome does, and the gate that stops a level reacting
+
+**2026-08-07.** The rocket launched and set `level_outcome = 1`, and the level
+carried on - because nothing read it. The frame had a branch for outcome 3, the
+"ran out of ducks" one, and none for 1.
+
+`0x0df27` is the only place a level ends of its own accord:
+
+| | | |
+| --- | --- | --- |
+| **1** | a win - the rocket's last duck, or a `0x4e` | alone moves the outcome on to **2**, which is what `run_level` returns |
+| **3** | out of ducks | leaves it at 3, so `run_level` returns 0 |
+
+Both then clear `can_finish`, start the fade, and clear **`running`**
+(`[bp-0x10]`), which was the other half missing. That local gates everything from
+the ducks counter through the tool and the input: `0x0de53` jumps straight to
+`0x0df27` when it is clear. So a level that has ended stops reacting - no spawns,
+no clicks, no tool - and only the fade and the drawing play out. Without it a
+finished level would keep taking input all the way through the fade.
+
+The four "unwinnable" messages are *outside* that gate, which is consistent with
+what they are: they are not endings, and they keep being checked.
+
+**Two mistakes on the way, one of which compiled.** The gate was first written as
+a `goto` matching the original's jump - but the label had to sit before the
+outcome check and the tool section comes *after* it in the C, so the jump ran
+backwards and would have looped for ever. It built cleanly. Reordering the block
+to the original's own order - counter, tool, input, outcome, endings,
+`tool_selected` - removes the need for a jump at all, and is what the original
+does anyway.
+
+**Checked by driving it**: five ducks into level 1's rocket leaves type 5,
+`scenery_count` 0 and `level_outcome` 1, which the frame's new branch turns into
+the 2 `run_level` returns.
+
 ## The order to take it
 
 The event tables and the tool list are filled by the level loader, so reading
