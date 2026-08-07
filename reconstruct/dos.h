@@ -645,6 +645,13 @@ void far image_overlay(desc_t far *src, desc_t far *dst, int16_t row);  /* 0x108
 void far draw_level_status(desc_t far *dest);  /* 0x0b739 */
 extern uint8_t level_palette[768];   /* 0x0de1 */
 void far stamp_solid(solid_t far *o, desc_t far *dest);
+void far blast_terrain(int16_t x, int16_t y, int16_t index);   /* 0x0751b */
+void far ground_check(int16_t far *x, int16_t y);              /* 0x0799c */
+void far stamp_sprite_into(int16_t x, int16_t y, sprite_t far *sp,
+                           desc_t far *dest);                  /* 0x0739c */
+extern int16_t tool_in_use, drag_anchor_x, drag_anchor_y, drag_step_a;
+extern int16_t drag_x, drag_y, drag_step_b, drag_kind, drag_diagonal;
+extern int16_t g_20fb, g_20fd;
 
 /* 0x0a410, game.c - the three-slot message ticker */
 extern desc_t far  *message_image[3];    /* 0x210c */

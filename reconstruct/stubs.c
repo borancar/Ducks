@@ -96,17 +96,6 @@ void far set_text_colour(int16_t c)       { (void) c; }
  * byte-compared native in native.py and has not been transcribed, so entity_update
  * and the frame call into this. It complains once rather than silently doing
  * nothing, because a tool that quietly fails is how a demo stops matching. */
-void far tool_use(int16_t x, int16_t y, int16_t type)
-{
-    static int said = 0;
-
-    (void) x; (void) y; (void) type;
-    if (!said) {
-        fprintf(stderr, "tool_use (0x07a36) is not written: tools do nothing\n");
-        said = 1;
-    }
-}
-
 /* ------------------------------------------------ unnamed, by image offset */
 
 void far f_04dcd(int16_t n)               { (void) n; }
@@ -197,4 +186,30 @@ void far f_07955(void)
 {
     static int said;
     demo_stub("0x07955", &said);
+}
+
+/* 0x0739c, 244 bytes: the counterpart of blast_terrain - it stamps a sprite INTO
+ * the backdrop rather than erasing through one, which is how the bridges and the
+ * brick build terrain. Not read yet, so those tools place nothing. */
+void far stamp_sprite_into(int16_t x, int16_t y, sprite_t far *sp,
+                           desc_t far *dest)
+{
+    static int said;
+
+    (void) x; (void) y; (void) sp; (void) dest;
+    demo_stub("0x0739c, the terrain stamper - bridges and bricks build nothing",
+              &said);
+}
+
+/* 0x0799c, 154 bytes: a bridge's footing. It scans down for sixteen pixels of
+ * water within 28 rows and complains through message_post if the drop is longer,
+ * giving up after three. Only the complaint writes anything, so leaving it out
+ * costs the message and nothing else - but it also nudges x, which it does not.
+ */
+void far ground_check(int16_t far *x, int16_t y)
+{
+    static int said;
+
+    (void) x; (void) y;
+    demo_stub("0x0799c, the bridge footing check", &said);
 }

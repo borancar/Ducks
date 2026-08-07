@@ -1327,6 +1327,43 @@ worth checking, because a negative amount would step by zero within sixteen of
 its target and never arrive. The counts cannot be negative and `level_timer`
 stops at 0, so nothing here reaches that; the original has the same shape.
 
+### The bomb, and the tool that had never been written
+
+**2026-08-07.** Reported: on level 2 the bombs drop and do nothing when they
+land. Level 2's only tool is `0x18`, and `tool_names[anim_c[0x18]]` is literally
+"Bomb".
+
+The chain runs like this, and only the last link was missing. A click reaches
+`level_event`, whose default arm puts an entity of the tool's own type into scene
+3 and raises `[0x1fda]`. That entity falls, because `anim_b[0x18]` is 0 and so it
+takes no early exit from `entity_update`'s movement switch. When it lands,
+`entity_update`'s `blocked` handler sees `applying` - the argument the frame
+passes as 1 for exactly that scene - and calls **`tool_use`**, which was a stub
+that complained once. So the bomb dropped, landed, and told stderr.
+
+`tool_use` (`0x07a36`) has four arms and the bomb's is `0x18`/`0x36`: sound 9,
+leave the thing itself in scene 1 as a type `0x17`, and call **`blast_terrain`**
+(`0x0751b`), which was one of the six unwritten routines.
+
+**`blast_terrain` is the hole.** It walks a sprite over the backdrop and writes 0
+wherever the sprite has a pixel - so the shape of the blast *is* the shape of the
+sprite. The sprite is `anim_script[0x17][0]`, read through a fixed address, so it
+is the bomb's own first frame whichever tool placed it. "Terrain" is just the
+backdrop image the compositor draws and the physics probes, so erasing it is the
+whole of the damage.
+
+Then **every solid is stamped back in**. A bomb may not destroy the level's
+scenery, and rather than test for that while erasing, the original simply puts
+all of it back afterwards.
+
+**Checked by driving it**: level 2's backdrop is 400x160 with 15,591 solid
+pixels; one `tool_use(x, y, 0x18)` on the ground leaves 15,383 - 208 erased - and
+a type `0x17` in scene 1.
+
+Two of the four arms are still stubs and say so: `0x0739c`, the counterpart that
+stamps a sprite *into* the backdrop, which is how the bridges and the brick build
+terrain, and `0x0799c`, a bridge's footing check.
+
 ## The order to take it
 
 The event tables and the tool list are filled by the level loader, so reading

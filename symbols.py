@@ -250,6 +250,9 @@ FUNCTIONS = {
                                         # does nothing while g_509 is set, so
                                         # g_509 is "ducks do not die"; a demo
                                         # clears it, which is when they do
+    0x0751B: "blast_terrain",            # (x, y, sprite): writes 0 through a
+                                        # sprite into the backdrop - the bomb's
+                                        # hole - then stamps every solid back
     0x07A36: "tool_use",                 # native. (x, y, tool): where a tool's
                                         # effect is decided. Publishes [0x1fd6]
                                         # and the busy flag [0x1fd8], then one of

@@ -5064,6 +5064,140 @@ void far scene_update_all(scene_t far *s)
         entity_update(&s->entities[i], 0, 0);
 }
 
+/* tool_use's published state, and the drag it leaves running. */
+int16_t tool_in_use;             /* 0x1fd6 - which tool, for the frame to read */
+int16_t drag_anchor_x, drag_anchor_y;   /* 0x1fe0, 0x1fe2 - where it started */
+int16_t drag_step_a;             /* 0x1fe4 */
+int16_t drag_x, drag_y;          /* 0x1fe6, 0x1fe8 - where it is now */
+int16_t drag_step_b;             /* 0x1fea */
+int16_t drag_kind;               /* 0x1fdc - 4 for horizontal, 3 for diagonal */
+int16_t drag_diagonal;           /* 0x1fde */
+int16_t g_20fb, g_20fd;          /* raised with the drag */
+
+/* ------------------------------------------------------ 0x0751b: blast_terrain
+ *
+ * The bomb's hole. It walks the bomb's own sprite over the backdrop and writes 0
+ * wherever the sprite has a pixel - so the shape of the blast IS the shape of the
+ * sprite, and "terrain" here is just the backdrop image the compositor draws and
+ * the physics probes. Erasing it is the whole of the damage.
+ *
+ * Clipping is the usual four cases, and the two that matter carry a row skip:
+ * off the left adds to both the skip and the source cursor, off the right adds
+ * only to the skip, and off the top winds the source on by whole rows. The
+ * bounds compares are unsigned in the original, so a coordinate past the level
+ * wraps rather than reading as negative.
+ *
+ * Then every solid is stamped back in. A bomb is not allowed to destroy the
+ * level's scenery, and rather than test for it while erasing, the original just
+ * puts all of it back afterwards.
+ */
+void far blast_terrain(int16_t x, int16_t y, int16_t index)
+{
+    sprite_t far *sp   = &sprite_table.base[index];
+    int16_t       skip = 0;                        /* [bp-4] */
+    int16_t       src  = 0;                        /* di */
+    int16_t       right, bottom, row, col, i;
+
+    x -= sp->ox;                                   /* 0x07545 */
+    y -= sp->oy;
+    right  = (int16_t) (x + sp->w);
+    bottom = (int16_t) (y + sp->h);
+
+    if (x < 0) {                                   /* 0x0756f */
+        skip -= x;
+        src  -= x;
+        x     = 0;
+    } else if ((uint16_t) right > (uint16_t) level_w) {
+        skip += (int16_t) (right - level_w);
+        right = level_w;
+    }
+
+    if (y < 0) {                                   /* 0x075a3 */
+        src -= (int16_t) (y * sp->w);
+        y    = 0;
+    } else if ((uint16_t) bottom > (uint16_t) level_h) {
+        bottom = level_h;
+    }
+
+    for (row = y; row < bottom; row++) {           /* 0x075ca */
+        for (col = x; col < right; col++)
+            if (sp->pixels[src++])
+                backdrop.rows[row][col] = 0;
+        src += skip;                               /* 0x07604 */
+    }
+
+    for (i = 0; i < solid_count; i++)              /* 0x07612 */
+        stamp_solid(&solids[i], &backdrop);
+}
+
+/* ========================================================= 0x07a36: tool_use
+ *
+ * What a tool does where it is used, and the only place a tool has an effect.
+ * entity_update calls it when an entity carrying a tool lands - the `applying`
+ * argument, which the frame passes as 1 for exactly one scene.
+ *
+ * It first says what is happening: the tool at [0x1fd6] and a busy flag at
+ * [0x1fd8], which the frame reads to draw the cursor as 0x16 while one is in
+ * progress. Then one of four arms.
+ */
+void far tool_use(int16_t x, int16_t y, int16_t tool)
+{
+    tool_in_use = tool;                            /* 0x07a44 */
+    g_1fd8      = 1;
+
+    switch (tool) {
+    /* 0x07a74. The bomb and the balloon: leave the thing itself in scene 1 as a
+     * type 0x17, and blow the hole. The sprite the hole is cut with is
+     * anim_script[0x17][0] - a fixed address in the original, so it is the
+     * bomb's own first frame whichever of the two placed it. */
+    case 0x18:
+    case 0x36:
+        sound_play_guarded(9, 1);
+        scene_add(&scenes[1], x, y, 0x17, 0);
+        blast_terrain(x, y, anim_script[0x17][0]);
+        g_1fd8 = 0;
+        break;
+
+    /* 0x07aad. The two bridges, and the only arm that stays busy across frames:
+     * it puts an anchor and a moving end at [0x1fe0] and [0x1fe6], both (x, y-1),
+     * which is what makes it a rubber band. */
+    case 0x0c:
+    case 0x19: {
+        int16_t diagonal = (tool == 0x0c);
+
+        ground_check(&x, y);                       /* 0x07ab4 */
+        drag_anchor_x  = x;                        /* 0x1fe0 */
+        drag_anchor_y  = (int16_t) (y - 1);
+        drag_x         = x;                        /* 0x1fe6 */
+        drag_y         = (int16_t) (y - 1);
+        drag_step_a    = 1;
+        drag_step_b    = 1;
+        drag_kind      = (int16_t) (4 - diagonal);
+        drag_diagonal  = diagonal;
+        g_20fb         = 1;
+        g_20fd         = 1;
+        break;
+    }
+
+    /* 0x07b12 and 0x07b61. Both stamp the tool's own first sprite into the
+     * backdrop through 0x0739c - the brick, and everything with no arm of its
+     * own - and differ only in which sound they make. 0x0739c is not written. */
+    case 0x0e:
+        sound_play_guarded(0x22, 1);
+        g_1fd8 = 0;
+        stamp_sprite_into(x, y, &sprite_table.base[anim_script[tool][0]],
+                          &backdrop);
+        break;
+
+    default:
+        sound_play_guarded(0x0e, 1);
+        g_1fd8 = 0;
+        stamp_sprite_into(x, y, &sprite_table.base[anim_script[tool][0]],
+                          &backdrop);
+        break;
+    }
+}
+
 /* ================================================== 0x07bb2: entity_update
  *
  * One entity, one frame: what it decides to do, then the walking and falling that
