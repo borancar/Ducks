@@ -296,3 +296,42 @@ port is prone to, where the original's one allocation is many here.
 
 The game's own module is **97.5%** written after this: 183 of 194 functions,
 62,299 of 63,880 bytes, up from 93.6%.
+
+## The photographs' palette (0x0f8bd, and `outp`)
+
+`cutscene_photos` was showing whatever palette the cutscene before it had left.
+Two faults, one in the game and one in the backend, and the second is the
+interesting one.
+
+**`0x0f8bd` was a stub.** `cutscene_photos` slams the whole DAC to white - 255
+entries of 0x3f3f3f - and then calls this once a frame for 150 frames. It is not
+`palette_fade_step`: that fades toward black, and this fades *from white*, which
+is what a photograph developing looks like and why the flash is the effect
+rather than a glitch. Per channel it writes `(c * fade_level) >> 6` plus
+`(0xf - fade_level) * 4`, the colour scaling up as the white washes out, and the
+moment `fade_level` reaches 0xf it uploads the real palette and clears
+`fade_direction` - so that upload is both the last step of the fade and its end.
+`palette_apply_gamma` runs first, so what is scaled is the gamma-corrected
+palette at d+0x10e1 rather than the buffer it came from.
+
+**`outp` was a no-op in sdl_io.c**, and this is the only palette work in the
+game that reaches the hardware through the ports rather than through
+`palette_upload`. So even with the fade written, none of it would have arrived -
+and neither would the flash, nor `menu_screen_driver`'s cheat flash, both of
+which were already written and had been doing nothing. The backend now decodes
+the two DAC ports: 0x3c8 selects an entry and resets to red, 0x3c9 takes red,
+green and blue in turn and steps on after the third.
+
+That is worth generalising. A no-op in the backend is invisible in a way a stub
+is not: `stubs.c` says when it is reached, and `void outp(...) { }` says nothing
+ever. The comment above it even said the flash was "a palette operation waiting
+to be written", which was true and had been true for a long time.
+
+`test_photofade.py` compares one step of the C against the guest's own 0x0f8bd
+over every level from -1 to 16: `fade_level`, `fade_direction` and all 768 bytes
+of `palette_stored` agree in every case. The ramp itself is compared between the
+guest's OUT writes - collected by hooking the instruction - and the expression
+the C contains, which is the guest against a Python twin rather than against the
+C: `palette` is static in `sdl_io.c`, the same limit as `fb_back`. Above level
+0xe the writes seen are `palette_upload`'s, not the ramp's, and the test says so
+rather than comparing them against the wrong formula.

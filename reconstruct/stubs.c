@@ -95,7 +95,6 @@ void far set_text_colour(int16_t c)       { (void) c; }
 
 /* 0x088fa is level_load, in game.c */
 void far f_09329(void)                    { }
-void far f_0f8bd(void)                    { }
 
 /* 0x04de6. The fatal error reporter: it puts the screen back into text mode,
  * prints the message and the argument, and exits(1). Only the printing and the
