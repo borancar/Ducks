@@ -1763,3 +1763,45 @@ The draw matters as much as the sound. It happens before either guard, so the
 RNG advances on those frames whether anything is audible or not, and a demo
 replays from a seed carried in the recording. A draw the port does not make is a
 demo that diverges from what was recorded even after the clicks start landing.
+
+### The particle draw is in level space, the screen is not (0x0ab09)
+
+Level 35 keeps its flock above the view, and aborting it put the bursts where
+the ducks would have been if the view had been at the origin. `particles` was:
+
+```c
+plot(p->x >> 3, p->y >> 3, p->colour);
+```
+
+The pool is in level coordinates. The original turns each one into a screen
+coordinate and clips it to the viewport, which is most of what the routine does:
+
+```
+0x0ab2f  x = (p->x >> 3) - viewport_game.scroll_x + viewport_game.left
+0x0ab39  if (x <  left)   next          ; jb  - unsigned
+0x0ab3f  if (x >= right)  next          ; jae
+0x0ab5f  y = (p->y >> 3) - viewport_game.scroll_y + viewport_game.top
+0x0ab6d  if (y <  top)    next
+0x0ab76  if (y >= bottom) next
+0x0ab90  plot(x, y, colour)
+```
+
+`native.py`'s `native_particles` already had this and says why the form matters:
+the shift helper at `0:0x1148` is **SHR, not SAR**, so the fixed point is
+unsigned, the arithmetic is 16-bit, and the wrap has to be applied before the
+compare - that is what lets one bound reject both sides, since an x left of the
+view wraps to a huge value and fails the upper test. The C is a transcription of
+that native and now says the same thing.
+
+`particles_step` uses the same helper at 0x0aa40 and 0x0aa5c, so those shifts are
+unsigned too. It makes no difference there - the retire tests above them leave
+both coordinates non-negative - but the form should not imply otherwise.
+
+**Checked**: `plane_loop 0x0e4dc` is the loop that draws the pool, and byte-
+compared against the guest with the viewport scrolled to x=30 and 248 particles
+live it matches on all 631 calls. That verifies the native the C was copied
+from, not the C: `fb_back` is `static` in `sdl_io.c`, so no harness has ever
+compared the port's screen against anything. Getting a state that reaches it at
+all needed ESC pressed inside the run - `snap012`'s pool is empty, so
+`replay.py --require particles` on it correctly reports that a clean run proved
+nothing.
