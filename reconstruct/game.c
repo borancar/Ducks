@@ -5567,7 +5567,13 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         e->f14 = 0;
     if ((int8_t) e->f15 < step)                    /* 0x080fb - one a frame */
         e->f15++;
-    speed  = (int8_t) e->f15 / 2;                  /* 0x0810f */
+    /* 0x08117 is `sar ax, 1`, which floors - and C's / 2 truncates toward zero,
+     * so the two disagree on every ODD NEGATIVE speed. -1 is the case that
+     * matters: the balloon's arm sets f15 to -2 every frame, the increment just
+     * above takes it to -1, and the original then rises a pixel a frame where
+     * `/ 2` gives 0 and it hangs in the air. Even values agree, which is why
+     * everything that falls looked right. */
+    speed  = (int16_t) ((int8_t) e->f15 >> 1);     /* 0x0810f - sar, not / 2 */
     facing = (int8_t) e->f14;
 
     /* 0x0812a. Once per pixel of intended movement. */

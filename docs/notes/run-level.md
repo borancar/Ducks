@@ -1407,6 +1407,48 @@ on. The first attempt divided by zero - `level_sprites.count` is 0 until
 
 With these, **every routine a demo reaches is written**: 98 of 98.
 
+### The balloon, and `sar` is not `/ 2`
+
+**2026-08-07.** Reported: the balloon does not rise. It is `entity_update`'s
+`0x36` arm, which sets `f15` to `-2` every frame, and the increment just below
+takes it to `-1` before the speed is worked out. The original does that with
+`sar ax, 1` at `0x08117`; the port had `/ 2`.
+
+**Those differ on every odd negative.** `sar` floors, so `-1` halves to `-1`; C
+truncates toward zero, so `-1 / 2` is `0`. The balloon's speed was therefore
+exactly zero and it hung in the air. Every even value agrees, which is why
+everything that *falls* looked right and only the one thing that rises at a
+single pixel a frame was broken.
+
+`test_entity` compares fifteen fields of every entity against the guest over six
+captures and did not catch it, for the reason it always says out loud: none of
+those states has an entity with an odd negative speed. Fixed and driven: a
+balloon at y=120 now walks 119, 118, 117, 116, 115 and stops on terrain.
+
+### The sound, and what has been ruled out
+
+Reported alongside it: level 3 and SQUEAKY VOICES sound broken, like a wrong
+sample rate. One real error was found and fixed, and it is small:
+
+**The card cannot play an arbitrary rate and the original never asks it to.** It
+programs a DSP time constant of `256 - 1000000/rate`, and the hardware then runs
+at `1000000/(256 - tc)`. The game asks for **11000** and the card therefore plays
+at **11111**. The port was handing SDL the 11000 the game asked for, so
+everything ran 1% flat. `sound_init` now rounds through the time constant the
+same way.
+
+1% is not what "broken" usually means, so the rest of the path was checked and is
+correct: the samples decode at the right length (45,818 bytes for `0x4b`, not
+truncated by the `int16_t` count), the mixer consumes exactly one sample per
+output frame, the volume scaling agrees with the original's `shr` (the low byte
+of a logical and an arithmetic shift are the same here), and SDL reports it is
+feeding 11111 Hz 8-bit mono into a 44100 Hz device - so it is resampling rather
+than playing the data at the device's rate.
+
+`audio_open` now logs the negotiated format, because "SDL quietly did not
+resample" is the one failure that would produce exactly this symptom and cannot
+be seen from outside.
+
 ## The order to take it
 
 The event tables and the tool list are filled by the level loader, so reading

@@ -600,6 +600,20 @@ int16_t far audio_open(int16_t rate)
         return 0;
     }
     SDL_ResumeAudioStreamDevice(audio);
+
+    /* Say what was actually negotiated. The samples are 8-bit signed at the
+     * game's own rate and SDL is expected to resample to whatever the device
+     * wants; if it ever does not, everything plays at the device's rate instead
+     * and the whole game sounds fast. That is a hard thing to guess at from the
+     * outside, and one line here settles it. */
+    {
+        SDL_AudioSpec src, dst;
+
+        if (SDL_GetAudioStreamFormat(audio, &src, &dst))
+            SDL_Log("audio: feeding %d Hz %d-bit x%d, device wants %d Hz "
+                    "fmt %#x x%d", src.freq, SDL_AUDIO_BITSIZE(src.format),
+                    src.channels, dst.freq, dst.format, dst.channels);
+    }
     return 1;
 }
 
