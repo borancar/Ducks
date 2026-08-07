@@ -190,7 +190,7 @@ int16_t      next_type[111];     /* 0x0416 - what a type becomes when its script
 
 /* the menu and the attract cycle */
 int16_t    attract_choice;       /* 0x21ae - 0 demos, non-zero shows a screen */
-int16_t    menu_idle_suppress;   /* 0x2177 - non-zero holds the menu still */
+int16_t    game_in_progress;   /* 0x2177 - a game is under way, so no idle demo */
 uint8_t    g_2038;               /* 0x2038 - how many demos to choose from;
                                   * byte, high half zeroed */
 
@@ -1937,7 +1937,7 @@ item_t far *far run_screen(menu_t far *menu, void far *chosen, int16_t owns)
          * is skipped. */
         if (fade_direction != -1) {
 
-            if (idle++ > 0x1f4 && !menu_idle_suppress) {
+            if (idle++ > 0x1f4 && !game_in_progress) {
                 timed_out = 1;                     /* 0x0c9e2 */
                 fade_direction = -1;
             }
@@ -1981,7 +1981,7 @@ item_t far *far run_screen(menu_t far *menu, void far *chosen, int16_t owns)
                      * and only from the main menu with no game in progress. */
                     if (cheat_state[8]) {
                         cheat_state[8] = 0;
-                        if (menu == &main_menu && !menu_idle_suppress) {
+                        if (menu == &main_menu && !game_in_progress) {
                             timed_out = 1;
                             fade_direction = -1;
                             escaped = 1;
@@ -2345,19 +2345,19 @@ void far build_menus(void)
     /* END CURRENT GAME is there only while a game is in progress, and that is
      * the whole of what an item's flag pointer is for. */
     menu_add_submenu(&menu_play, menu_text[17], &menu_end_game,
-                     &menu_idle_suppress);
+                     &game_in_progress);
     menu_add_submenu(&menu_play, menu_text[12], &main_menu,      &menu_always);
     menu_play.background = 12;
 
     menu_reset(&menu_end_game);
     menu_add_title(&menu_end_game, extra_text[10]);
-    menu_add_action(&menu_end_game, extra_text[11], 3, &menu_idle_suppress, 0);
+    menu_add_action(&menu_end_game, extra_text[11], 3, &game_in_progress, 0);
     menu_add_submenu(&menu_end_game, extra_text[12], &menu_play, &menu_always);
     menu_end_game.background = 13;
 
     menu_reset(&menu_load_save);
     menu_add_title(&menu_load_save, menu_text[11]);
-    menu_add_action(&menu_load_save, menu_text[35], 5, &menu_idle_suppress, 0);
+    menu_add_action(&menu_load_save, menu_text[35], 5, &game_in_progress, 0);
     menu_add_action(&menu_load_save, menu_text[34], 6, &menu_always, 0);
     menu_add_submenu(&menu_load_save, menu_text[33], &menu_play, &menu_always);
     menu_load_save.background = 15;
@@ -2427,7 +2427,7 @@ void far menus_after_game(void)
     menu_set_text(&menu_play.item[0], menu_text[4]);       /* "START A NEW GAME" */
     menu_play.item[0].action = 0x12;
     menu_play.item[0].link   = &menu_episodes;
-    menu_idle_suppress = 0;
+    game_in_progress = 0;
 }
 
 /* -------------------------------------------- 0x0f5b1: cutscene_rocket_space
@@ -2768,8 +2768,12 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                     sound_play_guarded(0x29, 1);
                     show_splash(menu_text[40], 200);   /* "SECRET LEVEL!" */
                 }
-                if (level_screens(g_21a3))       /* 0x1102a; non-zero leaves */
-                    break;
+                /* 0x13828. Non-zero does not leave the loop - it re-runs the
+                 * screens, because the only thing that returns non-zero is the
+                 * level-select key, and the screens have to be built again for
+                 * whatever level was just picked. */
+                while (level_screens(g_21a3))    /* 0x1102a, 0x13835 jne back */
+                    ;
                 scroll_shift = 2;
 
                 if (shareware_limit < level_attempted      /* 0x13841 */
@@ -2778,27 +2782,34 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                     egg_load_one(0xfc, 0x48, 0xff);
                     menu = &main_menu;
                     high_score_screen();  menus_after_game();
-                    break;
+                    goto play_tail;                        /* 0x139a9 */
                 }
 
                 if (!run_level(0)) {           /* 0x1387e: the run ended badly */
-                    g_21a3 = 0;
-                    if (!g_50b) {
-                        --lives;                   /* [0x2034] */
-                        sprintf(buf, "%s: %i", menu_text[53], lives);  /* "LIVES LEFT" */
-                        show_splash(buf, 100);
-                        release_sounds();
-                        if (lives == 0) {          /* GAME OVER */
-                            menu = &main_menu;
-                            sound_play_guarded(0x16, 1);
-                            show_resource(0x4d, 6, 50, 0xff);
-                        }
+                    g_21a3 = 0;                        /* 0x139b2 */
+                    /* 0x139b8. Only the decrement is guarded - the splash, and
+                     * the game-over that follows it, are outside. [0x50b] is
+                     * therefore "this attempt was free", not "say nothing". */
+                    if (!g_50b)
+                        --lives;                       /* 0x139bf, [0x2034] */
+                    sprintf(buf, "%s: %i", menu_text[53], lives);  /* "LIVES LEFT" */
+                    show_splash(buf, 100);             /* 0x139f6 */
+                    release_sounds();                  /* 0x139fc */
+                    if (lives == 0) {                  /* 0x13a01: GAME OVER */
+                        menu = &main_menu;             /* 0x13a08 */
+                        sound_play_guarded(0x16, 1);
+                        show_resource(0x4d, 6, 50, 0xff);
+                        /* The same two calls the ending uses. Without them the
+                         * game-over screen was the last thing the run did, and
+                         * the hall of fame never came up. */
+                        high_score_screen();           /* 0x13a2c */
+                        menus_after_game();            /* 0x13a30 */
                     }
-                    break;
+                    goto play_tail;                    /* 0x139b0 */
                 }
 
                 if (g_1ffc || g_1ffe)          /* 0x1388b, 0x13895 */
-                    break;
+                    goto play_tail;            /* 0x13892, 0x1389c */
 
                 g_21a3 = 1;                      /* the level was completed */
                 sound_play_guarded(2, 1);
@@ -2818,26 +2829,42 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                 }
                 release_sounds();                      /* 0x138ff */
 
-                /* The ending. Only DUCKING HELL - level 80 - passes the gate. */
-                if (episode_end_gate(level_attempted, episode_egg_index)
-                    && episode_egg_index == 0) {                /* 0x1390d */
-                    set_buffer(&buf[0]);
-                    cutscene_rocket_space();                    /* id 0x32 */
-                    sound_play_loop(0x4a, ambience_volume, 0xff);
-                    cutscene_rocket_landing();                  /* ids 0x33/0x34 */
-                    cutscene_doorstep();                        /* ids 0x37/0x38 */
-                    cutscene_welcome_home();                    /* id 0x36 */
-                    release_sounds();
-                    cutscene_photos();                          /* ids 0x3a-0x3c */
-                    sound_play_loop(0x4a, ambience_volume, 0xff);
-                    cutscene_night_monster();                   /* the animation */
-                    release_sounds();
-                    dac_set_black(0, 0);
-                    input_poll(320, 200);
-                    set_buffer(&buf[0]);
+                /* The ending. Only DUCKING HELL - level 80 - passes the gate,
+                 * and only episode 0 has cutscenes behind it; the other
+                 * episodes end on the hall of fame alone. */
+                if (episode_end_gate(level_attempted, episode_egg_index)) {
+                    if (episode_egg_index == 0) {               /* 0x1391a */
+                        set_buffer(&buf[0]);
+                        cutscene_rocket_space();                /* id 0x32 */
+                        sound_play_loop(0x4a, ambience_volume, 0xff);
+                        cutscene_rocket_landing();              /* ids 0x33/0x34 */
+                        cutscene_doorstep();                    /* ids 0x37/0x38 */
+                        cutscene_welcome_home();                /* id 0x36 */
+                        release_sounds();
+                        cutscene_photos();                      /* ids 0x3a-0x3c */
+                        sound_play_loop(0x4a, ambience_volume, 0xff);
+                        cutscene_night_monster();               /* the animation */
+                        release_sounds();
+                        dac_set_black(0, 0);
+                        input_poll(320, 200);
+                        set_buffer(&buf[0]);                    /* 0x13993 */
+                    }
+                    menu = &main_menu;                          /* 0x13999 */
                     high_score_screen();  menus_after_game();
+                    goto play_tail;                             /* 0x139a9 */
                 }
                 level_attempted++;                 /* 0x139ab */
+
+              play_tail:                           /* 0x13a33 */
+                /* Every way out of a level lands here, including the game-over
+                 * one. The original plays one level per pass through the
+                 * switch and then lets the menu back in, which is what
+                 * menus_resume is for: it relabels PLAY DUCKS' first item to
+                 * PLAY NEXT LEVEL before the driver draws it again. */
+                if (game_in_progress)
+                    menus_resume();                /* 0x13a3a */
+                if (!g_1ffc && !g_1ffe)            /* 0x13a3e, 0x13a48 */
+                    break;                         /* 0x13a52 */
             }
             break;
 
@@ -3331,7 +3358,7 @@ void far find_egg_by_id(const char far *id, const char far *name)
  * action changes with it, from "start a new game" to "carry on". */
 void far menus_resume(void)
 {
-    menu_idle_suppress = 1;                        /* a game is in progress */
+    game_in_progress = 1;                        /* a game is in progress */
     menu_set_text(&main_menu.item[0], menu_text[3]);       /* "BACK TO IT_" */
     menu_play.item[0].action = 2;
     menu_set_text(&menu_play.item[0],
@@ -3632,8 +3659,8 @@ void far register_screen(void)
     menu_add_action(&m, menu_text[33], 0x0f, &menu_always, 0);  /* CANCEL */
     m.background = 7;
 
-    saved = menu_idle_suppress;
-    menu_idle_suppress = 1;
+    saved = game_in_progress;
+    game_in_progress = 1;
 
     menu_screen_driver(&m, &chosen, 0);
     if (m.item[chosen].action == 0x0b) {
@@ -3667,7 +3694,7 @@ void far register_screen(void)
     if (!ok)
         show_splash("ABORTED", 100);               /* d+0x2739 */
 
-    menu_idle_suppress = saved;
+    game_in_progress = saved;
 }
 
 /* ------------------------------------------------- 0x12951: load_game_screen
