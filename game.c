@@ -5603,6 +5603,7 @@ int16_t far run_level(int16_t demo)
      * and the tool announcement is always three frames. */
     int16_t tool_slot = 0;
     int16_t ending_said = 0;                       /* [bp-0x22], 0x0d846 */
+    int16_t running = 1;                           /* [bp-0x10], 0x0d829 */
     int16_t hold = 0;                              /* [bp-0x28] */
     int16_t over = 0;                              /* [bp-0x13] */
     /* The flock's average, and what the camera followed last. Both are the
@@ -5724,34 +5725,78 @@ int16_t far run_level(int16_t demo)
     do {
         input_poll(level_w, level_h);
 
-        /* 0x0de5c. Once the ducks are gone - or [0x2016] says the level is over -
-         * a counter runs for 0x20 frames and then sets the outcome to 3, which is
-         * what fades out a level that has simply run out of ducks. */
-        if (duck_count == 0 || g_2016)
-            over++;
-        if (over >= 0x20)
-            level_outcome = 3;
-        if (level_outcome == 3) {                   /* 0x0df46 */
+        /* 0x0de53. Everything from here to the outcome check is behind
+         * `running`. Once an outcome is settled the level stops reacting - no
+         * more spawns, no more input, no more tool - and only the fade and the
+         * drawing are left to play out. The original expresses it as a jump
+         * straight to 0x0df27. */
+        if (running) {
+            /* 0x0de5c. Once the ducks are gone - or [0x2016] says the level is
+             * over - a counter runs for 0x20 frames and then sets the outcome to
+             * 3, which is what fades out a level that has run out of ducks. */
+            if (duck_count == 0 || g_2016)
+                over++;
+            if (over >= 0x20)
+                level_outcome = 3;
+
+            /* 0x0de79. The tool. The selection is remembered first, because
+             * tool_selected compares against it, and then the demo's table moves
+             * it - a played level reads 0x0cf07 instead, which is not written. */
+            tool_prev = tool_at;                   /* 0x0de7c */
+
+            /* 0x0de7f. A demo ends the moment anything is touched - that is
+             * attract mode's whole exit. */
+            if (demo) {
+                if (g_18e5 || last_key)
+                    fade_direction = -1;
+                tool_events();                     /* 0x0d4c2 */
+            }
+
+            /* ESC, for a played level. The four endings below only post a
+             * message, so this is still how a played level is left. */
+            if (!demo && last_key == 0x1b)
+                fade_direction = -1;
+
+            /* The events only fire while no tool is in progress, which is the
+             * guard at 0x0deaa, and the cursor entity's type follows the tool:
+             * 0x2a plus which side of the cursor the flock is on for a mirrored
+             * tool, 0x14 otherwise, and 0x16 while one is being used. */
+            if (!g_1fd8 && !g_1fda) {              /* 0x0deaa */
+                entity_set_type(cursor_scene.entities,
+                                (type_flags[tool_type] & 2) ? g_dab + 0x2a : 0x14);
+                if (demo)
+                    demo_events();                 /* 0x0def3 */
+                else if (g_18e1)
+                    level_event((int16_t) mouse_x, (int16_t) mouse_y);
+            } else {
+                entity_set_type(cursor_scene.entities, 0x16);
+                tool_at = tool_prev;               /* 0x0df24 - put it back */
+            }
+        }
+
+        /* 0x0df27. What an outcome does, and the only place a level ends of its
+         * own accord. Outcome 1 is a win - the rocket's last duck, or a 0x4e -
+         * and it alone moves the outcome on to the 2 that run_level returns;
+         * outcome 3, having run out of ducks, leaves it at 3 and so returns 0.
+         * Both stop the level reacting and start the fade.
+         *
+         * Without this a rocket could launch, set outcome 1, and nothing would
+         * ever look at it - which is exactly what it did. */
+        if (level_outcome == 1) {                  /* 0x0df27 */
+            running        = 0;
+            fade_direction = -1;
             can_finish     = 0;
+            level_outcome  = 2;
+        } else if (level_outcome == 3) {           /* 0x0df46 */
+            can_finish     = 0;
+            running        = 0;
             fade_direction = -1;
         }
 
-        /* 0x0de7f. A demo ends the moment anything is touched - that is attract
-         * mode's whole exit - and the four endings at 0x0df5d are skipped for a
-         * demo, so otherwise it runs until the ducks are gone. */
-        if (demo && (g_18e5 || last_key))
-            fade_direction = -1;
-
-        /* ESC, for a played level. The four endings below post a message and
-         * say the attempt is lost; they do not end it, so this is still how a
-         * played level is left. */
-        if (!demo && last_key == 0x1b)
-            fade_direction = -1;
-
         /* 0x0df5d. The four ways an attempt becomes unwinnable. Each posts one
-         * line plus "Press ESCAPE to abort this attempt", and `ending_said` -
-         * a frame local, cleared once in the setup - makes that at most one
-         * message per level however long it runs.
+         * line plus "Press ESCAPE to abort this attempt", and `ending_said` - a
+         * frame local cleared once in the setup - makes that at most one message
+         * per level however long it runs.
          *
          * They only say so. Nothing here clears level_running or touches the
          * outcome, which is why the panel keeps counting and the player is the
@@ -5782,30 +5827,6 @@ int16_t far run_level(int16_t demo)
                 message_post(menu_text[79], menu_text[80]);
                 ending_said = 1;
             }
-        }
-
-        /* 0x0de79. The tool. The selection is remembered first, because
-         * tool_selected below compares against it, and then the demo's table
-         * moves it - a played level reads 0x0cf07 instead, which is not written.
-         *
-         * The events only fire while no tool is in progress, which is the guard at
-         * 0x0deaa, and the cursor entity's type follows the tool: 0x2a plus which
-         * side of the cursor the flock is on for a mirrored tool, 0x14 otherwise,
-         * and 0x16 while one is being used. */
-        tool_prev = tool_at;                        /* 0x0de7c */
-        if (demo)
-            tool_events();                         /* 0x0d4c2 */
-
-        if (!g_1fd8 && !g_1fda) {                   /* 0x0deaa */
-            entity_set_type(cursor_scene.entities,
-                            (type_flags[tool_type] & 2) ? g_dab + 0x2a : 0x14);
-            if (demo)
-                demo_events();                      /* 0x0def3 */
-            else if (g_18e1)
-                level_event((int16_t) mouse_x, (int16_t) mouse_y);
-        } else {
-            entity_set_type(cursor_scene.entities, 0x16);
-            tool_at = tool_prev;                    /* 0x0df24 - put it back */
         }
 
         /* 0x0e088. And now the selection becomes the tool. */
