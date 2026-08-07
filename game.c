@@ -1687,6 +1687,59 @@ void far draw_banner(const char far *s, table_t far *set, int16_t y,
     }
 }
 
+/* 0x204f. Four colours for the cell below, indexed `(selected << 1) + hard`.
+ * Initialised data - nothing writes it - so it is carried, like
+ * particle_colours. */
+uint8_t picker_colour[4] = { 0x50, 0x59, 0x5c, 0x5d };
+
+/* ============================================== 0x10abc: one level-picker cell
+ *
+ * The cheat's level picker draws its levels as a grid of squares, ten across,
+ * and this is one of them: a 0x1a square in one of four colours with a two-pixel
+ * drop shadow, and the level's number over it.
+ *
+ * `slot` is the level's place within its episode - the caller passes
+ * `number - episode_index[i].first` - so the grid is per episode and starts at
+ * the top left whatever the levels are numbered. Forty fit; past that it draws
+ * nothing at all rather than wrapping, which is the `slot >= 0x28` at 0x10ae1.
+ *
+ * The shadow is the first memset and it is drawn FIRST, two rows down and two
+ * columns right, in colour 0; the cell goes over it. Both are `memset` in the
+ * original too - 0:0x4c09 - so the row is one call, not a loop.
+ *
+ * The bounds checks are the port's. The original writes 0x1a bytes into a row it
+ * does not measure, which is one allocation there and one per row here.
+ *
+ * Nothing calls this yet: its only caller is 0x10c06, the picker itself, and
+ * that is not written. The coverage report counts 0x10c06 as done because the
+ * offset appears in a comment on cheat_state - which is the report being fooled
+ * by its own rule, and is worth knowing before trusting the number.
+ */
+void far picker_cell(int16_t slot, int16_t number, desc_t far *page,
+                     int16_t current, int16_t hard)
+{
+    char    buf[8];                                /* [bp-8] */
+    uint8_t colour;
+    int16_t x, y, row;
+
+    colour = picker_colour[((current == number) << 1) + hard];   /* 0x10ada */
+    if (slot >= 0x28)                              /* 0x10ae1 */
+        return;
+
+    x = (int16_t) ((slot % 10) * 32 + 2);          /* 0x10af3 */
+    y = (int16_t) ((slot / 10) * 32 + 0x16);       /* 0x10b04 */
+
+    for (row = y; row < y + 0x1a; row++) {         /* 0x10b67 */
+        if (row + 2 < page->h && x + 2 + 0x1a <= page->w)
+            memset(page->rows[row + 2] + x + 2, 0, 0x1a);        /* the shadow */
+        if (row < page->h && x + 0x1a <= page->w)
+            memset(page->rows[row] + x, colour, 0x1a);           /* 0x10b57 */
+    }
+
+    sprintf(buf, "%i", number);                    /* 0x10b7d, d+0x24d0 */
+    draw_string(page, buf, x + 1, y + 0x10);       /* 0x10b9a */
+}
+
 /* ================================================= 0x11bee: the episode page
  *
  * One page of text over picture 0x4d:7, held until a key. The caller hands it
