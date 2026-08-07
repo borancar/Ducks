@@ -209,6 +209,29 @@ void far sound_preload(uint8_t id, int16_t scale)
     sound_keep_mark = sound_count;                 /* 0x2909 */
 }
 
+/* --------------------------------------------- 0x1462:0x215: ambience_random
+ *
+ * One frame in 128, run_level's frame calls this (0x0dcd3), and it plays one of
+ * the sounds the level preloaded on voice 2 - the occasional quack over the
+ * looping ambience. This is what reads the watermark at d+0x2909, which
+ * sound_preload writes and nothing here had been found to read.
+ *
+ * The draw happens before either guard, so the RNG advances on every one of
+ * those frames whether a sound comes out or not. That matters more than the
+ * sound does: a demo replays from a seed, so a draw the port does not make is a
+ * demo that diverges from the recording.
+ */
+void far ambience_random(void)
+{
+    uint16_t r = (uint16_t) game_rand();           /* 0x1483b */
+
+    if (!sound_state || !sound_keep_mark)          /* 0x14843, 0x1484a */
+        return;
+    if (is_sound_playing(2))                       /* 0x14853 - voice 2 in use */
+        return;
+    play_sample(sample_table[r % (uint16_t) sound_keep_mark], 2, 0);
+}
+
 /* --------------------------------------------------- 0x146cd: release_sounds
  *
  * Everything goes: the five labelled voices are stopped by name, then every

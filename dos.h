@@ -505,6 +505,7 @@ int16_t far play_sample(sample_t *desc, int16_t id, int16_t loop);
 void far stop_voice(int16_t slot);
 void far stop_sound_by_id(int16_t id);
 int16_t far is_sound_playing(int16_t id);
+void far ambience_random(void);
 void far release_sounds(void);
 void far sound_init(int16_t rate);
 void far sound_mix(int8_t *dst, int16_t frames);

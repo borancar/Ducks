@@ -156,8 +156,10 @@ uint8_t         g_210b;          /* 0x210b - the chosen egg's format version */
 int16_t    level_attempted;      /* 0x2032 - the level about to be played. A
                                   * word; some sites read only its low byte */
 int16_t    episode_egg_index;    /* 0x0094 - which egg the episode is in */
-uint8_t    shareware_limit;      /* 0x054a - per egg, not a constant; read as
-                                  * a byte with the high half zeroed */
+uint8_t    shareware_limit = 0x14;  /* 0x054a - per egg, not a constant; read as
+                                  * a byte with the high half zeroed. The 0x14 is
+                                  * the image's own initialiser; case 1 replaces
+                                  * it from the egg before anything compares it */
 int16_t    registered;           /* 0x0548 */
 char far  *owner_name;           /* 0x0542 - who the copy is registered to */
 int16_t    owner_key;            /* 0x0546 */
@@ -2740,6 +2742,11 @@ item_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
                 run_level(1);                  /* 0x1279d - it IS the game */
                 g_509 = saved;
                 free(script_table);  free(event_table);  free(tool_event_table);
+                /* Not the original's, which leaves the counts standing and
+                 * the pointers dangling. Nothing outside a demo reads them
+                 * and every demo reloads them, so this changes nothing -
+                 * except that the frame above cannot walk freed memory. */
+                script_table = NULL;  script_count = 0;
                 release_sounds();
             } else {
                 show_splash("DEMO MISSING", 100);  /* 0x1287e, DGROUP+0x26bd */
@@ -2763,6 +2770,11 @@ item_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
                 run_level(1);                  /* 0x1283a */
                 g_509 = saved;
                 free(script_table);  free(event_table);  free(tool_event_table);
+                /* Not the original's, which leaves the counts standing and
+                 * the pointers dangling. Nothing outside a demo reads them
+                 * and every demo reloads them, so this changes nothing -
+                 * except that the frame above cannot walk freed memory. */
+                script_table = NULL;  script_count = 0;
                 release_sounds();
             } else {
                 show_splash("DEMO MISSING", 100);
@@ -4219,7 +4231,12 @@ int16_t level_w, level_h;        /* 0x1701, 0x1703 */
 uint8_t scroll_shift;            /* 0x18f5 - how much of the way to the target
                                   * the view moves each frame, as a right shift.
                                   * The menu sets it to 5 before a demo */
-int16_t scroll_smooth;           /* 0x4fa - 1 to ease, 0 to only move the view
+/* 0x4fa, and initialised DATA: the image has 1 and four live guests - the main
+ * menu, snap003, snap012, level80-late - all read 1, so nothing writes it but
+ * the 'c' key and MOUSE SETTINGS. Declared bare, the port ran with SMOOTH
+ * SCROLL off and every camera move was the hard edge push below rather than the
+ * ease, which is what "the demo is missing mouse scrolling" was. */
+int16_t scroll_smooth = 1;       /* 0x4fa - 1 to ease, 0 to only move the view
                                   * when the followed point would leave it.
                                   * Starts 1; a level event toggles it */
 uint8_t bg_drift;                /* 0x202c - two base-3 digits the level carries */
@@ -6653,6 +6670,49 @@ int16_t far run_level(int16_t demo)
      * can be seen. See docs/notes/run-level.md for the map of what belongs here.
      */
     do {
+        /* 0x0dcc9. The frame opens with a draw and a tick, and the tick is the
+         * one the demo runs on: demo_events and tool_events both fire a record
+         * when its frame number EQUALS level_clock, so a clock that never moves
+         * is a demo where nothing is ever clicked. It was set to 0 in the setup
+         * and incremented nowhere, which is why the attract mode showed a level
+         * with gravity and monsters in it and no player. */
+        if ((game_rand() & 0x7f) == 0)             /* 0x0dcce */
+            ambience_random();                     /* 0x0dcd3 */
+        level_clock++;                             /* 0x0dcd8, [0x201a] */
+
+        /* 0x0ddbc. The demo's OTHER table, and the one that walks the hero.
+         * Three bytes a record - a frame and a heading - with script_at as the
+         * cursor: when the record under it names this frame the cursor moves
+         * on, and the record it lands on gives the heading. entity_update's
+         * type 1 arm reads that out of [0x2100] as the hero's f14, but only
+         * when `scripted` is set, so this is demo input and nothing else.
+         *
+         * event_table is the clicks - the tool - and this is the walking. Only
+         * the first was written, which is why the attract mode placed items and
+         * never moved. The heading byte is 4, 5 or 6 in every demo in the egg,
+         * stored plus five, so -1, 0 or +1.
+         *
+         * The second lookup is not bounds-checked in the original - 0x0ddc3
+         * jumps straight to it - so once the cursor reaches the end it reads one
+         * record past a farmalloc'd block. Measured across six snapshots the
+         * byte it lands on is 02, 00, 00, 00, 03, 00: the next allocation's
+         * contents, not a header, so unlike terrain_at there is nothing to
+         * match. menu-halloffame-2.snap has script_at == script_count, so the
+         * original does get there. Holding the last record is the choice, and
+         * every demo in the egg ends on heading 0, so the hero stops. */
+        if (script_count && script_table) {
+            uint16_t at = (uint16_t) script_at;
+
+            if (at < script_count                  /* 0x0ddbf, unsigned */
+                && *(uint16_t far *) (script_table + at * 3)
+                   == (uint16_t) level_clock)      /* 0x0ddd7 */
+                at = (uint16_t) ++script_at;       /* 0x0dddd */
+            if (at >= script_count)
+                at = script_count - 1;             /* see above - not the
+                                                    * original's, which reads on */
+            g_2100 = (int8_t) (script_table[at * 3 + 2] - 5);   /* 0x0ddf4 */
+        }
+
         /* 0x0ddfe. The clock. `tick` is the frames left in the current second
          * and timer_period is how many that is, so level_timer comes down one
          * per period and the warning at 0x1c plays once as it lands on zero.
