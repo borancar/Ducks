@@ -118,3 +118,52 @@ The far-call frame is already unpacked by then. A `UC_HOOK_CODE` on `0x077ae`
 does *not* work for a routine native.py has taken over - the first attempt read
 six bytes of nothing and reported `n=11479` eight times, which is the failure
 mode [prove the instrument first](verification-lessons.md) is about.
+
+## A probe that produced convincing false differences (springs, 2026-08-08)
+
+Worth recording because it is exactly the trap a frame runner will fall into.
+
+The report was that a sprung duck only goes up. To check it, a probe loaded
+level 44 - the one level with both springs - into the guest and the port, copied
+the guest's scene 0 and scene 2 into the port, put a duck on each spring, ran
+`collide_scenes` on both and then stepped the duck for twenty frames. It
+reported the port setting the duck's type to 2 where the guest set 0x40, which
+looks exactly like the bug being hunted.
+
+It was the probe. Driving the port's own `collide_scenes` on a hand-built state
+- one duck, one spring, nothing else - gives `0x41`/`0x40`, `f15 = 0xf9` and the
+object at `0x3e`/`0x3f`, which is the guest's answer and the disassembly's.
+
+What the probe got wrong was everything it did not copy: `test_entity.py`
+marshals the `lead` pointers between the two address spaces and syncs the other
+scenes and the scalars, and this copied two scenes and nothing else. A duck with
+a stale `lead` behaves differently, and the difference surfaces somewhere that
+looks unrelated.
+
+So for the frame runner: **copying the entity arrays is not copying the state.**
+Reuse `test_entity.py`'s marshalling rather than writing it again, and before
+believing any difference it reports, reproduce it on the smallest state that
+shows it - which is what settled this in one run after an hour of not settling
+it.
+
+## What the springs actually do
+
+Not a bug, and worth writing down so it is not re-investigated. Drawn out, the
+two springs are mirror images: `0x3c` is anchored bottom-right and `0x3d`
+bottom-left. Neither `collide_scenes` arm sets a horizontal term - both write
+`f15 = 0xf9` and `f21 = 0` and change the types, and that is all.
+
+The direction is in the type the duck becomes, and **only the hero gets one**:
+
+    0x3c ->  hero 0x33, any other duck 0x41
+    0x3d ->  hero 0x1c, any other duck 0x40
+
+`entity_update`'s first switch is a compare chain, and extracting all of it gives
+`{1, 2, 4, 0x1c, 0x1e, 0x25, 0x26, 0x33, 0x36}`. `0x1c` sets `f14` to `+2` while
+`f21 < 0xf` and `+1` after; `0x33` sets `-2` then `-1`. `0x40` and `0x41` are not
+in that switch at all, so an ordinary duck keeps whatever facing it was walking
+with, and the only thing the spring gives it is the upward `f15`.
+
+The landing arm at `0x08427`, which `0x40` and `0x41` do reach, is
+`if (f21 > 0x32) duck_dies(); else { type = 2; f14 = 0; }` - no horizontal term
+there either.
