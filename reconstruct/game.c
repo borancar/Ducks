@@ -1710,10 +1710,8 @@ uint8_t picker_colour[4] = { 0x50, 0x59, 0x5c, 0x5d };
  * The bounds checks are the port's. The original writes 0x1a bytes into a row it
  * does not measure, which is one allocation there and one per row here.
  *
- * Nothing calls this yet: its only caller is 0x10c06, the picker itself, and
- * that is not written. The coverage report counts 0x10c06 as done because the
- * offset appears in a comment on cheat_state - which is the report being fooled
- * by its own rule, and is worth knowing before trusting the number.
+ * Its only caller is level_picker (0x10c06), which draws the whole grid with it
+ * once and then repaints one cell a frame to follow the pointer.
  */
 void far picker_cell(int16_t slot, int16_t number, desc_t far *page,
                      int16_t current, int16_t hard)
@@ -1738,6 +1736,131 @@ void far picker_cell(int16_t slot, int16_t number, desc_t far *page,
 
     sprintf(buf, "%i", number);                    /* 0x10b7d, d+0x24d0 */
     draw_string(page, buf, x + 1, y + 0x10);       /* 0x10b9a */
+}
+
+/* ================================================== 0x10c06: the level picker
+ *
+ * What THECROWDSAYBO turns on. level_screens calls this INSTEAD of the episode
+ * intro (0x1104b), so with the cheat set every level starts by asking which one
+ * you meant: picture 0x4d:1 with four centred captions, then the episode's
+ * levels as a grid of numbered squares that light up under the pointer.
+ *
+ * The grid is drawn once into the page and then edited in place. Each frame the
+ * cell under the pointer is repainted highlighted, and the frame after, the one
+ * that WAS under it is repainted plain - which is what the two picker_cell
+ * calls at 0x10e3c and 0x10ef1 are, one un-highlighting last frame's and one
+ * highlighting this frame's. `level_attempted` is where the pointer's cell is
+ * kept between them, which is why it is set to -1 twice a frame.
+ *
+ * `-` and `+` change episode. They set `again`, which ends the inner loop and
+ * sends the outer one round to rebuild the page for the new episode - the one
+ * place the outer loop is for.
+ *
+ * The mouse maps to a cell by plain division: 32 pixels a square, ten across, y
+ * offset by 0x14 for the captions. All of it is done in longs through the
+ * runtime's __ldiv, because mouse_x and mouse_y are 32-bit.
+ */
+void far level_picker(void)
+{
+    desc_t     page;                           /* [bp-0x3a] */
+    char far  *heading = menu_text[55];        /* 0x1894:0 + 0xdc */
+    char far  *hint1   = menu_text[63];        /* + 0xfc */
+    char far  *hint2   = menu_text[64];        /* + 0x100 */
+    int16_t    was;                            /* [bp-2] - the level we came from */
+    int16_t    chosen, again = 1;              /* [bp-4], [bp-6] */
+    int16_t    ep, level;                      /* si, di */
+    uint8_t    plane;                          /* [bp-7] */
+
+    while (again) {                            /* 0x11006 */
+        was   = level_attempted;               /* 0x10c64 */
+        again = 0;
+        ep    = episode_for_level();           /* 0x10c70 */
+        if (ep == 0xff)                        /* 0x10c75 - no episode owns it */
+            return;
+
+        if (!resource_load(&page, 0x4d, 1, 0x80, 1, 0xff, 1))
+            fatal("Can't load image", 0);      /* d+0x24d3 */
+
+        /* 0x10cc0. Four captions, each centred by its own width. */
+        draw_string(&page, heading,
+                    (int16_t) ((0x140 - text_width(heading)) >> 1), 0x0a);
+        draw_string(&page, hint1,
+                    (int16_t) ((0x140 - text_width(hint1)) >> 1), 0xa8);
+        draw_string(&page, episode_index[ep].name,
+                    (int16_t) ((0x140 - text_width(episode_index[ep].name)) >> 1),
+                    0xb2);
+        draw_string(&page, hint2,
+                    (int16_t) ((0x140 - text_width(hint2)) >> 1), 0xbc);
+
+        for (level = episode_index[ep].first;          /* 0x10dd8 */
+             level <= episode_index[ep].last; level++)
+            picker_cell((int16_t) (level - episode_index[ep].first), level,
+                        &page, was, 0);
+
+        level_attempted = -1;                  /* 0x10deb */
+        chosen = 0;
+        clear_vram();
+        palette_apply_gamma();
+        palette_upload();
+
+        do {                                   /* 0x10e02 */
+            input_poll(viewport_screen.width, viewport_screen.height);
+
+            /* 0x10e11. Last frame's cell, put back the way it was. */
+            if (level_attempted != -1)
+                picker_cell((int16_t) (level_attempted
+                                       - episode_index[ep].first),
+                            level_attempted, &page, was, 0);
+            level_attempted = -1;              /* 0x10e42 */
+
+            /* 0x10e48. Which square the pointer is in. Everything is 32-bit
+             * because the mouse is; the original divides through __ldiv. */
+            if (mouse_y > 0x14) {
+                level_attempted = (int16_t)
+                    (episode_index[ep].first
+                     + ((mouse_y - 0x14) / 32) * 10 + mouse_x / 32);
+                if (episode_index[ep].last < level_attempted)   /* 0x10eb6 */
+                    level_attempted = -1;
+            }
+
+            /* 0x10ec6. This frame's, highlighted. */
+            if (level_attempted != -1)
+                picker_cell((int16_t) (level_attempted
+                                       - episode_index[ep].first),
+                            level_attempted, &page, was, 1);
+
+            if (g_18e5 && level_attempted != -1)   /* 0x10ef7 - clicked on one */
+                chosen = 1;
+
+            cursor_scene.entities[0].x = mouse_x;  /* 0x10f0a */
+            cursor_scene.entities[0].y = mouse_y;
+            animate_scene(&cursor_scene);
+
+            for (plane = 0; plane < 4; plane++) {
+                set_plane(plane);
+                blit_rows(&page, viewport_screen, 0);
+                draw_entities(&cursor_scene, viewport_screen, 0);
+            }
+            page_flip();
+
+            if (last_key == '-' && ep) {           /* 0x10f8d */
+                ep--;
+                again = 1;
+            }
+            if (last_key == '+' && ep < episode_count - 1) {    /* 0x10f9e */
+                ep++;
+                again = 1;
+            }
+            if (again) {                           /* 0x10fb3 */
+                level_attempted   = episode_index[ep].first;
+                episode_egg_index = episode_index[ep].egg;      /* [0x94] */
+                chosen = 1;
+            }
+        } while (!chosen);                         /* 0x10fe6 */
+
+        dac_set_black(0, 0);                       /* 0x10ff4 */
+        resource_release(&page);
+    }
 }
 
 /* ================================================= 0x11bee: the episode page
@@ -7817,13 +7940,15 @@ int16_t far level_screens(int16_t fresh)
     text_colour[0] = 0x6f;
 
     /* 0x1104b. Three ways past here and only the middle one is ordinary play:
-     * [0x507] set takes the cheat's level picker at 0x10c06, which is not
-     * written; otherwise the episode intro runs, but only when `fresh` is
+     * cheat_state[1] set takes the cheat's level picker at 0x10c06 instead;
+     * otherwise the episode intro runs, but only when `fresh` is
      * non-zero. That argument is game_main's [0x21a3] - 1 for a new game or
      * after a level was completed, 0 after an attempt was abandoned - so
      * retrying a level plays its own intro and not the episode's. It was called
      * unconditionally here, which replayed the episode intro on every retry. */
-    if (!cheat_state[1] && fresh)                           /* 0x11058 */
+    if (cheat_state[1])                            /* 0x1104b - THECROWDSAYBO */
+        level_picker();                            /* 0x10c06 */
+    else if (fresh)                                /* 0x11058 */
         episode_intro();                           /* 0x1105f -> 0x1089b */
 
     i       = episode_for_level();                 /* 0x11063 */

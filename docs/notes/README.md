@@ -47,6 +47,12 @@ Current, and kept current. Where these disagree with
 
 **On the coverage figure.** `creport` counts a function as written if any `.c`
 outside `stubs.c` mentions its offset — including in a *comment*. `0x10c06`,
-the cheat's level picker, was counted as done for months because
-`0x507`'s comment said "picks 0x10c06's level picker over the episode intro".
-Whenever the number is quoted, check the routine has a body.
+the cheat's level picker, was counted as done for months because `0x507`'s
+comment said "picks 0x10c06's level picker over the episode intro".
+
+The obvious fix — ignore mentions inside comments — is useless here, because the
+convention is to put every routine's offset in the comment *above* it, so
+stripping comments loses all 193. The check that does discriminate is whether a
+**function definition follows the mention** before the next one starts. Run that
+and exactly one offset fails, `0x0b9ea`, which is `set_buffer` and is defined in
+`stubs.c` — excluded from the scan by the same rule. Everything else has a body.
