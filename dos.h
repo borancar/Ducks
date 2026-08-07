@@ -524,8 +524,7 @@ void far egg_fread(void far *buf, uint16_t size, uint16_t n);
 void far egg_block_end(void);
 int egg_open(const char *path);
 void egg_bringup_open(void);
-void far f_04dcd(int16_t n);
-void far f_0615a(int16_t a, int16_t b, void far *c, int16_t d);
+void far hold_frames(int16_t n);   /* 0x04dcd */
 void far f_09329(void);
 void far bonus_screen(void);   /* 0x0becb */
 void far f_0f8bd(void);

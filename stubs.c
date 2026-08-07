@@ -97,11 +97,6 @@ void far set_text_colour(int16_t c)       { (void) c; }
  * nothing, because a tool that quietly fails is how a demo stops matching. */
 /* ------------------------------------------------ unnamed, by image offset */
 
-void far f_04dcd(int16_t n)               { (void) n; }
-void far f_0615a(int16_t a, int16_t b, void far *c, int16_t d)
-{
-    (void) a; (void) b; (void) c; (void) d;
-}
 /* 0x088fa is level_load, in game.c */
 void far f_09329(void)                    { }
 void far f_0f8bd(void)                    { }
