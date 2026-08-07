@@ -116,7 +116,6 @@ void far f_0615a(int16_t a, int16_t b, void far *c, int16_t d)
 }
 /* 0x088fa is level_load, in game.c */
 void far f_09329(void)                    { }
-void far f_0becb(void)                    { }
 void far f_0f8bd(void)                    { }
 
 /* 0x04de6. The fatal error reporter: it puts the screen back into text mode,

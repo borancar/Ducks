@@ -527,7 +527,7 @@ void egg_bringup_open(void);
 void far f_04dcd(int16_t n);
 void far f_0615a(int16_t a, int16_t b, void far *c, int16_t d);
 void far f_09329(void);
-void far f_0becb(void);
+void far bonus_screen(void);   /* 0x0becb */
 void far f_0f8bd(void);
 void far f_11bee(void far *name, int16_t egg);
 extern char far *owner_name;

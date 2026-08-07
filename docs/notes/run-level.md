@@ -1272,6 +1272,48 @@ does anyway.
 `scenery_count` 0 and `level_outcome` 1, which the frame's new branch turns into
 the 2 `run_level` returns.
 
+### The bonus screen, and a row that pours into another
+
+**2026-08-07.** Reported: after the level-complete screen there is no score
+screen. `game_main` calls `f_0becb` there and that was a `{ }` stub. Behind it
+were four functions and about 1,500 bytes.
+
+The five labels come out of `menu_text` 66-70 - "Time bonus:", "Survivors
+bonus:", "Lives bonus:", "Total:", "Score:" - and the five counters behind them
+are a table at `d+0x2159`. **Row 4 is the score**: `[0x2161]` is
+`bonus_row[4]`, the score is parked there before the screen runs and read back
+out afterwards, so the last row is not a copy of the score but the score itself,
+counting up in front of you.
+
+`tally_row` (`0x0bba1`) is one row, and it has two shapes:
+
+- given a **number**, it adds it to the row;
+- given another **row**, that row empties as this one fills, and both are drawn
+  every frame - which is what makes a bonus visibly pour into the total.
+
+`bonus_tally` (`0x0bdee`) is seven of those in the order they are watched: the
+three bonuses count up out of nothing (`level_timer * 5`, `duck_count * 10`,
+`lives * 10`), then each pours into Total, then Total pours into Score.
+
+Two details worth keeping. The step is a sixteenth of what is left **plus one**,
+so a row starts fast and eases in - and the `gap` argument is re-armed on every
+frame that moves, which means it is not a speed at all but the pause *after* the
+row lands. And the ticking is sound `0x12` spaced by the size of the step, so the
+sound thins out as a row slows.
+
+`skipped` is a pointer shared by all seven passes, so a key or a button does not
+skip one row: every later row sees it set and finishes instantly.
+
+`bonus_numbers` (`0x0bd00`) draws each digit twice - sprite `0x70` to wipe the
+cell, then `0x71 + digit` over it - into both pages, five rows of six digits.
+
+**Checked by replaying the arithmetic**: 27 on the clock, 7 ducks home, 5 lives
+and a score of 1234 gives 135 + 70 + 50, and Total pours 255 into Score for 1489.
+Every pass terminates - 43, 33, 29, 43, 33, 29, 52 steps - which was the thing
+worth checking, because a negative amount would step by zero within sixteen of
+its target and never arrive. The counts cannot be negative and `level_timer`
+stops at 0, so nothing here reaches that; the original has the same shape.
+
 ## The order to take it
 
 The event tables and the tool list are filled by the level loader, so reading
