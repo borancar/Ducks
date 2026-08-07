@@ -529,7 +529,7 @@ void far egg_block_end(void);
 int egg_open(const char *path);
 void egg_bringup_open(void);
 void far hold_frames(int16_t n);   /* 0x04dcd */
-void far f_09329(void);
+void far level_free(void);
 void far bonus_screen(void);   /* 0x0becb */
 void far photo_fade_step(void);
 void far f_11bee(void far *name, int16_t egg);
