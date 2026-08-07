@@ -6658,6 +6658,34 @@ int16_t far run_level(int16_t demo)
                 score_redraw--;
             page_flip();
         }
+
+        /* 0x0e71e. The tool announcement landing, and the only thing that moves
+         * the highlight. The countdown reaching 1 - not 0 - says the tool has
+         * arrived: it names the tool in a message and parks the tool scene's two
+         * entities over the selected slot, at tool_at * 16 + 0x82, which is the
+         * same spacing the HUD drew the icons at.
+         *
+         * The two are the highlight and the icon: entity 0 becomes type 0x10, the
+         * box, and entity 1 the tool's own type. tool_selected has had entity 1
+         * as 0x0f for the length of the countdown, which is what makes the new
+         * tool flash before it settles.
+         *
+         * This sits OUTSIDE the frame skip: 0x0e4c4 jumps here, so a skipped
+         * frame still moves the highlight.
+         *
+         * Without it both entities stay where the setup put them - over slot 0,
+         * drawn every frame - so the first tool is covered and the highlight
+         * never follows the selection. */
+        if (tool_announce == 1) {                  /* 0x0e71e */
+            int16_t x = (int16_t) (tool_at * 16 + 0x82);
+
+            message_post(menu_text[7], tool_names[anim_c[tool_type]]);
+            entity_set_type(&tool_scene.entities[0], 0x10);
+            entity_set_type(&tool_scene.entities[1], tool_type);
+            tool_scene.entities[0].x = x;
+            tool_scene.entities[1].x = x;
+        }
+
         palette_fade_step(0);
     } while (fade_level != 0);
 
