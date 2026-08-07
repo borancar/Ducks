@@ -2191,6 +2191,51 @@ item_t far *far run_screen(menu_t far *menu, void far *chosen, int16_t owns)
     return &menu->item[sel];                       /* 0x0ce15 */
 }
 
+/* ==================================================== 0x09329: level_free
+ *
+ * Everything level_load allocated, given back. Three callers and they are the
+ * three ways a level stops mattering: run_level's teardown at 0x0e7ec,
+ * level_screens at 0x11484 when the level-select key means the level it just
+ * loaded will not be played, and game_main's shareware refusal at 0x13856.
+ *
+ * It was a stub, so every one of those leaked a whole level - the backdrop, the
+ * background tile, every scenery image, all five entity arrays and the tool
+ * list.
+ *
+ * Two things in it are not memory at all and are easy to miss:
+ *
+ *   level_flags[0] and [3] are cleared, which is what stops the blink and the
+ *   0x0e673 branch carrying into whatever comes next;
+ *   the sample rate goes back to 11000, undoing the D key, which doubles it for
+ *   the level it is pressed on and would otherwise leave every later sound fast.
+ *
+ * scenes[4] is not freed. That is the cursor scene, and run_level owns it.
+ * The order the arrays go in - 3, 5, 0, 1, 2 - is the original's.
+ */
+void far level_free(void)
+{
+    int16_t i;
+
+    level_flags[0] = 0;                            /* 0x0932d, [0x201e] */
+    level_flags[3] = 0;                            /* [0x2024] */
+    if (sound_available)                           /* 0x09339 */
+        sound_set_rate(0x2af8);                    /* 11000 */
+
+    resource_release(&background);                 /* 0x09352, d+0x170b */
+    resource_release(&backdrop);                   /* 0x0935d, d+0x16f5 */
+
+    for (i = 0; i < solid_count; i++)              /* 0x0937f */
+        resource_release(&solids[i]);              /* each is 0x20 bytes */
+    free(solids);                                  /* 0x09390 */
+
+    free(scenes[3].entities);                      /* 0x093a0 */
+    free(scenes[5].entities);                      /* 0x093b0 */
+    free(scenes[0].entities);                      /* 0x093c0 */
+    free(scenes[1].entities);                      /* 0x093d0 */
+    free(scenes[2].entities);                      /* 0x093e0 */
+    free(tool_list);                               /* 0x093f0, d+0x1782 */
+}
+
 /* ============================================ the tool list, d+0x1782
  *
  * What the player can place, and which of them is selected. The array holds
@@ -3264,7 +3309,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
 
                 if (shareware_limit < level_attempted      /* 0x13841 */
                     && !registered && !g_1ffc) {
-                    f_09329();                     /* the refusal - unnamed */
+                    level_free();                  /* 0x13856 */
                     egg_load_one(0xfc, 0x48, 0xff);
                     menu = &main_menu;
                     high_score_screen();  menus_after_game();
@@ -7461,11 +7506,14 @@ int16_t far run_level(int16_t demo)
         palette_fade_step(0);
     } while (fade_level != 0);
 
-    /* 0x0e7da's teardown, as far as it is written. */
-    free(particle_array);
+    /* 0x0e7da's teardown. level_free was a stub and out of this list entirely,
+     * so every attempt at a level leaked the whole of it. */
+    blink_enable = 0;                              /* 0x0e7da, [0x2157] */
+    sprite_set_free(&level_sprites);               /* 0x0e7e5 */
+    level_free();                                  /* 0x0e7ec */
+    free(particle_array);                          /* 0x0e7f7 */
     particle_array = NULL;
-    free(tool_scene.entities);
-    sprite_set_free(&level_sprites);
+    free(tool_scene.entities);                     /* 0x0e807 */
     set_buffer(default_buffer);                    /* 0x0e814 */
 
     /* 0x0e81a. The other half of level_palette_build's `+= 0x90`: together they
@@ -7640,6 +7688,11 @@ int16_t far level_screens(int16_t fresh)
 
     resource_release(&name);                       /* 0x1146b */
     resource_release(&pic);
+
+    /* 0x1147d. The level-select key is the one way out of here, and the level
+     * loaded for the map screen will not be played, so it goes back. */
+    if (leave)
+        level_free();                              /* 0x11484 */
 
     /* 0x11488. A fresh seed for the level, which run_level srand()s - so this is
      * what makes two goes at the same level differ. The original reads it out of

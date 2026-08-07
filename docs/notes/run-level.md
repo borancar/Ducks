@@ -1805,3 +1805,45 @@ compared the port's screen against anything. Getting a state that reaches it at
 all needed ESC pressed inside the run - `snap012`'s pool is empty, so
 `replay.py --require particles` on it correctly reports that a clean run proved
 nothing.
+
+### level_free (0x09329), and what a stub was costing
+
+`f_09329` was a stub, and it is the routine that gives a level back: the
+backdrop, the background tile, every scenery image, all five entity arrays and
+the tool list. Three callers, and they are the three ways a level stops
+mattering:
+
+| site | when |
+| --- | --- |
+| `0x0e7ec` | `run_level`'s teardown - every attempt, won or lost |
+| `0x11484` | `level_screens`, when the level-select key means the level it just loaded will not be played |
+| `0x13856` | `game_main`'s shareware refusal |
+
+Only the third was even wired here; the port's teardown did not call it at all,
+so every single attempt at a level leaked the whole level.
+
+Two things in it are not memory and are easy to read past:
+
+- `level_flags[0]` and `[3]` are cleared, which is what stops the blink and the
+  `0x0e673` branch carrying into whatever comes next.
+- The sample rate goes back to 11000, undoing the D key - which doubles it for
+  the level it is pressed on and would otherwise leave every later sound fast.
+
+`scenes[4]` is **not** freed. That is the cursor scene and `run_level` owns it.
+The order the five arrays go in - 3, 5, 0, 1, 2 - is the original's.
+
+The teardown at `0x0e7da` was also out of order here. It is
+`blink_enable = 0`, `sprite_set_free`, `level_free`, `free(particle_array)`,
+`free(tool_scene.entities)`, `set_buffer` - and the port had the sprite set
+freed third and `blink_enable` not cleared at all.
+
+**Checked** by loading and freeing six levels three times over under
+AddressSanitizer and LeakSanitizer: no double free, no use after free, and no
+leak. `resource_release` nulls `rows` and so is idempotent, which is what makes
+the two image releases safe; the five plain `free`s are not, and nothing calls
+this twice without a `level_load` in between.
+
+One harness trap worth keeping: the leak checker first reported one string per
+level, from `egg_read_string` in `level_load`. That is `level_text`, which
+`level_screens` frees at `0x110b8` - the probe was calling `level_load`
+directly and skipping it. The leak was the harness, not the port.
