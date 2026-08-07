@@ -601,18 +601,19 @@ int16_t far audio_open(int16_t rate)
     }
     SDL_ResumeAudioStreamDevice(audio);
 
-    /* Say what was actually negotiated. The samples are 8-bit signed at the
-     * game's own rate and SDL is expected to resample to whatever the device
-     * wants; if it ever does not, everything plays at the device's rate instead
-     * and the whole game sounds fast. That is a hard thing to guess at from the
-     * outside, and one line here settles it. */
+    /* Only complain if SDL did not take the rate we asked for. It is expected to
+     * resample the game's 8-bit samples to whatever the device wants; if it ever
+     * does not, everything plays at the device's rate and the whole game sounds
+     * fast - which is a hard thing to guess at from outside, and was worth one
+     * line while "the sound is wrong" was open. It is not worth a line every
+     * launch now that the rate is settled, so this says nothing when it agrees. */
     {
         SDL_AudioSpec src, dst;
 
-        if (SDL_GetAudioStreamFormat(audio, &src, &dst))
-            SDL_Log("audio: feeding %d Hz %d-bit x%d, device wants %d Hz "
-                    "fmt %#x x%d", src.freq, SDL_AUDIO_BITSIZE(src.format),
-                    src.channels, dst.freq, dst.format, dst.channels);
+        if (SDL_GetAudioStreamFormat(audio, &src, &dst) && src.freq != rate)
+            SDL_Log("audio: asked for %d Hz, SDL is feeding %d Hz to a %d Hz "
+                    "device - everything will play at the wrong speed",
+                    rate, src.freq, dst.freq);
     }
     return 1;
 }
