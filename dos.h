@@ -601,7 +601,6 @@ extern int16_t g_2100, g_dab;
 
 /* stubs.c - stubbed until run_level(1) needs them; see the note there */
 void far played_tool_events(uint8_t far *flash);
-void far tool_apply(scene_t far *s, int16_t n);
 void far f_07955(void);
 
 /* 0x0993b, game.c - the collision pass */
@@ -649,9 +648,20 @@ void far blast_terrain(int16_t x, int16_t y, int16_t index);   /* 0x0751b */
 void far ground_check(int16_t far *x, int16_t y);              /* 0x0799c */
 void far stamp_sprite_into(int16_t x, int16_t y, sprite_t far *sp,
                            desc_t far *dest);                  /* 0x0739c */
-extern int16_t tool_in_use, drag_anchor_x, drag_anchor_y, drag_step_a;
-extern int16_t drag_x, drag_y, drag_step_b, drag_kind, drag_diagonal;
-extern int16_t g_20fb, g_20fd;
+/* One end of a growing bridge: 0x07646 takes a pointer to one of these. */
+typedef struct {
+    int16_t x, y;               /* +0x00, +0x02 */
+    int16_t alive;              /* +0x04 - cleared when it hits something */
+} bridge_end;
+
+extern int16_t    tool_in_use;           /* 0x1fd6 */
+extern bridge_end bridge_left;           /* 0x1fe0 */
+extern bridge_end bridge_right;          /* 0x1fe6 */
+extern int16_t    bridge_span;           /* 0x1fdc */
+extern int16_t    bridge_drop;           /* 0x1fde */
+extern int16_t    bridge_left_live;      /* 0x20fb */
+extern int16_t    bridge_right_live;     /* 0x20fd */
+void far tool_step(void);                /* 0x078a6 */
 
 /* 0x0a410, game.c - the three-slot message ticker */
 extern desc_t far  *message_image[3];    /* 0x210c */
