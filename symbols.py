@@ -566,7 +566,7 @@ VARIABLES = {
     0x1FD5: "gamma",                    # (gamma + 6) / 19 scales every palette
     0x201E: "blink_enable_src",         # only ever written zero
     0x21A5: "save_name",                # "GAME-.SG"; +4 is patched per slot
-    0x2055: "max_save_value?",          # scan_save_slots keeps the max over slots
+    0x2055: "serial_high",              # the save/board serial high-water mark
     0x2104: "sound_available",          # detect_hardware's return
     0x210C: "init_objects",             # 3 far pointers to 22-byte objects
     0x2157: "blink_enable",             # copied from blink_enable_src; dead
