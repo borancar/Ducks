@@ -56,7 +56,6 @@ void far set_text_colour(int16_t c)       { (void) c; }
 
 /* 0x088fa is level_load, in game.c */
 
-void far f_11bee(void far *name, int16_t egg) { (void) name; (void) egg; }
 
 /* The palette the DAC loops upload, and the washed copy the blink alternates
  * with: 0x10e1 and 0x0dad. palette_build fills the first; nothing fills the

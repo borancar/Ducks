@@ -541,7 +541,7 @@ void far hold_frames(int16_t n);   /* 0x04dcd */
 void far level_free(void);
 void far bonus_screen(void);   /* 0x0becb */
 void far photo_fade_step(void);
-void far f_11bee(void far *name, int16_t egg);
+void far episode_page(int16_t ordinal, int16_t egg);   /* 0x11bee */
 extern char far *owner_name;
 extern int16_t   owner_key;
 
