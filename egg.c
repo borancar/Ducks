@@ -250,6 +250,7 @@ int16_t far alloc_image(void far *d, int16_t a, int16_t b, int16_t c, int16_t e)
     return 1;
 }
 
+/* 0x05671 */
 void far resource_release(void far *d)
 {
     desc_t  *desc = (desc_t *) d;

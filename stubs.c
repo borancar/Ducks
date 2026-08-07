@@ -4,10 +4,10 @@
  * the caller carry on, and says what the real routine is: an image offset if we
  * know it, and what it would have to do.
  *
- * The gameplay is deliberately absent. run_level() is a no-op that reports
- * "the run ended", so game_main's inner loop falls straight through to the
- * screens either side of it - which is what makes the menus testable on their
- * own.
+ * run_level moved to game.c on 2026-08-05 and is a real function: the setup in
+ * full, the frame in part. What is left of the gameplay here is the routines it
+ * still calls that have not been read, and the ones a demo never reaches, which
+ * say so individually below.
  *
  * When a routine here is read out, it moves to game.c or dos_io.c and comes off
  * this list. The list is therefore also the to-do list, in dependency order:
