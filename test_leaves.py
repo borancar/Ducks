@@ -21,6 +21,7 @@ import random
 import struct
 import sys
 
+import dump_level as D
 from native import Native
 
 LIB = "reconstruct/libducks.so"
@@ -38,6 +39,17 @@ def i16(lib, name):
 
 def u8(lib, name):
     return ctypes.c_uint8.in_dll(lib, name)
+
+
+def viewport(lib):
+    """The game viewport, which used to be six separate globals here.
+
+    view_w, view_h, scroll_x and scroll_y turned out to be a second set of names
+    for viewport_game's own fields - the duplicate-DGROUP class of bug - and
+    collapsing them left this file asking the library for symbols it no longer
+    exports, so it had stopped running at all rather than started failing.
+    """
+    return D.Viewport.in_dll(lib, "viewport_game")
 
 
 # ------------------------------------------------------------------- cases
@@ -62,12 +74,13 @@ def case_scroll_follow(m, lib, rng):
     theirs = struct.unpack("<ii", m.uc.mem_read(d + 0x1739, 8))
 
     i16(lib, "level_w").value, i16(lib, "level_h").value = ww, wh
-    i16(lib, "view_w").value, i16(lib, "view_h").value = vw, vh
-    i32(lib, "scroll_x").value, i32(lib, "scroll_y").value = sx, sy
+    vp = viewport(lib)
+    vp.width, vp.height = vw, vh
+    vp.scroll_x, vp.scroll_y = sx, sy
     u8(lib, "scroll_shift").value = sh
     i16(lib, "scroll_smooth").value = sm
     lib.scroll_follow(ctypes.c_int32(x), ctypes.c_int32(y))
-    ours = (i32(lib, "scroll_x").value, i32(lib, "scroll_y").value)
+    ours = (vp.scroll_x, vp.scroll_y)
 
     return "scroll_follow", theirs, ours, f"vw={vw} ww={ww} shift={sh} sm={sm}"
 
@@ -104,7 +117,8 @@ def case_bg_scroll_reset(m, lib, rng):
     theirs = tuple(m.uc.mem_read(d + 0x177E, 4))
 
     u8(lib, "bg_drift").value = drift
-    i16(lib, "bg_w").value, i16(lib, "bg_h").value = bw, bh
+    bg = D.Desc.in_dll(lib, "background")      # bg_w/bg_h were its own w and h
+    bg.w, bg.h = bw, bh
     lib.bg_scroll_reset()
     ours = (u8(lib, "bg_scroll_x").value, u8(lib, "bg_scroll_y").value,
             u8(lib, "bg_step_x").value, u8(lib, "bg_step_y").value)
@@ -131,31 +145,21 @@ def case_palette_apply_gamma(m, lib, rng):
     return "palette_apply_gamma", theirs, ours, f"gamma={g}"
 
 
-class Entity(ctypes.Structure):
-    """The port's entity_t. Not the guest's: `far` is nothing here and the
-    compiler pads, so this is 42 bytes where the original is 41. That is why
-    every comparison below is field by field and not a memcmp."""
-    _fields_ = [("x", ctypes.c_int32), ("y", ctypes.c_int32),
-                ("unread", ctypes.c_uint8 * 4),
-                ("prev_x", ctypes.c_int32), ("prev_y", ctypes.c_int32),
-                ("f14", ctypes.c_int8), ("f15", ctypes.c_uint8),
-                ("f16", ctypes.c_uint8), ("param", ctypes.c_int16),
-                ("unread2", ctypes.c_uint8 * 6), ("frame", ctypes.c_int16),
-                ("f21", ctypes.c_int16), ("f23", ctypes.c_int16),
-                ("type", ctypes.c_int16), ("f27", ctypes.c_int16)]
-
-
-class Scene(ctypes.Structure):
-    _fields_ = [("capacity", ctypes.c_int16), ("count", ctypes.c_int16),
-                ("flag", ctypes.c_int16), ("unread6", ctypes.c_int16),
-                ("entities", ctypes.POINTER(Entity))]
+# The port's entity_t and scene_t, from the one mirror of them that is kept up
+# to date. This file had its own copy, and it still described the entity as it
+# was before f19, f1a and the lead pointer were split out of the six unread bytes
+# at +0x19 - 42 bytes against the library's 48. entity_copy then wrote each
+# record six bytes further along than the harness had allocated for it, which is
+# a segfault rather than a difference: a stale mirror does not report, it lies.
+Entity, Scene = D.Entity, D.Scene
 
 
 # guest offset, ctypes name, struct code - every field either side touches
 FIELDS = [(0x00, "x", "<i"), (0x04, "y", "<i"), (0x08, None, None),
           (0x0C, "prev_x", "<i"), (0x10, "prev_y", "<i"),
           (0x14, "f14", "<b"), (0x15, "f15", "<B"), (0x16, "f16", "<B"),
-          (0x17, "param", "<h"), (0x1F, "frame", "<h"), (0x21, "f21", "<h"),
+          (0x17, "param", "<h"), (0x19, "f19", "<B"), (0x1A, "f1a", "<B"),
+          (0x1F, "frame", "<h"), (0x21, "f21", "<h"),
           (0x23, "f23", "<h"), (0x25, "type", "<h"), (0x27, "f27", "<h")]
 
 

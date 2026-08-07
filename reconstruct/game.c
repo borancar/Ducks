@@ -4004,6 +4004,104 @@ void far scroll_follow(int32_t x, int32_t y)
         viewport_game.scroll_y = y - viewport_game.height + 1;
 }
 
+/* ================================================== 0x09565: flock_chain
+ *
+ * **This is what the walk button is for.** Holding it gives the hero a facing
+ * (entity_update's type 1 arm), and this is what turns that one duck walking
+ * into a line of them: starting from the head, repeatedly take the nearest duck
+ * that has not been taken yet, give it the head's facing, point it at the one in
+ * front, and make *it* the head. Rank is the position in the line.
+ *
+ * The three fields it writes are exactly the three that type 2 reads back in
+ * entity_update: `f19` is whether it walks at all (and doubles as "already in
+ * the line"), `f1a` is how far behind to hold, and `lead` is who to hold behind.
+ * So without this the ducks have f19 == 0 for ever and the flock never moves, no
+ * matter what the hero does.
+ *
+ * The distance is `|dx| + |dy| / 2` on the **low words** of x and y - the guest
+ * subtracts with word operations and never looks at the high halves - and it is
+ * compared against a reach of 0x32, passed in as a long from both call sites.
+ */
+void far flock_chain(entity_t far *head, int32_t reach)
+{
+    int16_t rank;
+
+    if (head->f14 != 0)                            /* 0x0956d - a facing sticks */
+        head->f16 = (uint8_t) head->f14;
+    if (head->f16 == 0)                            /* 0x09585 */
+        return;
+
+    for (rank = 1; rank <= scenes[0].count; rank++) {
+        int32_t best = reach;                      /* 0x0959a - reset per rank */
+        int16_t pick = -1, i;
+
+        for (i = 0; i < scenes[0].count; i++) {
+            entity_t far *o = &scenes[0].entities[i];
+            int16_t dx, dy;
+            int32_t d;
+
+            if (i == scenes[0].flag)               /* 0x095ae - never the hero */
+                continue;
+            dx = (int16_t) o->x - (int16_t) head->x;
+            dy = (int16_t) o->y - (int16_t) head->y;
+            if (dx < 0) dx = (int16_t) -dx;        /* 0x095d3 - cdq/xor/sub */
+            if (dy < 0) dy = (int16_t) -dy;
+            d  = (int16_t) (dx + (dy >> 1));       /* 0x09603 - then cdq */
+            if (d >= best)                         /* 0x09610 - strictly nearer */
+                continue;
+            if (o->f19)                            /* 0x09629 - already in line */
+                continue;
+            pick = i;
+            best = d;
+        }
+
+        if (pick < 0)                              /* 0x0964d - nobody in reach */
+            break;
+
+        {
+            entity_t far *e = &scenes[0].entities[pick];
+
+            if (e->type == 4)                      /* 0x0965d - a loose duck joins */
+                entity_set_type(e, 2);
+            e->f16  = head->f16;
+            e->f1a  = 8;
+            e->f19  = (uint8_t) rank;
+            e->lead = head;
+            head    = e;                           /* 0x096eb - and it leads next */
+        }
+    }
+}
+
+/* 0x0970c. Rebuild that line, from scratch, every frame: clear every duck's
+ * rank first and demote the followers back to loose ducks, then chain from the
+ * mirrored scene's first entity if the level has one, and from the hero.
+ *
+ * Rebuilding rather than maintaining is what lets a duck be picked up by simply
+ * walking near it and dropped by walking away, with no bookkeeping anywhere
+ * else - and it is why the demotion at the top is not a bug: flock_chain
+ * promotes each one straight back on the same frame.
+ */
+void far flock_link(void)
+{
+    int16_t i;
+
+    for (i = 0; i < scenes[0].count; i++) {
+        entity_t far *e = &scenes[0].entities[i];
+
+        e->f19 = 0;
+        if (e->type == 2)
+            entity_set_type(e, 4);
+    }
+
+    /* 0x0975c and 0x09776: [0xda1] is scenes[5].count and [0xda7] its entity
+     * array, which is the DGROUP-duplicate trap again - two names for one
+     * scene header field. */
+    if (scenes[5].count)
+        flock_chain(scenes[5].entities, 0x32);
+    if (scenes[0].flag != 0xff)
+        flock_chain(&scenes[0].entities[scenes[0].flag], 0x32);
+}
+
 /* 0x0979f. Remember where every entity in a scene was. run_level calls it on
  * five of the six scenes before anything moves, so prev_x/prev_y is where the
  * entity was when the frame began. */
@@ -4654,10 +4752,10 @@ int16_t far load_demo(uint8_t index)
  */
 int16_t far pick_random_demo(void)
 {
-    srand((unsigned) clock_seed());                /* 0x126e2 */
+    game_srand((unsigned) clock_seed());                /* 0x126e2 */
     score = 0;
     lives = 5;
-    return load_demo((uint8_t) (rand() % g_2038));  /* 0x12711 */
+    return load_demo((uint8_t) (game_rand() % g_2038));  /* 0x12711 */
 }
 
 /* ---------------------------------------------------- 0x0e088: tool_selected
@@ -4719,6 +4817,30 @@ void far demo_events(void)
     }
 }
 
+/* One probe of the level's terrain, bounded.
+ *
+ * The original probes off the edges of its own backdrop and carries on. The step
+ * loop at 0x081f2 is the clear case: it tries every d from the entity's speed
+ * down to -4, so an entity standing on row 0 - a duck that has just been carried
+ * to the top of the level by the rocket - reads `rows[-1]` through `rows[-4]`.
+ * In real mode that is the four bytes in front of the row table and whatever
+ * they happen to point at; there is no fault and the game never notices.
+ *
+ * Here it is a segfault, which is what the backtrace from the rocket launch
+ * shows. Outside the level reads as empty, because empty is what the sky above a
+ * level is and because it leaves the entity moving - the original has a whole
+ * section at 0x08565 for an entity that has left the level, so leaving is a
+ * state it expects to reach rather than one to be walled off. What the guest
+ * actually reads there is a property of its heap, so this cannot be matched, only
+ * chosen: this is the one place in the file that deliberately does not.
+ */
+static uint8_t terrain_at(int32_t y, int32_t x)
+{
+    if (y < 0 || y >= backdrop.h || x < 0 || x >= backdrop.w)
+        return 0;
+    return backdrop.rows[y][x];
+}
+
 /* --------------------------------------------------------- 0x0d0c8: level_event
  *
  * What a tool does at a point - the click handler, and on the demo path what the
@@ -4740,7 +4862,7 @@ void far level_event(int16_t x, int16_t y)
         y = 1;
     /* 0x0d0db writes the clock and the point to the play log here. [0x51d] gates
      * it and nothing sets it, and the FILE * at [0x51f] is not kept on this side. */
-    clear = backdrop.rows[y][x] == 0;              /* 0x0d0fc */
+    clear = terrain_at(y, x) == 0;                 /* 0x0d0fc */
     y++;                                           /* 0x0d11a */
 
     switch (tool_type) {
@@ -4927,21 +5049,35 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
             e->f14 = (int8_t) g_2100;
             active = e->f14 != 0;
         } else {
-            e->f14 = (int8_t) ((e->y < (int32_t) mouse_y
-                                || (e->y == (int32_t) mouse_y
-                                    && e->x < (int32_t) mouse_x))
-                             - (e->y > (int32_t) mouse_y
-                                || (e->y == (int32_t) mouse_y
-                                    && e->x > (int32_t) mouse_x)));
+            /* 0x07dec. One 32-bit signed compare of x against the cursor, twice
+             * - `jg/jl` on the high words and `jae/jbe` on the low ones. An
+             * earlier reading took that pair of halves for y and then x and
+             * turned it into a two-axis comparison, which faces the hero the
+             * wrong way whenever the cursor is above or below it. The button
+             * being up in every snapshot hid it: `active` is 0 there, and the
+             * clear at 0x080ed puts f14 back to 0 before anything can tell. */
+            e->f14 = (int8_t) ((e->x < (int32_t) mouse_x)
+                             - (e->x > (int32_t) mouse_x));
             active = button_a_down;
         }
         e->f23 = 0;
         break;
     case 2:                                        /* 0x07e83 - follows its leader */
     {
-        int32_t ahead = (int32_t) e->f1a * (int8_t) e->f16;
+        /* imul then cwd, so the product is 16 bits sign-extended, not 32. */
+        int32_t ahead = (int16_t) (e->f1a * (int8_t) e->f16);
         entity_t far *lead = e->lead;
-        int32_t tx = lead ? lead->x - ahead : e->x;
+        /* 0x07ea2 reads the lead's +0x0c and +0x0e - **prev_x**, where it was
+         * when the frame began, not where it is now. That is what makes a line
+         * of ducks trail rather than pile up: each one walks to where the one
+         * in front was, a frame behind. Reading the live x instead put every
+         * follower a step or two out and flipped the facing of any that had
+         * caught up, which is what test_entity.py's walk sweep found on
+         * snap002, snap003 and snap006.
+         *
+         * The guest dereferences this without checking, because only
+         * flock_chain makes a type 2 and it always sets lead first. */
+        int32_t tx = lead ? lead->prev_x - ahead : e->x;
 
         e->f14 = (int8_t) ((e->x < tx) - (e->x > tx));
         active = e->f19;
@@ -4959,11 +5095,11 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
              * whichever side is open. Probing its own row instead put the slope
              * one row too high, which test_entity.py caught on level 11 as a
              * duck a pixel out with the wrong facing. */
-            int16_t slope = (backdrop.rows[e->y + 1][e->x + 2] == 0)
-                          - (backdrop.rows[e->y + 1][e->x - 2] == 0);
+            int16_t slope = (terrain_at(e->y + 1, e->x + 2) == 0)
+                          - (terrain_at(e->y + 1, e->x - 2) == 0);
 
             if ((int8_t) e->f15 < 4) {             /* 0x07f94 */
-                if ((rand() & 3) == 0) {
+                if ((game_rand() & 3) == 0) {
                     if (e->param > 0) e->param--;
                     if (e->param < 0) e->param++;
                 }
@@ -5002,7 +5138,7 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         e->y -= 1;
         if (e->y == 0) {
             entity_set_type(e, 2);
-        } else if (backdrop.rows[e->y][e->x] != 0) {
+        } else if (terrain_at(e->y, e->x) != 0) {
             e->param = 1;
         } else if (e->param) {
             entity_set_type(e, 2);
@@ -5074,7 +5210,7 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
                     want = d * 2;
                 stepped = 1;
 
-                if (backdrop.rows[e->y + d][e->x + facing] != 0) {
+                if (terrain_at(e->y + d, e->x + facing) != 0) {
                     blocked = 1;                   /* 0x08308 */
                     continue;
                 }
@@ -5082,7 +5218,7 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
                     int16_t clear = 1;
 
                     for (i = d - 1; i >= 0; i--)   /* 0x0824a */
-                        clear &= backdrop.rows[e->y + i][e->x + facing] == 0;
+                        clear &= terrain_at(e->y + i, e->x + facing) == 0;
                     if (!clear)
                         continue;
                 }
@@ -5164,14 +5300,14 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
                 break;
             case 0x43: case 0x44: case 0x45:       /* 0x084ea - it tumbles */
                 if (e->f21 > 8) {
-                    int16_t v = (int16_t) (2 - (e->f21 >> 2) - (rand() & 3));
+                    int16_t v = (int16_t) (2 - (e->f21 >> 2) - (game_rand() & 3));
 
                     e->f15 = (uint8_t) v;
                     if ((int8_t) e->f15 < (int8_t) 0xf8)
                         e->f15 = (uint8_t) 0xf8;
                     entity_set_type(e, 0x43);
                 } else if (e->type == 0x43) {
-                    entity_set_type(e, (int16_t) ((rand() & 1) + 0x44));
+                    entity_set_type(e, (int16_t) ((game_rand() & 1) + 0x44));
                 }
                 break;
             default:
@@ -5372,10 +5508,16 @@ int16_t far run_level(int16_t demo)
     int16_t page, plane, i, edge;
     int16_t hold = 0;                              /* [bp-0x28] */
     int16_t over = 0;                              /* [bp-0x13] */
+    /* The flock's average, and what the camera followed last. Both are the
+     * frame's locals in the original and both outlive one pass of the loop:
+     * [bp-0x24]/[bp-0x26] keep their value when no branch picks a target, which
+     * is how the view stays put rather than snapping to the origin. */
+    int32_t avg_x = 0, avg_y = 0;                  /* [bp-0x18]..[bp-0x1e] */
+    int16_t follow_x = 0, follow_y = 0;            /* [bp-0x24], [bp-0x26] */
 
     (void) hud_x; (void) shown_score; (void) shown_ducks;   /* the frame's */
 
-    sparkle_x     = rand() & 0x3ff;                /* 0x0d837 */
+    sparkle_x     = game_rand() & 0x3ff;                /* 0x0d837 */
     blink_enable  = level_flags[0];                /* 0x0d850 - [0x201e] */
     button_a_down = 0;
 
@@ -5383,7 +5525,7 @@ int16_t far run_level(int16_t demo)
     too_deep_count = 0;
     g_1ffe = g_1ffc;                               /* 0x0d876 */
     g_1ffc = 0;
-    srand((unsigned) level_seed);                  /* 0x0d886 - the level's own */
+    game_srand((unsigned) level_seed);                  /* 0x0d886 - the level's own */
     clear_vram();
     resource_load(&panel, 0x4d, 0x21, 0, 1, 0xff, 1);
     level_palette_build();                         /* 0x0d5c5 */
@@ -5509,33 +5651,6 @@ int16_t far run_level(int16_t demo)
         if (!demo && last_key == 0x1b)
             fade_direction = -1;
 
-        /* 0x0e34e. The cursor entity takes the mouse, and then the camera
-         * follows it - which is what makes a level wider than the screen scroll.
-         * The demo path instead follows the entity at scenes[3] when [0x1fda]
-         * says so, or the hero duck while it is facing somewhere, each with a
-         * twenty-frame hold, and falls back to the flock's average - which is
-         * computed by the part of the frame that is not written, so a demo holds
-         * on the hero here and does not average. */
-        cursor_scene.entities[0].x = mouse_x;
-        cursor_scene.entities[0].y = mouse_y;
-        if (!demo) {
-            scroll_follow(mouse_x, mouse_y);       /* 0x0e427 */
-        } else if (g_1fda) {
-            hold = 0x14;
-            scroll_follow(scenes[3].entities[0].x, scenes[3].entities[0].y);
-        } else if (scenes[0].flag != 0xff
-                   && scenes[0].entities[scenes[0].flag].f14 != 0) {
-            entity_t far *hero = &scenes[0].entities[scenes[0].flag];
-
-            hold = 0x14;
-            scroll_follow(hero->x, hero->y);
-        } else if (hold) {
-            hold--;
-        }
-        /* 0x0dcc9. The clock, which every table keys off. The quack that goes
-         * with it - rand() & 0x7f - is part of the spawn section and not written. */
-        level_clock++;
-
         /* 0x0de79. The tool. The selection is remembered first, because
          * tool_selected below compares against it, and then the demo's table
          * moves it - a played level reads 0x0cf07 instead, which is not written.
@@ -5563,23 +5678,102 @@ int16_t far run_level(int16_t demo)
         /* 0x0e088. And now the selection becomes the tool. */
         tool_selected(tool_at);
 
-        /* 0x0e11b. Every entity of scenes 0, 1 and 2 walks and falls. This is
-         * what gravity is: entity_update prefers the largest fall it can take,
-         * then level ground, then a climb of up to five pixels. */
+        /* 0x0e11b. Where everything was when the frame began, on five of the six
+         * scenes - scene 4 is the cursor's and does not move by itself - and
+         * then the flock is chained up again from nothing. */
         scene_keep_positions(&scenes[0]);
-        scene_update_all(&scenes[0]);
-        scene_update_all(&scenes[1]);
+        scene_keep_positions(&scenes[2]);
+        scene_keep_positions(&scenes[3]);
+        scene_keep_positions(&scenes[5]);
+        scene_keep_positions(&scenes[1]);
+        flock_link();                              /* 0x0e152 */
+
+        /* 0x0e156. Scene 0 - the ducks - walks and falls, and the same loop
+         * averages where the flock is. This is the one update pass that does not
+         * go through scene_update_all, because of that average and because its
+         * third argument is the demo flag: in a demo the hero's facing comes
+         * from the script table at [0x2100], and in a played level from the
+         * mouse and the walk button.
+         *
+         * The average leaves out the hero, unless it is the only duck there,
+         * and [0xdab] - which chose the cursor's sprite above - is whether it
+         * comes out right of the cursor. Both halves of it are 32-bit sums
+         * divided by the count through the runtime's __ldiv. */
+        {
+            int32_t sum_x = 0, sum_y = 0;
+            int16_t n = 0;
+
+            for (i = 0; i < scenes[0].count; i++) {
+                entity_t far *e = &scenes[0].entities[i];
+
+                entity_update(e, 0, demo);         /* 0x0e192 */
+                if (i == scenes[0].flag && scenes[0].count != 1)
+                    continue;                      /* 0x0e198 */
+                sum_x += e->x;
+                sum_y += e->y;
+                n++;
+            }
+            if (n) {                               /* 0x0e1e2 - and 0/0 is not asked */
+                avg_x = sum_x / n;
+                avg_y = sum_y / n;
+            } else {
+                avg_x = sum_x;
+                avg_y = sum_y;
+            }
+            g_dab = avg_x > mouse_x;               /* 0x0e21c */
+        }
+
+        /* 0x0e2c9. The other three scenes, and then the entity a tool is being
+         * applied through - which is the one call anywhere that passes
+         * entity_update's `applying` as 1. */
         scene_update_all(&scenes[2]);
+        scene_update_all(&scenes[1]);
+        scene_update_all(&scenes[5]);
+        if (g_1fda)                                /* 0x0e2ea */
+            entity_update(scenes[3].entities, 1, 0);
 
-        /* 0x0e346. Which entity the pointer is over, per the tool in hand. */
-        level_update();
-
-        /* 0x0e2c9. The retire pass, over all six scenes - the only place an
+        /* 0x0e304. The retire pass, over all six scenes - the only place an
          * entity array shrinks, so this is what makes a duck that has been
-         * eaten actually leave. The other half of that section is 0x0d715 on
-         * three of the scenes, which needs 0x07bb2 and is not written. */
+         * eaten actually leave. */
         for (i = 0; i < 6; i++)
             scene_retire(&scenes[i]);
+
+        /* 0x0e346. Which entity the pointer is over, per the tool in hand, and
+         * then every duck against every object. */
+        level_update();
+        collide_scenes();                          /* 0x0e34b */
+
+        /* 0x0e34e. The cursor entity takes the mouse, and then the camera
+         * follows it - which is what makes a level wider than the screen
+         * scroll. The demo path instead follows the entity at scenes[3] when
+         * [0x1fda] says so, or the hero duck while it is facing somewhere, each
+         * with a twenty-frame hold, and falls back to the flock's average once
+         * that hold runs out. */
+        cursor_scene.entities[0].x = mouse_x;
+        cursor_scene.entities[0].y = mouse_y;
+        if (!demo) {
+            scroll_follow(mouse_x, mouse_y);       /* 0x0e427 */
+        } else {
+            /* Word stores in the original: the low half of each position, and
+             * then sign-extended back to a long for scroll_follow. */
+            if (g_1fda) {
+                hold = 0x14;
+                follow_x = (int16_t) scenes[3].entities[0].x;
+                follow_y = (int16_t) scenes[3].entities[0].y;
+            } else if (scenes[0].flag != 0xff
+                       && scenes[0].entities[scenes[0].flag].f14 != 0) {
+                hold = 0x14;
+                follow_x = (int16_t) scenes[0].entities[scenes[0].flag].x;
+                follow_y = (int16_t) scenes[0].entities[scenes[0].flag].y;
+            }
+            if (!hold) {                           /* 0x0e3ea - the hold expired */
+                follow_x = (int16_t) avg_x;
+                follow_y = (int16_t) avg_y;
+            } else {
+                hold--;
+            }
+            scroll_follow(follow_x, follow_y);     /* 0x0e40e */
+        }
 
         animate_scene(&cursor_scene);
         for (i = 0; i < 6; i++)
@@ -6298,7 +6492,7 @@ void far level_load(void)
 
     if (scenes[2].entities[0].type == 0x51) {         /* 0x08d19 */
         scene_add(&scenes[0], 0xa0, 0x64, 0x53, 0);
-        scenes[0].entities[0].f14 = (int8_t) ((rand() & 2) - 1);
+        scenes[0].entities[0].f14 = (int8_t) ((game_rand() & 2) - 1);
         duck_count++;
     }
     duck_count += spare_ducks / 2;
@@ -6389,8 +6583,8 @@ void far level_load(void)
 
     for (i = 0; i < spare_ducks / 2; i++) {           /* 0x0923d */
         do {
-            x = (rand() & 0xff) + 0x20;
-            y = (rand() & 0x3f) + 2;
+            x = (game_rand() & 0xff) + 0x20;
+            y = (game_rand() & 0x3f) + 2;
         } while (backdrop.rows[y][x] != 0);           /* open space only */
         scene_add(&scenes[0], x, y, 4, 0);
     }

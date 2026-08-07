@@ -486,6 +486,88 @@ what settles both: `run_level(1)` needs no input and reseeds from the level, so 
 guest and the port can be stepped from one snapshot and their entity positions
 diffed frame by frame.
 
+### The walk button, and what it turns out to move
+
+**2026-08-07.** "Right click doesn't move the hero." It moved nothing, and the
+first cause was not in the game at all: **SDL numbers its mouse buttons LEFT,
+MIDDLE, RIGHT and INT 33h numbers them LEFT, RIGHT, MIDDLE**, and `sdl_io.c` was
+indexing its counters with `button - 1`. `button_map` holds INT 33h numbers -
+that is what the MOUSE BUTTONS screen writes - so out of the box the walk was
+being read from the middle button and the tool cycle from the right one. Both
+buttons did something, which is why it read as "the hero ignores the right
+button" rather than as a dead control. `native.py` had it right (`{1: 0, 3: 1,
+2: 2}`); the C did not.
+
+Behind that, three things were missing and two were wrong.
+
+**`0x0970c` and `0x09565` are the flock.** The frame calls `0x0970c` every pass:
+it clears every duck's rank, demotes each type 2 back to a loose type 4, and then
+chains from the mirrored scene's first entity and from the hero. `0x09565` is the
+chain - from the head, repeatedly take the nearest duck not yet taken, give it the
+head's facing, `f1a = 8`, a rank in `f19`, a `lead` pointer at `+0x1b`, and make it
+the head. The three fields it writes are exactly the three `entity_update`'s type 2
+arm reads back, so **without it every follower has `f19 == 0` for ever and the
+flock never moves at all**, however the hero is driven. Rebuilding from scratch
+each frame is what lets a duck be picked up by walking near it and dropped by
+walking away with no bookkeeping anywhere else.
+
+**The frame's update section was collapsed.** Scene 0 does not go through
+`0x0d715`: `0x0e156` walks it itself, passing the demo flag as `entity_update`'s
+third argument - so in a demo the hero's facing comes from `[0x2100]` and in a
+played level from the mouse - and the same loop sums x and y of every duck but the
+hero to get the flock average, which `[0xdab]` compares against the cursor and
+which the demo camera falls back on. `0x0e2c9` then does scenes 2, 1 and 5, and
+`0x0e2ea` is the one call anywhere that passes `applying` as 1. `scene_keep_positions`
+runs on five scenes, not one, and `0x0e34b` - the collision pass - was not called.
+
+**Two transcription bugs, both the same trap.** `0x07dec` is *one* 32-bit signed
+compare of the hero's x against the cursor, done as `jg/jl` on the high words and
+`jae/jbe` on the low ones; it had been read as a comparison of y and then x, which
+faces the hero the wrong way whenever the cursor is above or below it. And
+`0x07ea2` reads the leader's `+0x0c`, which is **prev_x** - where it was when the
+frame began, not where it is now. That is what makes a line of ducks trail rather
+than pile up, and reading the live x put every follower a step out and flipped the
+facing of any that had caught up.
+
+Both were invisible to the existing comparison, and for the same reason: every
+snapshot was taken with the button up, so `active` is 0, and the clear at `0x080ed`
+puts `f14` back to 0 before anything can tell. **A comparison over states the input
+never varies in cannot see the input.**
+
+### Three more things the walk comparison found
+
+`test_entity.py` grew two sections - the chain, which mirrors the guest's whole
+scene 0 (leads translated to this side's addresses) and diffs what `flock_link`
+did to it, and the walk, which sets the button and the cursor deliberately and
+runs every duck. Both bite: the chain caught `f1a` changed from 8 to 7, and the
+walk is what caught the two bugs above.
+
+- **The port was drawing from libc's `rand()`** in `entity_update` and five other
+  places, where everything else uses `game_rand` - the Borland LCG the guest has.
+  A type 4 duck draws one number a frame, so the two sides diverged at random,
+  and it looked like agreement whenever the draws happened to line up. The
+  harness now syncs the seed (`d+0x3006` against `rand_seed`) *and compares it
+  afterwards*, which checks the count of draws as well as the values - that is
+  what then found the port drawing nothing for particles because the harness had
+  never given it an array.
+- **A duck riding the rocket probes off the top of the level.** The step loop
+  tries every `d` from the entity's speed down to -4, so an entity on row 0 reads
+  `rows[-1]`; in real mode that is the bytes in front of the row table and the
+  game never notices, and here it is the segfault the rocket launch produced.
+  `terrain_at` bounds it and reads outside the level as empty. What the guest
+  reads there is a property of its heap, so this cannot be matched, only chosen.
+- **A snapshot taken between levels keeps its scene pointers**, and what they
+  point at is freed DOS memory - `level1-bonus` reads `0x81818181` for every
+  field. The guest survives that and the port does not, so the harness checks the
+  state is a live level before comparing rather than crashing on it.
+
+**Still open, and pre-existing**: on level 4 the port's backdrop differs from the
+guest's in 2 of 320 rows, and the bytes there vary run to run, so they are memory
+the loader never wrote. `compare_level.py` has always reported it; it shows up
+here as `click-castle` differing on ducks standing in those rows. It is a level
+loader question, not a walking one, and the harness now says so rather than
+letting it look like a physics difference.
+
 ## The demos load, so the idle menu plays one
 
 **Written 2026-08-05**: `0x1240f` (`load_demo`), `0x126db` (`pick_random_demo`)

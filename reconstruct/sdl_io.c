@@ -621,6 +621,26 @@ void far audio_close(void)
 static int16_t press_count[3], release_count[3];
 static int16_t rel_x, rel_y;
 
+/* INT 33h numbers its buttons LEFT, RIGHT, MIDDLE - 0, 1, 2 - and SDL numbers
+ * them LEFT, MIDDLE, RIGHT - 1, 2, 3. The counters are indexed the way the game
+ * indexes them, because button_map holds INT 33h numbers and the MOUSE BUTTONS
+ * screen writes it, so the translation has to happen here.
+ *
+ * Getting this wrong is not a dead button, which is what makes it hard to spot:
+ * with the default map - walk on RIGHT, cycle tools on MIDDLE - subtracting one
+ * hands walking to the middle button and tool cycling to the right one, so both
+ * buttons do something, just not what they say. That was the bug behind "right
+ * click doesn't move the hero". */
+static int int33_button(Uint8 sdl_button)
+{
+    switch (sdl_button) {
+    case SDL_BUTTON_LEFT:   return 0;
+    case SDL_BUTTON_RIGHT:  return 1;
+    case SDL_BUTTON_MIDDLE: return 2;
+    default:                return -1;
+    }
+}
+
 /* ----------------------------------------------------------- mouse capture
  *
  * The original owned the machine. INT 33h reported motion with nothing for the
@@ -738,27 +758,33 @@ void sdl_pump_input(void)
                 rel_y += (int16_t) e.motion.yrel;
             }
             break;
-        case SDL_EVENT_MOUSE_BUTTON_DOWN:
-            if (e.button.button < 1 || e.button.button > 3)
+        case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+            int b = int33_button(e.button.button);
+
+            if (b < 0)
                 break;
             if (!capture_now) {
                 capture_wanted = 1;     /* the click takes hold instead */
                 capture_refresh();
-                swallow_release[e.button.button - 1] = 1;
+                swallow_release[b] = 1;
                 break;
             }
-            press_count[e.button.button - 1]++;
+            press_count[b]++;
             break;
-        case SDL_EVENT_MOUSE_BUTTON_UP:
-            if (e.button.button < 1 || e.button.button > 3)
+        }
+        case SDL_EVENT_MOUSE_BUTTON_UP: {
+            int b = int33_button(e.button.button);
+
+            if (b < 0)
                 break;
-            if (swallow_release[e.button.button - 1]) {
-                swallow_release[e.button.button - 1] = 0;
+            if (swallow_release[b]) {
+                swallow_release[b] = 0;
                 break;
             }
             if (capture_now)
-                release_count[e.button.button - 1]++;
+                release_count[b]++;
             break;
+        }
         case SDL_EVENT_WINDOW_FOCUS_GAINED:
         case SDL_EVENT_WINDOW_FOCUS_LOST:
             capture_refresh();
