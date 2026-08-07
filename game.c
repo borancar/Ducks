@@ -961,9 +961,14 @@ void far particles(void)
  * mouse pointer does: its script is 0,0,0,0,1,1,1,1 and next_type[0x14] is 0x14,
  * so it blinks between two sprites forever.
  *
- * TODO 0x0a58e-0x0a7ed: before the default there is a switch with arms for
- * types 0x1a-0x24, 0x2f, 0x46, 0x47, 0x4e and 0x54 - the game's own animation
- * behaviour, none of which any menu entity reaches.
+ * 0x0a58e-0x0a7ed is a switch on the type before that default, and it is where
+ * a good deal of the game's behaviour lives - the rocket filling up and taking
+ * off, the teleporter arriving, a duck drowning. Nothing in a menu reaches any
+ * of it, which is why it went unwritten while the menus were the whole port.
+ *
+ * `chain` is the original's `di`: set before the switch and cleared only by the
+ * drowning arm, it decides whether the default runs at all. An arm that has set
+ * the type itself must not have it overwritten.
  */
 void far animate_scene(scene_t far *scene)
 {
@@ -971,11 +976,95 @@ void far animate_scene(scene_t far *scene)
 
     for (i = 0; i < scene->count; i++) {
         entity_t far *e = &scene->entities[i];
+        int16_t       chain = 1;               /* di, 0x0a58e */
 
         e->frame++;
         if (anim_script[e->type][e->frame >> 1] != 0x3e7)
             continue;
 
+        switch (e->type) {
+        case 0x54:                             /* 0x0a5e0 - face either way */
+            e->f14 = (int8_t) ((game_rand() & 2) - 1);
+            break;
+        case 0x47:                             /* 0x0a602 */
+            e->f14 = 1;
+            break;
+        case 0x46:                             /* 0x0a61a */
+            e->f14 = -1;
+            break;
+        case 0x2f:                             /* 0x0a632 */
+            scene_swap_pair();
+            break;
+
+        /* 0x0a639. A duck has just gone into the rocket: give it a nudge
+         * upward, and the default then walks it on to 0x1b. */
+        case 0x1a:
+            e->f15 = 0xfc;                     /* -4 */
+            break;
+
+        /* 0x0a651. The teleporter's far end, which the 0x37 arm of
+         * collide_scenes stashed when the duck went in. */
+        case 0x20:
+            e->x   = (int16_t) g_1ff2;
+            e->y   = (int16_t) g_1ff4;
+            e->f15 = 0;
+            e->f21 = 0;
+            e->f16 = 0;
+            break;
+
+        case 0x23:                             /* 0x0a6d3 */
+            e->y -= 10;
+            break;
+
+        /* 0x0a6f0. Drowned. duck_dies has already set the type to 3, so the
+         * default must not run - unless g_509 says ducks do not die, in which
+         * case duck_dies did nothing and the type still has to move on. */
+        case 0x24:
+            duck_dies(e, 0, 1);
+            chain = g_509;
+            break;
+
+        /* 0x0a71d. The other way a level is won. */
+        case 0x4e:
+            duck_count--;
+            level_outcome = 1;
+            g_1ffc        = 1;
+            g_1ffa        = level_attempted;
+            break;
+
+        /* 0x0a736: THE ROCKET, and the whole of filling one up.
+         *
+         * `param` is how many ducks it still wants, and the type it wears is
+         * param + 5 - so types 6 to 0x0a are "five more" down to "one more", and
+         * that is what collide_scenes' 6..0x0a arm collides with. Each duck that
+         * arrives there sets this entity to 0x1a and takes one off param; 0x1a
+         * bounces it and next_type walks it to 0x1b; and 0x1b is here, which puts
+         * the right "N more" sprite back on.
+         *
+         * When param reaches zero the rocket goes instead, and if it was the last
+         * one on the level - scenery_count, which the loader counted - the level
+         * is won: outcome 1, which the frame turns into 2 and returns.
+         *
+         * The type set here survives the default because next_type is the
+         * identity for 5 and for 6..0x0a. */
+        case 0x1b:
+            entity_set_type(e, (int16_t) (e->param + 5));
+            if (e->param > 0)                  /* 0x0a780 - still wants ducks */
+                break;
+            if (--scenery_count == 0)          /* 0x0a787 */
+                level_outcome = 1;
+            entity_set_type(e, 5);             /* 0x0a799 - launched */
+            message_post(menu_text[44], NULL); /* "Rocket launched!" */
+            score += 0x19;
+            sound_play_guarded(0x0c, 1);
+            break;
+
+        default:                               /* 0x0a7ee - 0x1c..0x22 and all */
+            break;
+        }
+
+        if (!chain)                            /* 0x0a7ee */
+            continue;
         e->type  = next_type[e->type];
         e->frame = 0;
     }
