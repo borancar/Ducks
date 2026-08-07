@@ -167,3 +167,34 @@ with, and the only thing the spring gives it is the upward `f15`.
 The landing arm at `0x08427`, which `0x40` and `0x41` do reach, is
 `if (f21 > 0x32) duck_dies(); else { type = 2; f14 = 0; }` - no horizontal term
 there either.
+
+## Still open: the hero briefly drawn as a rocket (demo 4, level 53)
+
+Reported 2026-08-08: watching main.egg's demo 4 - level 53, which has three
+`0x3c` springs - the hero sprung by a spring appears for a moment as a rocket.
+
+Everything on the obvious path is verified and none of it is wrong:
+
+- the constants in both collide arms, read off `0x0a12f` and `0x0a243` rather
+  than pattern-matched: object `0x3e`/`0x3f`, hero `0x33`/`0x1c`, ordinary duck
+  `0x41`/`0x40`. The port matches.
+- `anim_script` for **all 112 types**, compared element by element against the
+  guest: identical.
+- the sprites those four scripts name, drawn out: tumbling ducks, mirror-imaged
+  between the A and B variants. Not rockets.
+- `anim_a` for the spring types: 3 on both sides, so the collision gate matches.
+- the port's own `collide_scenes` on the smallest state that reaches the arm -
+  one duck, one spring, nothing else - gives `0x41`/`0x40`, `f15 = 0xf9` and the
+  object at `0x3e`/`0x3f`, which is the guest's answer.
+
+So type, script and sprite are all correct, and the wrong picture comes from
+somewhere else. The next thing to look at is **which sprite table draw_entities
+indexes**: the game has the global set at `sprite_table` (d+0x18e9) and the
+level's own at `level_sprites`, and the same index means different pictures in
+each. A rocket where a tumbling duck belongs is what indexing the wrong one
+looks like.
+
+Two things not to repeat while chasing it. The types are not the suspect - that
+was checked twice. And a probe that copies scene 0 and scene 2 between the two
+address spaces and nothing else will report a difference that is its own; see the
+section above.
