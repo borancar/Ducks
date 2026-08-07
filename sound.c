@@ -345,3 +345,21 @@ void far sound_mix(int8_t *dst, int16_t frames)
         }
     }
 }
+
+/* ------------------------------------------------- 0x14974: detect_hardware
+ *
+ * The original resets the DSP at the base address BLASTER names and then runs
+ * the XMS check that prints "Free XMS memory: %uk". Its answer gates AUDIO
+ * SETTINGS and whether sound_init runs at all, so it is a hardware probe and
+ * belongs down here with the device rather than in stubs.c pretending to be
+ * unwritten game code.
+ *
+ * There is one card here and it is SDL's, so the only question left is whether
+ * a device opens - and sound_init already answers that, by leaving sound_state
+ * clear when it does not. Saying yes and letting it try is the whole probe.
+ * There is no XMS either: the samples are host memory.
+ */
+int16_t far detect_hardware(void)
+{
+    return 1;
+}

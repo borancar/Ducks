@@ -703,3 +703,54 @@ void far plot_pixel_wide(int16_t x, int16_t y, uint8_t colour)
  * on - would a port rewrite it, or recompile it - they belong in game.c, which is
  * where they are.
  */
+
+/* ======================================================= leaving, and Ctrl-C
+ *
+ * These three moved down here out of stubs.c for the reason crt_exit did:
+ * ending the process and installing an interrupt handler are the backend's to
+ * do, not game.c's. The SDL versions in sdl_io.c are finished; **these are
+ * not** - they are the shape, not a build.
+ */
+
+/* The runtime's, like delay and int86 above - a port supplies its own. */
+extern int  fprintf(void far *stream, const char far *fmt, ...);
+extern void exit(int status);
+extern void far *stderr;
+
+static int16_t (far *break_handler)(void);   /* d+0x3da2 */
+
+/* 0x04de6. Text mode, the message, exit(1). The mode restoration is the whole
+ * reason this is here and not in game.c: a message printed with a full-screen
+ * graphics mode up is a message nobody reads.
+ *
+ * TODO: 0x04de6's middle - the mode restore - has not been read out. It is one
+ * set_bios_mode call away in shape, but which mode it asks for is a guess until
+ * somebody reads it, and guessing is what this file does not do. */
+void far fatal(const char far *msg, const char far *arg)
+{
+    set_bios_mode(3);                      /* TODO: unread, 3 is the assumption */
+    if (arg)
+        fprintf(stderr, "%s: %s\n", msg, arg);
+    else
+        fprintf(stderr, "%s\n", msg);
+    exit(1);
+}
+
+/* 0x144cd, ten bytes: `mov ax, 1; retf`. Non-zero from a DOS Ctrl-Break handler
+ * means "do not abort", so the game's answer to Ctrl-Break is to carry on. */
+int16_t far ctrl_break_handler(void)
+{
+    return 1;
+}
+
+/* 0:0x0eb5. Keeps the handler's far pointer at d+0x3da2 and points the INT 23h
+ * vector at the runtime's own trampoline at 0:0x0e8c, which calls through that
+ * pointer and aborts or resumes on what it returns.
+ *
+ * TODO: the vector is set through the runtime rather than by an INT 21h AH=25h
+ * here, and that call has not been read out - so this stores the pointer and
+ * stops, which leaves Ctrl-Break doing whatever DOS does by default. */
+void far install_int23(void far *h)
+{
+    break_handler = (int16_t (far *)(void)) h;   /* d+0x3da2 */
+}
