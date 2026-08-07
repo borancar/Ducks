@@ -81,12 +81,39 @@ worth having as source.
 | file | contents so far |
 | --- | --- |
 | [`dos.h`](dos.h) | the types and the interface both backends implement, so `game.c` does not know which it is linked against |
-| [`game.c`](game.c) | 112 functions - `main` and `init`, the resource and string loaders, the two fonts, the whole menu system and every screen it reaches, the save format, the hall of fame, and the first pieces of the gameplay. Naming them all here would rot; they are in address order in the file and in `symbols.py` |
+| [`game.c`](game.c) | 145 functions - `main` and `init`, the resource and string loaders, the two fonts, the whole menu system and every screen it reaches, the save format, the hall of fame, and the first pieces of the gameplay. Naming them all here would rot; they are in address order in the file and in `symbols.py` |
 | [`dos_io.c`](dos_io.c) | nineteen functions: `set_bios_mode`, mode, planes, DAC, page flip, the three INT 33h wrappers, and every drawing primitive the native port replaced - `clear_vram`, `plot_pixel` and its stride-90 twin, `palette_fade_step`, `blit_rows`, `blit_rows_masked`, `compose_layer`, `compose_scroll`, `draw_sprite`, `outline_sprite`. No TODOs left in this file |
 | [`sound.c`](sound.c) | the sound module, code segments 0x1462 and 0x149e: the id-to-sample map, the eight-voice table, and the mixer. A sample lives in extended memory in the original and in a `malloc` here, which is the only difference that matters - the game asks about sounds by id either way |
 | [`sdl_io.c`](sdl_io.c) | the same interface on SDL3: a linear framebuffer, an SDL palette, a 70 Hz deadline in place of the retrace spin, SDL events counted into the INT 33h wrappers' shape, the mouse capture, and the audio device the mixer feeds |
 | [`egg.c`](egg.c) | the egg reader: the directory, `egg_find_block`, the chunk decoder and the shifted-string reader. The port maps the file and walks it with a cursor where the original seeks a `FILE *`, which is why the readers take a stream and treat NULL as the egg |
 | [`stubs.c`](stubs.c) | what is left, and the list is the to-do list in dependency order. `run_level` moved to `game.c` on 2026-08-05; **six** routines a demo reaches are still unwritten, 1,350 bytes - `0x0a956`, `0x0751b`, `0x09329`, `0x076e2`, `0x07646`, `0x078a6`. Every earlier count here (51, 37, 33, 24) was too high, all for one reason: they matched on `symbols.py` names, so a routine written under a name `symbols.py` lacked read as missing. Count by the image offset each body carries instead |
+
+## How much of it exists
+
+Measured by the image offset each body carries, not by name - names are what made
+every earlier count of this wrong. As of 2026-08-07:
+
+| | | |
+| --- | --- | --- |
+| the game's own segment, `0x04ca0`-`0x14620` | 174 of 194 functions | **59,133 of 63,880 bytes, 92.6%** |
+| sound, mixer, XMS and the C runtime above it | 13 of 77 | 1,734 of 17,192 bytes, 10.1% |
+
+The second row is small on purpose and will stay that way: it is Borland's
+runtime and a Sound Blaster, and the port has a host libc and SDL instead. Only
+the sound API itself was worth reconstructing, and it is in `sound.c`.
+
+What is left in the game's own segment is mostly the four cutscenes -
+`cutscene_rocket_landing` (1,052 bytes), `cutscene_doorstep` (516),
+`cutscene_night_monster` (483) and `cutscene_rocket_space` (358) - plus
+`load_eggs_ini`, `fatal`'s text-mode half, and a dozen small routines nothing has
+reached yet.
+
+**Written is not verified.** That 92.6% is how much has a C body. What has been
+compared against the guest is a smaller and much more valuable set: every native
+in `native.py` byte for byte, `entity_update` over six captures, `level_load`'s
+twenty fields and all 160 backdrop rows, and the leaves in `test_leaves.py`. The
+screens are checked pixel-for-pixel against snapshots where one exists. Nothing
+else is more than a careful reading.
 
 `game.c` keeps its functions in **address order**, which within a module is the
 order the compiler emits them and therefore the order they were defined in - a
