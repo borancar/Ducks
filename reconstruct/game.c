@@ -806,6 +806,17 @@ void far make_rect(viewport_t far *r, int16_t top, int16_t bottom,
     r->height   = bottom - top;      /* 0x08876: di - si */
 }
 
+/* 0x04dcd. Hold what is on screen for n frames, by flipping and doing nothing
+ * else. Every cutscene ends with one of these, so stubbing it makes the whole
+ * ending sequence flash past. */
+void far hold_frames(int16_t n)
+{
+    int16_t i;
+
+    for (i = 0; i < n; i++)
+        page_flip();
+}
+
 /* 0x08885. Sets a descriptor's size and allocates its rows. */
 void far image_alloc(desc_t far *desc, int16_t w, int16_t h)
 {
@@ -2521,7 +2532,7 @@ void far cutscene_welcome_home(void)
         if (page == 0)
             palette_upload();
     }
-    f_04dcd(150);                          /* the hold - unnamed */
+    hold_frames(150);                          /* the hold - unnamed */
     resource_release(&desc);
 }
 
