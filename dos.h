@@ -600,7 +600,9 @@ extern uint8_t tool_prev, tool_announce;             /* 0x1789, 0x178a */
 extern int16_t g_2100, g_dab;
 
 /* stubs.c - stubbed until run_level(1) needs them; see the note there */
-void far played_tool_events(uint8_t far *flash);
+void far played_tool_events(int16_t far *fast);   /* 0x0cf07 */
+void far pause_screen(void);                     /* 0x0ce2e */
+void far sound_set_rate(int16_t rate);           /* 0x149e:0x346 */
 void far f_07955(void);
 
 /* 0x0993b, game.c - the collision pass */
