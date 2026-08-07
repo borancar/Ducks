@@ -406,6 +406,53 @@ void far blit_rows(desc_t far *desc, viewport_t rect, int16_t srcrow)
     }
 }
 
+/* ------------------------------------------------- 0x0f717: blit_warped
+ *
+ * A tiled blit with a per-row horizontal offset, and the only caller is the
+ * rocket landing. Two things make it different from blit_rows:
+ *
+ * The source column is `(x + phase) & mask`, so the image TILES: the sky is
+ * four pixels wide with mask 3, which in Mode X means every plane always reads
+ * the same source column, and the sea is 32 wide with mask 0x1f.
+ *
+ * `phase` is an 8-bit accumulator - `step` doubled to start, `step` added per
+ * row - and the displacement is `phase >> 3`, so it ramps down the rows and
+ * wraps. With step 0 it is a plain tile; with step growing frame by frame the
+ * band ripples, which is what the sea does under the descending rocket. The
+ * wrap is 8-bit and deliberate: `add byte ptr [bp-1], al` at 0x0f732.
+ *
+ * The original has this loop twice, once per row stride - 90 bytes a plane row
+ * in 360-wide mode and 80 in 320 - chosen on viewport_screen.top at 0x0f735.
+ * Here the framebuffer is linear either way, so the two collapse into one.
+ */
+void far blit_warped(desc_t far *desc, viewport_t rect, uint8_t step,
+                     uint8_t mask)
+{
+    int16_t row, y, x;
+    uint8_t phase = (uint8_t) (step << 1);         /* 0x0f724 */
+
+    if (!desc || !desc->rows)
+        return;
+
+    for (row = 0, y = rect.top; y < rect.bottom; row++, y++) {
+        const uint8_t *src;
+        uint8_t       *dst;
+
+        phase = (uint8_t) (phase + step);          /* 0x0f732, and 8-bit */
+        if (row >= desc->h || y >= screen_height)
+            break;
+        if (y < 0)
+            continue;
+        src = desc->rows[row];
+        dst = fb_back + (size_t) y * screen_width;
+        /* The source is indexed by the ABSOLUTE column, not by one relative to
+         * rect.left - that is what makes the mask a tile rather than a clip. */
+        for (x = current_plane + rect.left; x < rect.right; x += 4)
+            if (x >= 0 && x < screen_width)
+                dst[x] = src[(x + (phase >> 3)) & mask];
+    }
+}
+
 void far blit_rows_masked(desc_t far *desc, viewport_t rect, int16_t srcrow)
 {
     int16_t row, src_row, x;

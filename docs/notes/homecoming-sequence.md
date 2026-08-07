@@ -235,3 +235,64 @@ compositor (returning to `0x12736`) and the in-game frame (returning to
 `0x12766`), so one routine drives the menu and the demo level. Recorded as
 `menu_screen_driver?`, tentative — the two observations are real, the name is a
 reading of them.
+
+## All six are written now (2026-08-08)
+
+The three that were stubs are transcribed, and two of them turned out to be
+described wrongly above - the table was read from call sites and resource ids,
+not from the bodies.
+
+**`cutscene_doorstep` is three pictures, not two.** `0x37` on its own, then
+`0x38` uncovered from the bottom by a wipe, then `0x39` - which the id block
+above lists as unused. Every one of the three is optional: each load is tested
+and its whole section skipped, which is why `resource_load_at` had to start
+returning what `resource_load_full` gave it instead of throwing it away. The
+wipe is a two-row strip of `0x38` blitted at row `curtain` while `curtain` walks
+0xc6 down to 0xb, and `blit_rows`' third argument is that same counter, so the
+strip always shows the part of the picture that belongs at that height. Sound
+0x67 plays under it on id 4 and is stopped by name when it finishes.
+
+**`cutscene_rocket_landing` is not "the same shape" as the others.** It is 255
+frames of arithmetic with no state but the counter, and it needs a routine the
+other five do not:
+
+`0x0f717`, `blit_warped`, is a tiled blit with a per-row offset. The source
+column is `(x + phase) & mask`, so the image repeats: the sky is **four pixels
+wide** with mask 3 - which in Mode X means every plane always reads the same
+source column - and the sea is 32 wide with mask 0x1f. `phase` is an 8-bit
+accumulator, `step` doubled to start and `step` added per row, displaced by
+`phase >> 3`; with step 0 it is a plain tile and with step growing frame by
+frame the sea ripples. The original writes the loop twice, once per row stride
+(90 bytes a plane row in 360-wide mode, 80 in 320); the port's framebuffer is
+linear so the two collapse into one.
+
+`snapshots/ending-landing.snap` is captured **inside** `0x0f717`, called from
+`0x0fd82`, which is the first of those two calls - so the argument decoding was
+read off the guest's own stack rather than guessed: `desc` far pointer, then a
+`viewport_t` by value (top 0, bottom 149, left 0, right 320), then step 0 and
+mask 3. The picture it was handed is `w=4 h=149`, four identical bytes a row -
+a vertical gradient. That is the sky.
+
+`0x0fc01` is the gull: sprite 2 in the sky band at `y` and sprite 3 in the sea
+band at `y - 0x95`, each clipped to its own band, which is what stops the
+reflection appearing in the sky. Below the waterline only the reflection is
+drawn.
+
+**`cutscene_night_monster`** loads `0x32` - the same starfield the first screen
+uses - with its palette at 0xf0, having blacked 0 to 0xef first, so only the
+sixteen colours the picture brought are lit. That is the night, and it costs one
+loop rather than a second image. The monster is a one-entity scene walking left
+from x = 0xfa, and the two things that happen to it are a switch on its position
+compiled to a two-entry table at `cs:0xb62b`: at 0xdc it is heard (sound 0x18),
+at 0x78 `fade_direction` goes to -1. The loop ends when `fade_level` reaches 0,
+so nothing counts frames - the fade is the clock. `0x100a7` is a rectangle fill
+that blacks the ground and the doorway out of the picture first.
+
+Checked by running all six through `libducks.so` in sequence, under
+AddressSanitizer and UBSan as well as plain: each returns, and nothing is
+reported. That is not a comparison - `fb_back` is `static`, so no harness has
+ever looked at the port's screen - but it does rule out the class of fault the
+port is prone to, where the original's one allocation is many here.
+
+The game's own module is **97.5%** written after this: 183 of 194 functions,
+62,299 of 63,880 bytes, up from 93.6%.

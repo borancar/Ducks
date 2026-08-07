@@ -446,10 +446,12 @@ int16_t far resource_load(desc_t far *desc, uint8_t type, uint8_t index,
  * run_screen uses it twice, for the two pieces of furniture around a menu: the
  * DUCKS logo along the bottom, and the big one at the top of a short menu. Each
  * brings sixteen colours of its own, which is what pal_at is for. */
-void far resource_load_at(desc_t far *desc, uint8_t type, uint8_t index,
-                          int16_t pal_at, int16_t row, int16_t egg)
+int16_t far resource_load_at(desc_t far *desc, uint8_t type, uint8_t index,
+                             int16_t pal_at, int16_t row, int16_t egg)
 {
-    resource_load_full(desc, 0, type, index, pal_at, 0, row, 0, egg, 1);
+    /* The result was thrown away here and cutscene_doorstep branches on it -
+     * every one of its three pictures is optional. */
+    return resource_load_full(desc, 0, type, index, pal_at, 0, row, 0, egg, 1);
 }
 
 /* 0x056f7. Forces one entry of the current palette buffer to black.
@@ -2644,6 +2646,331 @@ void far cutscene_welcome_home(void)
     }
     hold_frames(150);                          /* the hold - unnamed */
     resource_release(&desc);
+}
+
+/* --------------------------------------------------- 0x100a7: image_fill_rect
+ *
+ * Flood a rectangle of an image with one byte. Only the night scene uses it, to
+ * black out the ground and the two steps of the doorway in the picture it
+ * inherits, so the monster has something solid to walk in front of. Half-open
+ * on both axes, and it walks the row pointers rather than assuming the image is
+ * one block - which is why the port and the original agree here.
+ */
+static void far image_fill_rect(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
+                                desc_t far *desc, uint8_t colour)
+{
+    int16_t x, y;
+
+    for (y = y0; y < y1; y++) {                    /* 0x100eb */
+        uint8_t far *p = desc->rows[y] + x0;       /* 0x100cb */
+
+        for (x = x0; x < x1; x++)                  /* 0x100e6 */
+            *p++ = colour;
+    }
+}
+
+/* ============================================== 0x100f4: cutscene_night_monster
+ *
+ * The last ending. The picture is loaded with its palette at 0xf0 and the whole
+ * of 0 to 0xef is set to black first, so only the sixteen colours the picture
+ * brought are lit - that is the night, and it costs one loop rather than a
+ * second image.
+ *
+ * The monster is a one-entity scene walking left from x = 0xfa, one pixel a
+ * frame, and the two things that happen to it are a switch on its position:
+ *
+ *   x == 0xdc   it is heard   (sound 0x18)
+ *   x == 0x78   fade_direction goes to -1 and the scene starts to fade
+ *
+ * The original compiles that to a two-entry table at cs:0xb62b comparing both
+ * halves of the 32-bit x. The loop ends when fade_level reaches 0, so nothing
+ * counts frames - the fade is the clock.
+ */
+void far cutscene_night_monster(void)
+{
+    desc_t   pic;
+    scene_t  scene;
+    int16_t  i;
+    uint8_t  plane;
+
+    clear_vram();
+    fade_level     = 0xf;                          /* 0x100fe */
+    fade_direction = 0;
+    for (i = 0; i < 0xf0; i++)                     /* 0x1010f */
+        palette_set_black((uint8_t) i);
+
+    if (!resource_load(&pic, 0x4d, 0x32, 0xf0, 1, 0xff, 1))   /* 0x10137 */
+        return;
+    palette_apply_gamma();
+    palette_upload();
+
+    scene_alloc(&scene, 1);                        /* 0x10154 */
+    scene_add(&scene, 0xfa, 0x80, 0x39, 5);        /* 0x1016a */
+    scene.entities[0].f14 = (int8_t) 0xff;         /* 0x10173 - walking left */
+
+    /* 0x1019b. The doorway is stamped into the picture rather than drawn every
+     * frame: it never moves, and this way the monster can be clipped by it. */
+    stamp_sprite_into(0xfa, 0x82,
+                      &sprite_table.base[anim_script[5][0]], &pic);
+
+    image_fill_rect(0, 0x80, 0x140, 0xc8, &pic, 0);   /* 0x101b4 - the ground */
+    image_fill_rect(0, 0x50, 0x32,  0x80, &pic, 0);   /* 0x101cb */
+    image_fill_rect(0, 0x4b, 0x35,  0x50, &pic, 0);   /* 0x101e1 */
+
+    while (fade_level) {                           /* 0x102a5 */
+        for (plane = 0; plane < 4; plane++) {
+            set_plane(plane);
+            blit_rows(&pic, viewport_screen, 0);
+            draw_entities(&scene, viewport_screen, 0);
+        }
+        page_flip();
+        animate_scene(&scene);
+        scene.entities[0].x -= 1;                  /* 0x1024d, a 32-bit sub */
+
+        switch (scene.entities[0].x) {             /* 0x10266, cs:0xb62b */
+        case 0x78:  fade_direction = -1;  break;   /* 0x10288 */
+        case 0xdc:  sound_play_guarded(0x18, 1);  break;   /* 0x1028f */
+        default:    break;
+        }
+        palette_fade_step(0);                      /* 0x1029f */
+    }
+
+    free(scene.entities);                          /* 0x102b5, lcall 0:0xedb */
+    resource_release(&pic);
+}
+
+/* ================================================== 0x0f9fd: cutscene_doorstep
+ *
+ * The third ending, and three pictures in a row: the doorstep (0x37), the door
+ * opening behind a wipe (0x38), and what is behind it (0x39). Every one of them
+ * is optional - each load is tested and its whole section skipped if the egg
+ * does not have it - which is why this reads as three independent blocks rather
+ * than one sequence.
+ *
+ * One 320x200 image is allocated up front and all three are loaded into it in
+ * turn, so `desc` is reused and released once at the end.
+ *
+ * The middle one is the only animation: a two-row strip of picture 0x38 is
+ * blitted at row `curtain` while `curtain` walks from 0xc6 down to 0xb, which
+ * uncovers it from the bottom up. `blit_rows`' third argument is the source
+ * row, and it is the same counter, so the strip always shows the part of the
+ * picture that belongs at that height.
+ */
+void far cutscene_doorstep(void)
+{
+    desc_t     desc;
+    viewport_t strip;
+    int16_t    o = viewport_screen.top;            /* si */
+    uint8_t    curtain = 0xc6;                     /* [bp-2] */
+    uint8_t    page, plane;
+
+    desc.w = 0x140;                                /* 0x0fa08 */
+    desc.h = 0xc8;
+    alloc_image(&desc, 0, 0, 0, 1);                /* 0x0fa20 */
+    clear_vram();
+
+    /* the doorstep */
+    if (resource_load_at(&desc, 0x4d, 0x37, 0, 0xa, 0xff)) {   /* 0x0fa3f */
+        palette_apply_gamma();
+        palette_upload();
+        for (page = 0; page < 2; page++) {
+            for (plane = 0; plane < 4; plane++) {
+                set_plane(plane);
+                blit_rows(&desc, viewport_screen, 0);
+            }
+            page_flip();
+        }
+        hold_frames(0x1e);                         /* 0x0fa9c */
+    }
+
+    /* the door, uncovered from the bottom */
+    if (resource_load_at(&desc, 0x4d, 0x38, 0x18, 0xd, 0xff)) {  /* 0x0fab3 */
+        palette_apply_gamma();
+        palette_upload();
+        sound_play_guarded(0x67, 4);               /* 0x0facd */
+        while (curtain > 0xa) {                    /* 0x0fb3f */
+            make_rect(&strip, o + curtain, o + curtain + 2, o, o + 0x140);
+            for (plane = 0; plane < 4; plane++) {
+                set_plane(plane);
+                blit_rows(&desc, strip, curtain);  /* source row == height */
+            }
+            curtain--;
+            page_flip();
+        }
+        stop_sound_by_id(4);                       /* 0x0fb45, via 0x1462:0x196 */
+        sound_play_guarded(0x66, 1);
+        hold_frames(0x32);
+    }
+
+    /* and what was behind it */
+    if (resource_load_at(&desc, 0x4d, 0x39, 0x18, 0xd, 0xff)) {  /* 0x0fb6f */
+        sound_play_guarded(0x0d, 1);
+        for (page = 0; page < 2; page++) {
+            for (plane = 0; plane < 4; plane++) {
+                set_plane(plane);
+                blit_rows(&desc, viewport_screen, 0);
+            }
+            page_flip();
+            /* After the first page, not before it: the picture is already on
+             * screen when the palette arrives, so it appears rather than
+             * fading. 0x0fbc8. */
+            if (page == 0) {
+                palette_apply_gamma();
+                palette_upload();
+            }
+        }
+        hold_frames(0x96);
+    }
+
+    resource_release(&desc);                       /* 0x0fbed */
+    dac_set_black(0, 0);
+}
+
+/* ------------------------------------------------ 0x0fc01: the bird and its
+ * reflection
+ *
+ * Two calls, both from the landing, and it is one gull drawn twice: sprite 2 in
+ * the sky band at `y`, and sprite 3 in the sea band at `y - 0x95` - which is the
+ * band's own height, so the second is the first mirrored into the water below
+ * the horizon. Each is clipped to its own band, which is what stops the
+ * reflection appearing in the sky and the bird in the sea.
+ *
+ * Past the waterline at 0x9a the bird is gone and only sprite 3 is drawn, at the
+ * waterline itself and clipped to the whole screen instead of to a band.
+ */
+static void far landing_bird(int16_t x, int16_t y, table_t far *sprites,
+                             viewport_t far *sky, viewport_t far *sea)
+{
+    int16_t index;
+
+    if (y < 0x9a) {                                /* 0x0fc0f */
+        index = 2;
+        draw_sprite(&index, x, y, sprites, sky, 0);            /* 0x0fc34 */
+        index = 3;
+        draw_sprite(&index, x, y - 0x95, sprites, sea, 0);     /* 0x0fc5c */
+    } else {
+        index = 3;
+        draw_sprite(&index, x, 0x9a, sprites, &viewport_screen, 0);  /* 0x0fc81 */
+    }
+}
+
+/* ============================================ 0x0fc8b: cutscene_rocket_landing
+ *
+ * The second ending: the rocket comes down over the sea while clouds drift past
+ * and two gulls cross. 255 frames, four planes each, and every position is an
+ * expression in the frame counter - there is no state but the counter.
+ *
+ * `o` is `viewport_screen.top`, and the original uses that one word for BOTH
+ * axes: the centred 320x200 window inside 360x240 has top and left equal at 20,
+ * and both are 0 in 320-wide mode, so one read does for both.
+ *
+ * The two bands are the picture: rows 0..0x95 are the sky, drawn from a
+ * four-pixel-wide tile, and 0x95..0xab the sea, drawn from a 32-wide one with a
+ * ripple that grows with the frame. See blit_warped in sdl_io.c.
+ *
+ * The two little index cycles are locals with initialisers - Borland compiles
+ * those to a memcpy from a template in DGROUP, which is what 0x0fca7 and 0x0fcb9
+ * are, and not something the source said.
+ */
+void far cutscene_rocket_landing(void)
+{
+    uint8_t     smoke[8]   = { 5, 5, 6, 6, 7, 7, 6, 6 };            /* d+0x2183 */
+    uint8_t     splash[16] = { 5, 5, 5, 5, 5, 6, 6, 6,
+                               7, 7, 7, 7, 7, 6, 6, 6 };            /* d+0x218b */
+    viewport_t  sky_band, sea_band;
+    desc_t      sky, sea;
+    table_t     sprites;
+    int16_t     index;
+    int16_t     o     = viewport_screen.top;       /* si, 0x0fc97 */
+    uint8_t     frame = 0;                         /* [bp-8] */
+    uint8_t     plane;                             /* [bp-7] */
+
+    make_rect(&sky_band, o, o + 0x95, o, o + 0x140);       /* 0x0fcd2 */
+    make_rect(&sea_band, o + 0x95, o + 0xab, o, o + 0x140);/* 0x0fcf1 */
+
+    if (!resource_load(&sky, 0x4d, 0x33, 0, 1, 0xff, 1))   /* 0x0fd0a */
+        return;
+    if (!resource_load(&sea, 0x4d, 0x34, 0, 1, 0xff, 1)) { /* 0x0fd2a */
+        resource_release(&sky);                            /* 0x0fd34 -> 0x10098 */
+        return;
+    }
+    sprite_set_load(0x34, 0x53, &sprites, 0xff);           /* 0x0fd44 */
+    clear_vram();
+    palette_apply_gamma();
+    palette_upload();
+
+    do {
+        for (plane = 0; plane < 4; plane++) {              /* 0x0fd56 */
+            set_plane(plane);
+
+            blit_warped(&sky, sky_band, 0, 3);             /* 0x0fd7f */
+            blit_warped(&sea, sea_band, frame, 0x1f);      /* 0x0fd9e */
+
+            /* 0x0fdcd. Five clouds, each drifting left at half a pixel a frame
+             * from its own start, all sitting on the horizon at y = 0x94. */
+            index = 0;
+            draw_sprite(&index, (int16_t) ((0x100 - frame) >> 1), 0x94,
+                        &sprites, &sky_band, 0);
+            index = 4;
+            draw_sprite(&index, (int16_t) ((0x190 - frame) >> 1), 0x94,
+                        &sprites, &sky_band, 0);
+            index = 1;
+            draw_sprite(&index, (int16_t) ((0x258 - frame) >> 1), 0x94,
+                        &sprites, &sky_band, 0);
+            index = 4;
+            draw_sprite(&index, (int16_t) ((0x2f8 - frame) >> 1), 0x94,
+                        &sprites, &sky_band, 0);
+            index = 0;
+            draw_sprite(&index, (int16_t) ((0x2c2 - frame) >> 1), 0x94,
+                        &sprites, &sky_band, 0);
+
+            /* 0x0fe8f. The sixth falls until frame 0x30 and then sits on the
+             * horizon with the rest. */
+            index = 4;
+            if (frame < 0x30)
+                draw_sprite(&index, (int16_t) ((0x212 - frame) >> 1),
+                            frame + 0x64, &sprites, &sky_band, 0);
+            else
+                draw_sprite(&index, (int16_t) ((0x212 - frame) >> 1), 0x94,
+                            &sprites, &sky_band, 0);
+
+            /* 0x0ff29. The rocket: two pixels down and one left a frame,
+             * starting well above the screen, and clipped to the whole window
+             * rather than to a band so it can cross the horizon. */
+            index = 2;
+            draw_sprite(&index, (int16_t) (0x226 - frame),
+                        (int32_t) (frame * 2 - 0x190),
+                        &sprites, &viewport_screen, 0);
+
+            landing_bird((int16_t) (0xdc - frame), (int16_t) (frame * 2),
+                         &sprites, &sky_band, &sea_band);          /* 0x0ff52 */
+            landing_bird((int16_t) (0x190 - frame), (int16_t) (frame * 2 - 0x28),
+                         &sprites, &sky_band, &sea_band);          /* 0x0ff7e */
+
+            /* 0x0ffaa. Two boats on the waterline, and then the smoke and the
+             * splash, each stepping through its own cycle - eight frames long
+             * and sixteen, which is why they never quite line up. */
+            index = 3;
+            draw_sprite(&index, (int16_t) (0x14a - frame), 0x9a,
+                        &sprites, &viewport_screen, 0);
+            index = 3;
+            draw_sprite(&index, (int16_t) (0x50 - frame), 0x9a,
+                        &sprites, &viewport_screen, 0);
+            index = smoke[frame & 7];                      /* 0x10006 */
+            draw_sprite(&index, (int16_t) (0x1d6 - frame), 0x9a,
+                        &sprites, &viewport_screen, 0);
+            index = splash[frame & 0xf];                   /* 0x10045 */
+            draw_sprite(&index, (int16_t) (0x1ea - frame), 0x9a,
+                        &sprites, &viewport_screen, 0);
+        }
+        frame++;                                           /* 0x10065 */
+        page_flip();
+    } while (frame < 0xff);                                /* 0x1006c */
+
+    dac_set_black(0, 0);                                   /* 0x1007a */
+    sprite_set_free(&sprites);
+    resource_release(&sea);
+    resource_release(&sky);
 }
 
 /* ----------------------------------------------- 0x0f913: cutscene_photos */
