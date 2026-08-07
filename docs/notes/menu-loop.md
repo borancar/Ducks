@@ -263,3 +263,85 @@ Two things about driving it, both learned by getting them wrong:
 clamps at **0x1f**: watched going 29 -> 26 over three lefts and then to 31 over
 five rights. `page_flip` delays `0x1f - speed` ms, so 31 is no delay at all. See
 [open-game-speed](open-game-speed.md).
+
+## One level per pass: the play loop's tail (0x13a33)
+
+Action 2 - the `case 2` the RESUME item reaches, and the one `START A NEW GAME`
+falls through into - looks like a loop that plays level after level. It is not.
+Every way out of a level converges on **0x13a33**, and what happens there is:
+
+```
+0x13a33  cmp word ptr [0x2177], 0     ; a game in progress?
+0x13a38  je   0x13a3e
+0x13a3a  call 0x128a5 <menus_resume>  ; relabel PLAY DUCKS' first item
+0x13a3e  cmp word ptr [0x1ffc], 0     ; secret level pending?
+0x13a45  jmp  0x137f6                 ;   then go round again
+0x13a48  cmp word ptr [0x1ffe], 0
+0x13a4f  jmp  0x137f6
+0x13a52  jmp  0x13a66                 ; otherwise leave the case entirely
+```
+
+So the ordinary path - level completed, bonus tallied, `level_attempted++` at
+0x139ab - **falls out to `menu_screen_driver`**. The loop only repeats itself for
+a secret level. That is what `menus_resume` is for and why it is called here:
+it sets PLAY DUCKS' first item to PLAY NEXT LEVEL or RETRY LEVEL depending on
+`[0x21a3]`, immediately before the driver draws that menu again. A label that
+only ever appeared after loading a save would not need deciding once per level.
+
+The port had `case 2` as a real `for (;;)`, which produced the same sequence of
+levels while never showing the menu between them, and dropped the tail's
+`menus_resume` with it. It now has the tail as written, with the five exits
+reaching it by `goto play_tail`.
+
+`[0x2177]` was called `menu_idle_suppress` here, after its use at 0x0c9db where
+it holds off the idle demo. Suppressing the demo is a consequence; the flag
+means **a game is in progress**, which is how 0x13a33 and the three menu items
+built with `&game_in_progress` read it. Renamed.
+
+## The game-over sequence
+
+`0x139b2`, reached when `run_level` returns 0:
+
+```
+g_21a3 = 0;
+if (!g_50b) --lives;                   /* only the decrement is guarded */
+sprintf(buf, "%s: %i", menu_text[53], lives);   /* "LIVES LEFT: 0" */
+show_splash(buf, 100);
+release_sounds();
+if (lives == 0) {                      /* 0x13a01 */
+    menu = &main_menu;
+    sound_play_guarded(0x16, 1);
+    show_resource(0x4d, 6, 50, 0xff);  /* GAME OVER */
+    high_score_screen();               /* 0x13a2c - the hall of fame */
+    menus_after_game();                /* 0x13a30 */
+}
+/* falls through to the tail above, which returns to the menu */
+```
+
+Captured as snap005-snap010, identified by the return addresses on the guest's
+stack rather than by looking at the screens:
+
+| snapshot | stack                                   | screen              |
+|----------|-----------------------------------------|---------------------|
+| snap005  | `page_flip <- 0x139f9`                  | LIVES LEFT: 0       |
+| snap006  | `page_flip <- 0x0c1f2 <- 0x13a28`       | GAME OVER           |
+| snap007  | `page_flip <- 0x11d79 <- 0x13a2f`       | high_score_screen   |
+| snap008  | `page_flip <- 0x11dc1 <- 0x13a2f`       | the score           |
+| snap009  | `page_flip <- 0x0bb1d <- 0x11ef4`       | the board           |
+| snap010  | `page_flip <- 0x12736 <- 0x13692`       | the main menu       |
+
+All six read `lives=0 outcome=3`; `[0x2177]` is 1 in the first five and 0 in
+snap010, which is `menus_after_game` having run. The port stopped after the
+`show_resource`, so the run ended on the GAME OVER screen and never came back.
+
+Three more transcription errors were in the same twenty lines, all found by
+reading the disassembly the captures pointed at:
+
+- `while (level_screens(...))` , not `if (...) break`. 0x13835 jumps **back to
+  the call**: non-zero is the level-select key, and the screens have to be
+  rebuilt for whatever level was just picked.
+- The `[0x50b]` guard covers `--lives` only, not the splash and the game-over
+  after it. It means "this attempt was free", not "say nothing".
+- The ending gate at 0x1390d is two nested tests, not one `&&`. Episode 0 gets
+  the cutscenes; **every** episode that passes the gate gets `menu = &main_menu`
+  (0x13999), `high_score_screen` and `menus_after_game`.
