@@ -134,6 +134,42 @@ until something is wrong, and "corruption at the next free" is exactly the class
 of bug that reading cannot find, because the report names a victim and never the
 culprit.
 
+## "Cannot be matched" is sometimes just "not measured yet"
+
+**2026-08-07.** `terrain_at` bounds every gameplay probe, and its comment said
+what the guest reads outside the level "is a property of its heap, so this cannot
+be matched, only chosen". Both halves of that were written at once, and only one
+was true.
+
+Reported: on level 11 the ducks walk off the left edge, which the original does
+not do. The probe is `0x07f2d`, where a duck compares the ground two pixels
+either side and leans toward whichever is open. Reading outside as *empty* makes
+every duck near the left edge lean off it - harmless on a level with a solid
+border, fatal on one whose column 0 is open, and level 11's is: 13 solid pixels
+in 160 rows.
+
+**So go and read what the guest reads.** Each backdrop row is a separate
+`farmalloc`, so `x = -1` is the last byte of that row's own block header and
+`x = w` the next block's. Across three snapshots and 880 rows: `0x01` **every
+single time**, at both ends, and `x = -2` varied but never zero. Not garbage - the
+allocator's size field, and no allocator writes a zero there.
+
+The two axes turned out to be different questions:
+
+| | | |
+| --- | --- | --- |
+| x outside | the row's own block header | **measurable** - always non-zero, so solid |
+| y outside | the row *table*, indexed out of range, then dereferenced | genuinely unknowable - empty, which keeps the rocket working |
+
+`test_entity` still reports 0 differing fields over six captures after the change,
+which is the point: the measurement did not contradict the comparison, it filled
+in a case the comparison never reached.
+
+**How to apply.** Before writing "cannot be matched", check whether the thing is
+reachable with a read instead of an argument. An out-of-bounds access into a
+known allocator is often perfectly deterministic, and a snapshot will say so in
+one run.
+
 ## Verification that works here
 
 - `--verify --verify-only <names>` byte-compares a native against the original

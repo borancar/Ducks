@@ -4927,17 +4927,34 @@ void far demo_events(void)
  * they happen to point at; there is no fault and the game never notices.
  *
  * Here it is a segfault, which is what the backtrace from the rocket launch
- * shows. Outside the level reads as empty, because empty is what the sky above a
- * level is and because it leaves the entity moving - the original has a whole
- * section at 0x08565 for an entity that has left the level, so leaving is a
- * state it expects to reach rather than one to be walled off. What the guest
- * actually reads there is a property of its heap, so this cannot be matched, only
- * chosen: this is the one place in the file that deliberately does not.
+ * shows. The two axes are not the same question, and it took a bug report to
+ * see that:
+ *
+ * **Off the left or right of a row, the guest reads its own allocator.** Each row
+ * is a separate farmalloc, so x = -1 is the last byte of that block's header and
+ * x = w the next block's. Measured across three snapshots and 880 rows, both are
+ * `0x01` every single time, and x = -2 is varied but never zero. So the original
+ * behaves as though the level were walled, and this returns solid to match -
+ * which is measurement, not choice.
+ *
+ * It matters because of the drift at 0x07f2d: a duck compares the ground two
+ * pixels either side and leans toward whichever is open. Reading the outside as
+ * empty makes every duck near the left edge lean off it, which on a level whose
+ * column 0 is open - 11 is one, 13 solid pixels in 160 rows - walks the flock
+ * into the void. That is the "ducks fall off the left edge" report.
+ *
+ * **Off the top or bottom there is nothing to match.** That indexes the row
+ * TABLE out of range and dereferences whatever pointer comes back, so the
+ * original reads somewhere unknowable. Empty is the choice, and it is the useful
+ * one: it leaves an entity moving, and 0x08565 is a whole section for an entity
+ * that has left the level, so leaving is a state the game expects to reach.
  */
 static uint8_t terrain_at(int32_t y, int32_t x)
 {
-    if (y < 0 || y >= backdrop.h || x < 0 || x >= backdrop.w)
-        return 0;
+    if (y < 0 || y >= backdrop.h)
+        return 0;                    /* the row table - unknowable, so empty */
+    if (x < 0 || x >= backdrop.w)
+        return 1;                    /* the row's own header - always non-zero */
     return backdrop.rows[y][x];
 }
 
