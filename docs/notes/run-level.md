@@ -1398,7 +1398,7 @@ anti-stacking warning. It counts non-solid pixels down the column and complains
 if it took more than 28 rows to find sixteen, and the three messages escalate:
 "Careful... don't stack bridges...", "THIS IS YOUR LAST WARNING! NO BRIDGE
 STACKING!", "Oops, how did that happen?". The third calls `0x07955`, which is
-still unread. It takes x by pointer and never writes through it.
+now read - see below. It takes x by pointer and never writes through it.
 
 **Checked by driving it**: level 3, a bridge placed over a gap finishes in 8
 frames and leaves 148 pixels of new terrain, and stops itself rather than running
@@ -1540,3 +1540,164 @@ that first is what stops the rest being guesswork:
 Two of the four plane loops live inside `0x0d7ee`, so
 [open-function-attribution](open-function-attribution.md) and the plane-loop
 extents matter here in a way they have not so far.
+
+
+## ESC does not fade the level out (0x07955)
+
+The port had this in the frame:
+
+```c
+if (!demo && last_key == 0x1b)      /* invented */
+    fade_direction = -1;
+```
+
+which was written to have *some* way off a played level while the endings were
+unwired, and then stayed. There is no `cmp last_key, 0x1b` anywhere in
+`run_level`; the only read of `[0x18f6]` in the whole 2,830 bytes is 0x0de8c,
+which is the demo's exit. ESC belongs to `played_tool_events`, and it does this:
+
+```
+case 0x1b: case 0x51: case 0x71:    /* ESC, Q, q */
+    kill_all_ducks();               /* 0x0cffe -> 0x07955 */
+```
+
+**0x07955 is not a bridge routine.** 71 bytes:
+
+```c
+void far kill_all_ducks(void)
+{
+    int16_t i;
+    for (i = 0; i < scenes[0].count; i++)
+        duck_dies(&scenes[0].entities[i], 1, 0);   /* force set, silent */
+    if (!g_2016)
+        sound_play_guarded(5, 1);
+    g_2016 = 1;
+}
+```
+
+Every duck in the flock through `duck_dies` with `force` set - forty particles
+each and the type set to 3 - so the flock blows up where it stands. Nothing in
+it ends the level. What ends the level is `[0x2016]`, which the frame already
+reads: `if (duck_count == 0 || g_2016) over++;` and outcome 3 at `over >= 0x20`.
+Those 32 frames are the delay the explosion plays out in, and the fade the port
+was doing directly is what skipped it.
+
+`[0x2016]` is written in exactly two places in the image - 1 here at 0x07993,
+and 0 at 0x0db5c in `run_level`'s setup - so it is per-attempt, and a second ESC
+in the same attempt is silent because the guard suppresses the sound and every
+duck is already type 3.
+
+Driven through `libducks.so` on level 1: 11 ducks, 11 alive, 0 particles ->
+0 ducks, 0 alive, **440 particles** (11 x 40), `g_2016` 1. A second call adds
+nothing. The pool has to be stood up by the harness first; `particle_cap` is 0
+until `run_level` allocates it, and a spawn against a zero cap falls through
+silently, which is what made the first run report no particles at all.
+
+### The clock, and the third caller (0x0ddfe)
+
+The three call sites are 0x0cffe (ESC), 0x07a22 (the third stacking warning) and
+0x0de2e, which sits in a block the port did not have at all:
+
+```c
+if (level_timer) {                  /* 0x2003 */
+    if (tick) tick--;
+    else {
+        tick = timer_period;        /* 0x2001 */
+        if (--level_timer == 0)
+            sound_play_guarded(0x1c, 1);
+    }
+} else if (!g_2016 && g_1ffe) {     /* 0x0de2e */
+    kill_all_ducks();
+}
+```
+
+So the level clock was never running: `run_level` set `level_timer = 0x1b` and
+nothing took it down, which is why the time bonus was always the full 27 x 5.
+
+The `else` reads oddly until `[0x1ffe]` is pinned down. 0x0d876 is
+`g_1ffe = g_1ffc; g_1ffc = 0;` - the secret-level flag moved off the pending one
+as the level starts - and 0x13895 skips the bonus screen when either is set
+while 0x13a48 sends the play loop straight round again. So `[0x1ffe]` means
+*this level is the secret one*, and the branch is: an ordinary level's clock
+stops at zero and is worth five points a tick, a secret level's clock running
+out blows the flock up. That is what makes those levels timed.
+
+### Why the explosion was invisible: 0x0a956 was never written
+
+ESC blew the flock up and nothing appeared to happen, because the particles were
+spawned and then frozen. `particles_spawn` fills in `vx`, `vy`, `f0d` and `f0e`,
+and in the port **nothing read any of the four** - the pool only ever grew, every
+dot sitting at the pixel its duck died on until the level ended.
+
+The step is `0x0a956`, 435 bytes, called once a frame from `0x0e482` between
+`animate_scene(&tool_scene)` and the score chase. It was in run_level's list of
+six unwritten routines and was never taken off it - not stubbed, not called, so
+nothing said so at runtime. What it does:
+
+```c
+p->x += p->vx;  p->y += p->vy;  p->vy++;          /* gravity */
+if ((uint32_t) p->x > level_w * 8 ||
+    (uint32_t) p->y > level_h * 8) { retire; i--; continue; }
+if (!terrain_at(p->y >> 3, p->x >> 3)) continue;  /* still in the air */
+if (!p->f0e) { retire; continue; }                /* and no i-- - see below */
+if (settings[1]) backdrop.rows[py][px] = p->colour;   /* FLYING BLOOD */
+p->vy = 8;
+if (--p->f0d == 0) { retire; i--; }
+```
+
+Three things worth keeping:
+
+- **Both bounds tests are unsigned** (`jb` at 0x0a9ec, `ja` at 0x0aa16). That is
+  how off-the-left and off-the-top are caught: a negative coordinate is a huge
+  unsigned one, so one compare against the far edge covers both sides. Writing
+  it as two signed tests would be tidier and wrong.
+- **Terrain is a hit, not a wall.** The particle is not stopped; `vy` is forced
+  to 8 and its life comes down by one. `f0d` is 1 or 2 from the spawner, so a
+  particle survives one or two landings. What it leaves is the stain - its own
+  colour written into the terrain - which is what FLYING BLOOD means, and the
+  same setting gates the draw at 0x0e4fd, so with it off there is nothing to see
+  at all.
+- **The `f0e == 0` retire at 0x0aaf3 does not step `i` back**, where the other
+  two do, so the particle swapped into the hole is skipped for a frame. Kept.
+
+`particle_retire` (0x0a85f) is swap-with-last: the last record is copied over the
+retired one and the count comes down, which is why the draw can be a flat walk
+and why the two arms that retire have to step `i` back.
+
+**Checked against the guest**, `test_particles.py`: 400 made-up pools - random
+level sizes, random terrain, coordinates deliberately overshooting both axes,
+FLYING BLOOD on and off - one frame each, comparing the count, every surviving
+record and the whole terrain. Byte-identical. The retire tests being `>` and not
+`>=` means a particle exactly on the far edge indexes one past its row, so the
+harness has to give each guest row the 0x01 header byte a farmalloc'd one has, or
+the two sides disagree there and nowhere else.
+
+**And end to end**: ESC on `snapshots/snap011.snap` in the guest takes the pool
+from 0 to 440 - eleven ducks at forty particles - and then down 434, 408, 315,
+161, 40 as they land and expire. The port spawns the same 440.
+
+### The episode intro is not part of a retry (0x11058)
+
+`level_screens` was calling `episode_intro` unconditionally, so abandoning a
+level and trying it again replayed the whole episode introduction. The original
+gates it:
+
+```
+0x1104b  cmp word ptr [0x507], 0     ; the cheat's level picker?
+0x11050  je   0x11058
+0x11053  call 0x10c06                ;   that instead - not written here
+0x11056  jmp  0x11062
+0x11058  cmp word ptr [bp + 6], 0    ; the argument
+0x1105c  je   0x11062                ;   zero: straight past the intro
+0x1105e  call 0x1089b <episode_intro>
+```
+
+The argument is `game_main`'s `[0x21a3]`, which `run_level`'s failure path clears
+at 0x139b2 and a completed level sets at 0x1389f. So it means *this is not a
+retry* - the same bit `menus_resume` reads to choose between PLAY NEXT LEVEL and
+RETRY LEVEL - and the parameter is now called `fresh` rather than `demo`, which
+is what it had been named here and never was.
+
+`[bp+6]` is written once more, at 0x112a9 in the level-select branch, and that
+store is dead: the intro decision is a hundred instructions behind it. Kept
+anyway, because it is the original's.

@@ -9,6 +9,8 @@ Current, and kept current. Where these disagree with
   palette fade, and 81% of traffic removed for no measurable speedup
 - [open-readme-crash](open-readme-crash.md) — the one open bug: the readme runs
   out of stack, and every symptom after that follows mechanically
+- [open-dgroup-initialisers](open-dgroup-initialisers.md) — bare declarations
+  over initialised data: `particle_colours` was one, and seven more need reading
 - [control-socket](control-socket.md) — drive a running machine over a Unix
   socket: press keys, capture, ask where it is
 - [flip-transient](flip-transient.md) — the "first 120 frames run 4x slow" was

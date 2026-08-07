@@ -331,6 +331,7 @@ void far draw_number(int16_t value, int16_t x, int16_t y, viewport_t far *clip,
                      int16_t flags, int16_t digits);
 void far draw_number2(int16_t value, int16_t digits, int16_t x, int16_t y);
 void far particles(void);
+void far particles_step(void);
 void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour);
 void far show_splash(const char far *text, int16_t frames);
 void far show_resource(uint8_t type, uint8_t index, int16_t frames, int16_t x);
@@ -602,7 +603,7 @@ extern int16_t g_2100, g_dab;
 void far played_tool_events(int16_t far *fast);   /* 0x0cf07 */
 void far pause_screen(void);                     /* 0x0ce2e */
 void far sound_set_rate(int16_t rate);           /* 0x149e:0x346 */
-void far f_07955(void);
+void far kill_all_ducks(void);
 
 /* 0x0993b, game.c - the collision pass */
 extern int16_t score, quota_left, combo_hi, combo_lo;

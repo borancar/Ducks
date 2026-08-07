@@ -194,12 +194,3 @@ void far sound_set_rate(int16_t rate)
 }
 
 
-/* 0x07955, 71 bytes, called from run_level's frame loop when the level is not
- * paused, and from 0x0799c and 0x0cf07. Not observed in any demo, from a
- * capture or from the start. Not proven. */
-void far f_07955(void)
-{
-    static int said;
-    unwritten("0x07955, what a third bridge-stacking warning does",
-              &said);
-}
