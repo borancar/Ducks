@@ -11,6 +11,9 @@ Current, and kept current. Where these disagree with
   out of stack, and every symptom after that follows mechanically
 - [open-dgroup-initialisers](open-dgroup-initialisers.md) — bare declarations
   over initialised data: `particle_colours` was one, and seven more need reading
+- [open-frame-comparison](open-frame-comparison.md) — every comparison here is
+  one call deep; what a frame-by-frame one needs, and the level 11 burst that
+  turned out to be the original's
 - [control-socket](control-socket.md) — drive a running machine over a Unix
   socket: press keys, capture, ask where it is
 - [flip-transient](flip-transient.md) — the "first 120 frames run 4x slow" was
