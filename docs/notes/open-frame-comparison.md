@@ -66,6 +66,34 @@ Two things make it harder than it sounds, both already known here:
   drive both from a recorded event list or compare only demos, where the table
   at `[0x2100]` is the input and is identical on both sides.
 
+## Pencilled: the demo, after three fixes
+
+Three real gaps were found by reading, and each made the attract mode visibly
+wrong on its own - `level_clock` never incremented so no recorded input fired at
+all, the hero's script table at `[0x2043]` never walked so the flock never moved,
+and `scroll_smooth` declared bare so the camera shoved instead of easing. See
+[run-level](run-level.md) and
+[open-dgroup-initialisers](open-dgroup-initialisers.md).
+
+The camera still does not feel right after those. Nothing obvious is left to
+read: the demo camera block at `0x0e34e` is transcribed, `scroll_axis` and
+`scroll_follow` are both byte-compared leaves in `test_leaves.py`, and the two
+demo tables now drive what they should. So this is the first thing the frame
+runner above should be pointed at, and it is a good first target for one:
+
+- **A demo is the easy case.** No mouse, no keyboard - the input is the two
+  tables and they are identical on both sides, so the "drive both from a
+  recorded list" problem does not arise.
+- **The seed is in the recording.** `load_demo` reads `level_seed` out of the
+  block (31 for the level 11 demo), so both sides start from the same seed
+  without any forcing - as long as every routine that draws does so in the same
+  order, which is now one more thing the run would be testing.
+- **What to diff each frame**: `viewport_game.scroll_x`/`scroll_y` first, since
+  that is the complaint, then the scene 0 entity array, then `level_clock`,
+  `script_at` and `g_2100`. The first frame where the scroll differs says
+  whether the camera is being told the wrong thing or told the right thing and
+  moving wrongly, and those have different causes.
+
 ## Technique worth reusing
 
 To find out which of four call sites fired, `game.c` was temporarily given a

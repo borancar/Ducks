@@ -50,11 +50,18 @@ int16_t    flip_phase;
  * own size; a screen sets the step and palette_fade_step's tail does the moving. */
 int16_t    wrap_x, wrap_y;              /* 0x1729, 0x172b */
 uint8_t    bg_scroll_x, bg_scroll_y;    /* 0x177e, 0x177f */
-uint8_t    warp_table[32];              /* 0x179f - the background warp's per-row
-                                         * x displacements. Nothing read so far
-                                         * fills it, so the warp is inert here;
-                                         * the branch that uses it has never been
-                                         * verified either. See the root README */
+/* 0x179f - the background warp's per-row x displacements, and initialised DATA:
+ * nothing in the image writes it, the only reference is the read at 0x05e8b, and
+ * the bytes are identical in the image and in four live guests. Declared bare it
+ * was thirty-two zeros, so the warp ran and displaced nothing - a flat wobble
+ * rather than a missing one, which is the harder kind to notice. A 0 -> 16 -> 0
+ * hump, indexed `& 0x1f`. */
+uint8_t    warp_table[32] = {
+    0x00, 0x00, 0x00, 0x01, 0x01, 0x02, 0x03, 0x04,
+    0x06, 0x08, 0x0a, 0x0c, 0x0d, 0x0e, 0x0f, 0x0f,
+    0x10, 0x10, 0x10, 0x0f, 0x0f, 0x0e, 0x0d, 0x0c,
+    0x0a, 0x08, 0x06, 0x04, 0x03, 0x02, 0x01, 0x01,
+};
 uint8_t    bg_step_x, bg_step_y;        /* 0x1780, 0x1781 - added to the scroll
                                          * once a frame, so a menu's background
                                          * creeps upward at one row a frame */

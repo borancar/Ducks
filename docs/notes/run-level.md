@@ -1701,3 +1701,65 @@ is what it had been named here and never was.
 `[bp+6]` is written once more, at 0x112a9 in the level-select branch, and that
 store is dead: the intro decision is a hundred instructions behind it. Kept
 anyway, because it is the original's.
+
+## A demo has two tables, and the frame drives both (0x0dcc9, 0x0ddbc)
+
+The attract mode ran a level with gravity and monsters in it and no player. Three
+things were missing, all at the top of `run_level`'s frame, and they come apart
+cleanly:
+
+**`level_clock` was never incremented.** `run_level`'s setup sets `[0x201a]` to
+0 and `0x0dcd8` is the only `inc` in the image - the port had the store and not
+the increment. Both demo input sources fire a record when its frame number
+*equals* the clock (`0x0d489` in `demo_events`, `0x0d4d9` in `tool_events`), so
+a clock stuck at 0 fires nothing. Every demo's earliest record is well past 0:
+
+```
+demo 0: level 36, seed   0,  2 clicks, 0 tool events   frames [48, 80]
+demo 1: level 63, seed 117,  3 clicks, 0 tool events   frames [233, 371, 470]
+demo 2: level 11, seed  31,  2 clicks, 1 tool event    frames [38, 398]
+demo 3: level 49, seed  80, 11 clicks, 6 tool events   frames [108, 133, 157, ...]
+```
+
+**The walking is a different table.** `event_table` is the clicks - the tool -
+and `[0x2043]` is the hero: three bytes a record, a frame and a heading, walked
+by the cursor at `[0x204d]`. When the record under the cursor names this frame
+the cursor moves on, and the record it lands on gives the heading, which
+`entity_update`'s type 1 arm reads out of `[0x2100]` as the hero's `f14` - but
+only when `scripted` is set, so it is demo input and nothing else. `load_demo`
+was filling the table and zeroing the cursor, and nothing moved it. Level 11's
+demo, run through the block:
+
+```
+script: [(54,0) (225,-1) (271,0) (305,-1) (440,0) (790,1) (820,0) (839,-1) (854,0)]
+  frame    1: heading +0     frame  440: heading +1
+  frame   54: heading -1     frame  790: heading +0
+  frame  225: heading +0     frame  820: heading -1
+  frame  271: heading -1     frame  839: heading +0
+  frame  305: heading +0
+```
+
+Headings are -1, 0, +1, stored plus five - a player holding left or right.
+
+The second lookup is **not** bounds-checked: `0x0ddc3` jumps straight into it, so
+once the cursor reaches the end the game reads one record past a farmalloc'd
+block. Measured across six snapshots the byte it lands on is 02, 00, 00, 00, 03,
+00 - the next allocation's contents, not a header, so unlike `terrain_at` there
+is nothing to match, and `menu-halloffame-2.snap` has `script_at == script_count`
+so the original does get there. Holding the last record is a choice, stated as
+one in the comment; every demo in the egg ends on heading 0, so the hero stops.
+
+`game_main` frees all three demo tables and leaves the counts standing and the
+pointers dangling. Harmless in real mode, a use-after-free here, so the port
+nulls them - nothing outside a demo reads them and every demo reloads them.
+
+**The frame's first instruction is a draw.** `0x0dcce` is `rand() & 0x7f`, and
+one frame in 128 it calls `0x1462:0x215` - the random ambience, one preloaded
+sound on voice 2 if that voice is free. That routine is also the answer to a
+question `sound.c` had left open: it is what reads the watermark at `d+0x2909`,
+which `sound_preload` writes, as `rand() % sound_keep_mark`.
+
+The draw matters as much as the sound. It happens before either guard, so the
+RNG advances on those frames whether anything is audible or not, and a demo
+replays from a seed carried in the recording. A draw the port does not make is a
+demo that diverges from what was recorded even after the clicks start landing.

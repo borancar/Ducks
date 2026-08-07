@@ -41,18 +41,51 @@ d+0x1727 page_back           00 7d
 d+0x179f warp_table          00 00 00 01 01 02 03 04 06 08 0a 0c 0d 0e 0f 0f ...
 ```
 
-These are **candidates, not findings**. Several are plainly re-set before use -
-`text_colour` is written at the top of `level_screens`, `shareware_limit` comes
-off the egg when a game starts - and a default that is overwritten costs
-nothing. `warp_table` is the one that looks most like `particle_colours`: 32
-bytes of a smooth ramp, which is data, not a default.
+## Step 1 done: read against four live guests
+
+Each offset was read out of the image and out of `main-menu`, `snap003`,
+`snap012` and `level80-late`. A value that is the same in all five is data
+nothing writes; one that varies is written at runtime and the default does not
+matter.
+
+```
+name             image                    live guests
+scroll_smooth    01 00                    01 00 | 01 00 | 01 00 | 01 00     DATA
+warp_table       00 00 00 01 01 02 03 04  identical in all four             DATA
+shareware_limit  14                       14 | 14 | 14 | 14                 default
+out_of_memory    d6 21 95 18              d6 21 a5 19 x4    a relocated pointer
+text_colour      6f 00                    02 00 | ff 5b | ff 5b | ff 5b     written
+g_dab            01 00                    01 00 | 00 00 | 01 00 | 00 00     written
+page_back        00 7d                    00 00 | 00 7d | 00 00 | 00 00     written
+```
+
+**Two were real.**
+
+`scroll_smooth` (`0x4fa`) is 1, and only the `c` key and MOUSE SETTINGS ever
+change it. Bare, the port ran with SMOOTH SCROLL **off**, so every camera move
+was `scroll_follow`'s hard edge push instead of the ease - the view sat still
+until the followed point walked out of it and was then shoved. That is what "the
+demo is still missing mouse scrolling" turned out to be.
+
+`warp_table` (`0x179f`) is the background warp's per-row x displacement, a
+0 -> 16 -> 0 hump indexed `& 0x1f`, read at `0x05e8b` behind `[0x2022]`. It lives
+in `sdl_io.c`, not `game.c`, and unlike `particle_colours` it *was* being read -
+`compose_scroll` does `dx = base_x + warp_table[phase]` every warped row. Thirty
+two zeros meant the warp ran and displaced nothing: a flat wobble rather than a
+missing one, which is the harder kind to notice. Its old comment said "nothing
+read so far fills it, so the warp is inert here", which was true and was the
+bug, not a description of the original.
+
+`shareware_limit` is carried too - `case 1` replaces it from the egg before
+anything compares it, so this is tidiness rather than a fix. The other four are
+written at runtime and their image bytes are irrelevant.
 
 ## To do
 
-1. For each of the seven, decide by reading rather than by guessing: find every
-   write to that offset in the image. No write at all means it is data and the
-   port has to carry it.
-2. Turn the sweep into a test next to `test_dgroup.py`, with the ones that are
-   genuinely re-set at startup listed as known-and-fine, so a new bare
-   declaration over initialised data fails instead of being found by its
-   symptoms months later.
+Turn the sweep into a test next to `test_dgroup.py`: read each bare
+declaration's image bytes, and fail on any that are non-zero and not in a short
+list of known-written ones (`text_colour`, `g_dab`, `page_back`,
+`out_of_memory`). That way a new bare declaration over initialised data fails on
+the next run instead of being found by its symptoms months later. The four-guest
+comparison above is what the known-written list is derived from, so a future
+addition to it needs the same evidence rather than an assertion.
