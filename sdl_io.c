@@ -465,12 +465,70 @@ void far draw_sprite(int16_t far *index, int16_t x, int32_t y,
     }
 }
 
+/* 0x065f1. A halo: colour 0 above, below, left and right of every non-zero
+ * pixel of the sprite, and nothing at the pixel itself - so drawn under the
+ * sprite it becomes an outline. The HUD's tool row and draw_entities both use
+ * it, which is every outlined thing on screen.
+ *
+ * Transcribed from native.py's byte-compared version rather than from the
+ * listing, so the two quirks come with it and are deliberate:
+ *
+ *   - the vertical clip insets by a row at EACH end - y becomes top + 1 and
+ *     bottom becomes limit - 1 - which is why an outline is a row short of the
+ *     sprite it haloes;
+ *   - clip->left is added to x AFTER the source offsets are worked out, so it
+ *     shifts the sprite and therefore also changes which plane each pixel is
+ *     in. The original reads it as a byte, and every viewport's left fits in
+ *     one.
+ *
+ * The neighbours are not clipped, only the source walk is, so a pixel on the
+ * first row writes to the row above the clip. That is the original's too, and
+ * plot bounds the framebuffer, so here it costs a pixel rather than a fault.
+ */
 void far outline_sprite(int16_t far *index, int16_t x, int16_t y,
                         table_t far *table, viewport_t far *clip)
 {
-    (void) index; (void) x; (void) y; (void) table; (void) clip;
-    /* TODO: four colour-0 pixels around each non-zero one, through `plot`. Left
-     * until a sprite is actually on screen to check it against. */
+    sprite_t far *desc;
+    int16_t  w, h, src = 0, row_extra = 0;
+    int16_t  top, right, bottom, ncols, nrows, stride, row, col, xbase;
+
+    if (!table || !table->base)
+        return;
+    desc = &table->base[*index];
+    w = desc->w;  h = desc->h;
+    if (!w || !h)
+        return;
+
+    xbase = (uint8_t) clip->left;
+    x    -= desc->ox;
+    top   = clip->top;
+    y    += top - desc->oy;
+    right = x + w;
+    bottom = y + h;
+
+    if (x < 1)                  { row_extra -= x - 1; src -= x - 1; x = 1; }
+    else if (right > 0x13F)     { row_extra += right - 0x13F; right = 0x13F; }
+    if (top >= y)               { src -= (y - top - 1) * w; y = top + 1; }
+    else if (clip->bottom <= bottom) { bottom = clip->bottom - 1; }
+    x     += xbase;
+    right += xbase;
+
+    ncols  = right - x;
+    nrows  = bottom - y;
+    stride = ncols + row_extra;
+    if (ncols <= 0 || nrows <= 0 || stride <= 0 || src < 0)
+        return;
+    if (src + (nrows - 1) * stride + ncols > w * h)   /* the native's guard */
+        return;
+
+    for (row = 0; row < nrows; row++)
+        for (col = 0; col < ncols; col++)
+            if (desc->pixels[src + row * stride + col]) {
+                plot(x + col,     y + row - 1, 0);
+                plot(x + col,     y + row + 1, 0);
+                plot(x + col + 1, y + row,     0);
+                plot(x + col - 1, y + row,     0);
+            }
 }
 
 /* 0x05d3a, on a linear framebuffer. Two layers a pixel: the backdrop, which the

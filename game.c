@@ -283,7 +283,9 @@ uint8_t  ambience_volume = 12;
 int16_t  slider_x;              /* 0x176d - where a slider's trough starts; 0 */
 int16_t  bar_type_off = 4;      /* 0x2179 - the entity type of a dark block */
 int16_t  bar_type_on  = 18;     /* 0x217b - and of a lit one */
-int16_t  g_201c;                /* compared with jle, so signed */
+int16_t  next_life;             /* 0x201c - the score the next extra
+                                 * life is due at. Compared with jle,
+                                 * so signed */
 int16_t  g_21a3;
 
 /* ---------------------------------------------------- the second, larger font
@@ -2666,11 +2668,21 @@ item_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
 
         case 0x15:                                 /* play the demo named */
             if (load_demo(r->param)) {             /* 0x1240f */
-                /* TODO 0x12811-0x1283a: elided because it is byte for byte the
-                 * same as the branch above - the three frees, scroll_shift, the
-                 * g_509 save and restore. Worth writing out if that ever turns
-                 * out not to be exactly true. */
+                /* 0x12811-0x1283a is the idle branch above again, and that is
+                 * now checked rather than assumed: the 0x38 bytes from 0x12774
+                 * and from 0x12811 are identical except for the two relative
+                 * call displacements, which have to differ because the calls are
+                 * made from different addresses. So the same lines, written out
+                 * rather than elided - a demo picked by name has to free what a
+                 * demo picked at random frees. */
+                level_load();                      /* 0x12817 */
+                free(level_text);
+                scroll_shift = 5;  g_1ffc = 0;
+                saved = g_509;  g_509 = 0;
                 run_level(1);                  /* 0x1283a */
+                g_509 = saved;
+                free(script_table);  free(event_table);  free(tool_event_table);
+                release_sounds();
             } else {
                 show_splash("DEMO MISSING", 100);
             }
@@ -2746,7 +2758,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
             g_21a3 = 1;
             lives  = 5;                            /* 0x137e0 */
             score  = 0;                            /* 0x137e6 */
-            g_201c = 0x1388;                       /* 0x137ec - 5000 */
+            next_life = 0x1388;                    /* 0x137ec - 5000 */
             menus_resume();                        /* 0x128a5 */
             /* FALL THROUGH into the play loop */
 
@@ -2792,8 +2804,19 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                 sound_play_guarded(2, 1);
                 show_resource(0x4d, 2, 50, 0xff);  /* the BONUS SCREEN */
                 bonus_screen();      /* 0x0becb - the bonus tally */
-                /* TODO 0x138c4-0x13904: a comparison of [0x2036] against
-                 * [0x201c] and whatever it guards, not read. */
+
+                /* 0x138c4. The extra life, and the only place lives go up.
+                 * next_life starts at 5000 and moves up by 5000 each time, so
+                 * it is one life per 5000 points however the score arrives -
+                 * and the check is here, after the bonus screen, so the
+                 * bonuses count toward it. */
+                if (score > next_life) {
+                    lives++;
+                    sound_play_guarded(0x20, 1);
+                    show_splash(menu_text[46], 100);   /* "EXTRA LIFE!" */
+                    next_life += 0x1388;
+                }
+                release_sounds();                      /* 0x138ff */
 
                 /* The ending. Only DUCKING HELL - level 80 - passes the gate. */
                 if (episode_end_gate(level_attempted, episode_egg_index)
@@ -3696,7 +3719,7 @@ int16_t far load_game_screen(void)
 
     save_serial     = egg_read_word(fp);
     score          = egg_read_word(fp);
-    g_201c          = egg_read_word(fp);
+    next_life       = egg_read_word(fp);
     level_attempted = fgetc(fp);
     lives           = fgetc(fp);
     g_21a3          = fgetc(fp);
@@ -3763,7 +3786,7 @@ void far save_game_screen(void)
 
     write_word(save_serial, fp);
     write_word(score, fp);
-    write_word(g_201c, fp);
+    write_word(next_life, fp);
     fputc(level_attempted, fp);
     fputc(lives, fp);
     fputc(g_21a3, fp);
@@ -4124,9 +4147,12 @@ static void scroll_axis(int32_t focus, int32_t half, int32_t far *pos,
     int16_t mask;
     int32_t target, limit;
 
-    /* TODO 0x05f96-0x05f9f for scroll_shift >= 16: the runtime's signed long
-     * shift at 0:0x1128 takes its other path there and the mask stops being
-     * expressible this way. Only 0 to 5 has ever been seen. */
+    /* Above 15 the runtime's signed long shift at 0:0x1128 takes its other path
+     * and the mask stops being expressible this way. That cannot happen: three
+     * instructions in the whole image write [0x18f5] - 5 at 0x12788 and 0x12825
+     * for a demo, 2 at 0x13837 for a played level - and the image initialises it
+     * to 0. So the value is 0, 2 or 5 and nothing else, and this guard is for a
+     * state the game cannot reach rather than one left unwritten. */
     if (scroll_shift >= 16)
         return;
 

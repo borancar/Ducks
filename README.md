@@ -201,7 +201,7 @@ Thirteen types changed. The ones worth knowing:
 - `game_speed`, `current_plane`, `shareware_limit`, `g_1fd3`, `g_2038`, `g_18f5`
   are byte-sized with the high half zeroed on every read - `uint8_t`.
 - `max_save_value` and `g_2036` are compared with `jbe`/`jb`: unsigned.
-- `g_201c` is compared with `jle`: signed.
+- `next_life` (`0x201c`) is compared with `jle`: signed.
 - `fade_level`, `level_attempted` and `last_key` are words that some sites read a
   byte at a time, which is worth knowing before assuming a 16-bit access.
 
