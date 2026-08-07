@@ -1490,6 +1490,23 @@ Checked on level 10, which has three: right, right, right gives 0, 1, 2, 2 - the
 fourth refused - then left gives 1, `3` gives 2, `1` gives 0, and left from 0 is
 refused.
 
+**The highlight is a scene, and it had nothing moving it.** The panel's tool
+icons are drawn once into each page at level start and never again, so what marks
+the selected one is the *tool scene* - two entities the setup puts at
+`0x82`, drawn over the panel every frame. `0x0e71e` is the only thing that ever
+moves them, and it was unwritten: the announcement countdown reaching **1** - not
+0 - names the tool in a message and parks both entities at `tool_at * 16 + 0x82`,
+which is the same spacing the HUD drew the icons at. Entity 0 becomes type `0x10`,
+the box; entity 1 the tool's own type, having been `0x0f` for the length of the
+countdown, which is what makes a new tool flash before it settles.
+
+Without it both sat over slot 0 for the whole level - so the first tool was
+covered and the highlight never followed the selection, which is exactly how it
+was reported. It sits outside the frame skip, because `0x0e4c4` jumps to it.
+
+Checked: on level 10 the highlight walks `0x82`, `0x92`, `0xa2` and back, and
+entity 1 carries `0x12`, `0x19`, `0x18` with it.
+
 ## The order to take it
 
 The event tables and the tool list are filled by the level loader, so reading
