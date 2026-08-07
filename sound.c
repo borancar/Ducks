@@ -257,6 +257,19 @@ void far sound_init(int16_t rate)
     }
     active_voices = 0;
 
+    /* The card cannot play an arbitrary rate, and the original does not ask it
+     * to: it programs a DSP time constant of 256 - 1000000/rate and the hardware
+     * then runs at 1000000/(256 - tc). So the game asking for 11000 actually
+     * plays at 11111, and feeding SDL the 11000 it asked for is a 1% error in
+     * everything. Rounded here the same way, so the port plays at the rate the
+     * samples were recorded for. */
+    if (rate > 0) {
+        int16_t tc = (int16_t) (256 - 1000000L / rate);
+
+        if (tc >= 0 && tc < 256)
+            rate = (int16_t) (1000000L / (256 - tc));
+    }
+
     sound_state = audio_open(rate) ? 1 : 0;
 }
 
