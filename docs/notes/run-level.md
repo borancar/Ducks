@@ -1100,6 +1100,60 @@ The switch is what the game's rules actually are, and it is most of the 2,668
 bytes: `entity_set_type` 20 times, `sound_play_guarded` a dozen, and `duck_dies`
 once. Reading the arms is the work; the frame around them is settled.
 
+### The panel numbers, and why the duck count froze
+
+**2026-08-07.** Reported: on level 1 ducks fall off the bottom, the death sound
+plays, and the counter on the panel does not move.
+
+The counting was right and the drawing was missing. `duck_dies` decrements
+`duck_count` *before* it plays its sound, and the fall-off-the-world path at
+`0x08565` does the same - `sound_play_guarded(7, 1)` then `duck_count--` - so an
+audible death is proof the counter moved. Driving the port's own `level_load` and
+`duck_dies` on level 1 confirms it: 11 to 10.
+
+What was absent is the whole of `0x0e485`-`0x0e717`. The frame composed, drew the
+scenes and flipped, and nothing else: no `draw_number`, so the two panel numbers
+kept whatever the setup drew into the two pages at level start and never changed
+again.
+
+The two numbers are not kept the same way, and the asymmetry is the original's:
+
+- the **score** chases its target, a quarter of the gap plus one a frame, and
+  what is drawn is that rolling copy - which is why a score rolls up rather than
+  jumping. Its redraw flag starts at 2 and is decremented every frame at
+  `0x0e711`, so it stops redrawing two frames after the score settles.
+- the **duck count** does not chase. `shown_ducks` exists only to notice a change,
+  and what `draw_number` is given is the live counter. **Nothing anywhere
+  decrements its flag** - it is set to 2 in the setup and set to 2 again on every
+  change, so from the first frame of a level that number is redrawn every frame
+  for ever.
+
+Written with it, since they are the same section: the half-rate frame skip
+(`[bp-0x20]` toggling, which draws nothing at all on the off beat when the played
+tool handler has set `[bp-0x12]`), the three message countdowns, the particles,
+the message overlays, and the timer bar - five pixels at
+`screen_height - 7 - level_timer`.
+
+The **sparkle** is the odd one. `level_flags[3]` enables it, and its column
+starts at **screen row 0** rather than at the top of the play area: the address is
+the page base plus `x >> 2` with no row term, and only the *count* of rows comes
+from the viewport. Reproduced rather than tidied. Its two `rand()` draws had to be
+sequenced by hand - C does not order the operands of a subtraction, and those
+draws move the shared seed, so the wrong order changes every later `rand()` in the
+frame.
+
+One thing corrected on the way: `tool_selected` was being passed `tool_at`, and
+`0x0e0e0` passes `[bp-0x12]` - the played handler's out-parameter, which is 0 for
+a demo. So the announcement is three frames, not `2 * slot + 3`.
+
+**Verified in halves, and only the first half is checked.** The counting is:
+`duck_dies` on a freshly loaded level 1 takes `duck_count` from 11 to 10. The
+drawing is a transcription of `0x0e485`-`0x0e717` that compiles and breaks no
+existing comparison, but the port's framebuffer is `static` in `sdl_io.c`, so
+nothing here can read back what `draw_number` put on the panel. **No harness in
+this repository has ever compared the port's screen against anything.** That is
+the gap this sat in.
+
 ## The order to take it
 
 The event tables and the tool list are filled by the level loader, so reading
