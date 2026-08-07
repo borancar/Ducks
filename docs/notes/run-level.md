@@ -1154,6 +1154,44 @@ nothing here can read back what `draw_number` put on the panel. **No harness in
 this repository has ever compared the port's screen against anything.** That is
 the gap this sat in.
 
+### The four endings, and the one the panel makes visible
+
+**2026-08-07.** Reported after the counter was fixed: the check for not having
+enough ducks left is missing. It is the third of four at `0x0df5d`, and none of
+them was written.
+
+The strings say what they are, read out of `menu_text` in a snapshot rather than
+guessed - the array is a far pointer at `0x1894:0000`, which is `dgroup - 0x10`,
+and the offsets in the code are byte offsets into it, so `+0x130` is entry 76:
+
+| | | |
+| --- | --- | --- |
+| 76 | "The leader's gone!" | hero index `0xff` and `can_finish` |
+| 77 | "Nothing left to follow!" | hero gone, `scenes[5].count` now 0, `can_finish_alt` |
+| 78 | **"Not enough ducks left!"** | `quota_left > duck_count`, unsigned |
+| 79 | "Lost a rocket!" | `g_2018` |
+| 80 | "Press ESCAPE to abort this attempt" | the second half of all four |
+
+**They only say so.** Nothing in the block clears `level_running` or moves the
+outcome, so the level carries on and the player is the one who decides to give up
+- which is what the shared second line is for. That is why "the four endings" is
+the wrong name for them; they are the four ways an attempt becomes *unwinnable*.
+
+`ending_said` (`[bp-0x22]`) is a frame local cleared once in the setup, so a level
+posts at most one of these however long it runs. The four are sequential `if`s
+rather than a chain, so two can fire on the same frame. Skipped entirely for a
+demo, and while `g_2016` or `g_1ffe` say the level is already over.
+
+The second one is worth spelling out because its two halves look contradictory:
+`can_finish_alt` was only set at setup when `scenes[5].count` was non-zero, and
+the check needs that count to be zero *now* - so it means "the level had mirrored
+entities and has run out of them".
+
+**Checked by driving it.** Level 1 loads with `duck_count` 11 and `quota_left` 5;
+killing ducks one at a time through the port's own `duck_dies`, the condition
+first holds after the seventh - 4 left against 5 still needed. The setup adds one
+to the quota when the level has a hero, so in play it is 6 and 5.
+
 ## The order to take it
 
 The event tables and the tool list are filled by the level loader, so reading
