@@ -961,7 +961,32 @@ void far particles(void)
 
     for (i = 0; i < particle_count; i++) {         /* [0x18cd] */
         particle_t far *p = &particle_array[i];    /* [0x18c1], 16-byte records */
-        plot(p->x >> 3, p->y >> 3, p->colour);     /* 1/8-pixel fixed point */
+        /* 0x0ab2f, 0x0ab5f. Level coordinates to screen ones, and the whole
+         * point of the routine: the pool is in level space and the view is not,
+         * so a particle is drawn scroll away from where it lives. Plotting the
+         * raw position put every burst where the ducks would have been had the
+         * view been at the origin - which on a level whose flock is off the top
+         * of the screen is a long way from the ducks.
+         *
+         * All 16-bit and all unsigned, both here and in the native this is
+         * transcribed from: the shift helper at 0:0x1148 is SHR, not SAR, so the
+         * fixed point is unsigned, and the wrap has to happen before the compare
+         * because that is what makes one bound reject both sides - an x left of
+         * the view wraps to a huge value and fails the upper test. */
+        uint16_t x = (uint16_t) (((uint32_t) p->x >> 3)
+                                 - (uint16_t) viewport_game.scroll_x
+                                 + (uint16_t) viewport_game.left);
+        uint16_t y = (uint16_t) (((uint32_t) p->y >> 3)
+                                 - (uint16_t) viewport_game.scroll_y
+                                 + (uint16_t) viewport_game.top);
+
+        if (x < (uint16_t) viewport_game.left           /* 0x0ab39, 0x0ab3f */
+            || x >= (uint16_t) viewport_game.right)
+            continue;
+        if (y < (uint16_t) viewport_game.top            /* 0x0ab6d, 0x0ab76 */
+            || y >= (uint16_t) viewport_game.bottom)
+            continue;
+        plot((int16_t) x, (int16_t) y, p->colour);      /* 0x0ab90 */
     }
 }
 
@@ -1019,8 +1044,8 @@ void far particles_step(void)
             continue;
         }
 
-        px = (int16_t) (p->x >> 3);                /* 0x0aa40, a long sar by 3 */
-        py = (int16_t) (p->y >> 3);                /* 0x0aa5c */
+        px = (int16_t) ((uint32_t) p->x >> 3);     /* 0x0aa40, 0:0x1148 is SHR */
+        py = (int16_t) ((uint32_t) p->y >> 3);     /* 0x0aa5c */
         if (!terrain_at(py, px))                   /* 0x0aa73 - still in the air */
             continue;
 
