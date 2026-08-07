@@ -948,7 +948,15 @@ void far image_alloc(desc_t far *desc, int16_t w, int16_t h)
     alloc_image(desc, 0, 0, 0, 1);                 /* 0x05388 */
 }
 
-/* 0x088b3. Frees a sprite set: every sprite's pixels, then the records. */
+/* 0x088b3, and 0x0638f: the SAME routine, emitted twice.
+
+ * Instruction for instruction identical - free each sprite's pixels, then the
+ * array - and nothing calls the second copy. Borland put it in two modules
+ * because both included the header that defined it, and the linker kept both.
+ * Recorded here rather than transcribed again: a second copy of a function is
+ * not a second function, and counting it as unwritten was the coverage report
+ * asking for something that would be wrong to write.
+ */
 void far sprite_set_free(table_t far *table)
 {
     int16_t i;
@@ -1677,6 +1685,37 @@ void far draw_banner(const char far *s, table_t far *set, int16_t y,
         sprite_to_image(at >> 2, y, g, desc, colour);
         at += (g->w - g->ox) * 4 - spacing;
     }
+}
+
+/* ================================================= 0x11bee: the episode page
+ *
+ * One page of text over picture 0x4d:7, held until a key. The caller hands it
+ * `episode_index[i].ordinal` and an egg, and the ordinal selects the string
+ * block - so this is the episode's own page, one per episode, and the same
+ * routine draws any of them.
+ *
+ * The palette buffer is a LOCAL, 0x300 bytes of stack, published with
+ * set_buffer for as long as the page is up and swapped back for the default at
+ * the end. That is the only reason this needs its own function: the page has a
+ * palette of its own and nothing else on screen may keep it.
+ *
+ * The cursor entity is set to type 0 - the retire convention - so the pointer is
+ * not drawn over the page.
+ */
+void far episode_page(int16_t ordinal, int16_t egg)
+{
+    uint8_t buffer[0x300];                         /* [bp-0x316] */
+    desc_t  page;                                  /* [bp-0x16] */
+
+    set_buffer(buffer);                            /* 0x11bfc */
+    if (resource_load(&page, 0x4d, 7, 0, 1, 0xff, 1)) {        /* 0x11c15 */
+        text_colour[0] = 1;                        /* 0x11c1f */
+        load_text_page(&page, 0x45, (uint8_t) ordinal, 1, 0x10e, egg);
+        entity_set_type(cursor_scene.entities, 0); /* 0x11c48 */
+        show_resource_loop(&page, 0);              /* 0x11c56 */
+        resource_release(&page);
+    }
+    set_buffer(default_buffer);                    /* 0x11c6d */
 }
 
 /* ---------------------------------------------------- 0x0b7c3: load_text_page
@@ -3264,7 +3303,10 @@ int16_t far episode_end_gate(int16_t number, int16_t egg)
 
         sound_play_guarded(0x1a, 1);
         show_splash(menu_text[47], 100);            /* "EPISODE COMPLETED!" */
-        f_11bee(episode_index[i].name, egg);        /* draws it - unnamed */
+        /* 0x11ce9 pushes the record's +0xa, which is `ordinal` and not `name`.
+         * The stub took a char far * and the call site had been written to
+         * match it, so the page was selected by a pointer. */
+        episode_page(episode_index[i].ordinal, egg);       /* 0x11bee */
         flag = episode_index[i].terminator;         /* +0xc: the answer */
     }
     return flag;
