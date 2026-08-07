@@ -270,6 +270,7 @@ extern uint8_t bg_step_x, bg_step_y;    /* 0x1780, 0x1781 */
 
 /* used but not identified */
 int16_t  g_509, g_50b, g_1ffa, g_1ffc, g_1ffe, g_18e1, g_18e3;
+int16_t  g_2016;                 /* 0x2016 - the attempt is over; see 0x07955 */
 /* 0x0da1 is scenes[5].count: whether the level has any mirrored entities,
  * which is what the setup's two ending flags and one of the four endings
  * actually test. */
@@ -959,6 +960,86 @@ void far particles(void)
     for (i = 0; i < particle_count; i++) {         /* [0x18cd] */
         particle_t far *p = &particle_array[i];    /* [0x18c1], 16-byte records */
         plot(p->x >> 3, p->y >> 3, p->colour);     /* 1/8-pixel fixed point */
+    }
+}
+
+/* 0x0e70a's twin, defined with the collision pass below. */
+static uint8_t terrain_at(int32_t y, int32_t x);
+
+/* 0x0a85f. Retire particle `i`: the last one is copied over it and the count
+ * comes down, so the pool has no holes and the draw can be a flat walk. Field
+ * by field in the original - 0, 2, 6, 8, 0xa, 0xc, 0xe - which is a struct copy
+ * either way. */
+static void far particle_retire(int16_t i)
+{
+    particle_array[i] = particle_array[--particle_count];   /* 0x0a867 */
+}
+
+/* ---------------------------------------------------- 0x0a956: the particles
+ *
+ * One frame of every particle, and what makes a death an explosion rather than
+ * a cluster of dots: the spawner gives each one an upward velocity and this
+ * adds gravity, carries it, and retires it when it leaves or has bounced enough.
+ *
+ * Both coordinates are 32-bit and both bounds tests are UNSIGNED (`jb`/`ja` at
+ * 0x0a9ec and 0x0aa16), which is how a particle that has gone off the left or
+ * the top is caught: a negative coordinate is a huge unsigned one, so a single
+ * compare against the far edge covers both sides. Written as uint32_t here for
+ * that reason and not as a tidier pair of tests.
+ *
+ * Terrain is a hit, not a wall. The particle is stopped only in the sense that
+ * vy is forced to 8 - straight down and fast - and its life comes down by one;
+ * f0d is 1 or 2 from the spawner, so it survives one or two landings and then
+ * goes. What it leaves behind is the stain at 0x0aab3: the particle's own
+ * colour written into the terrain, which is FLYING BLOOD, and is why that
+ * setting gates it.
+ *
+ * The retire at 0x0aaf3 - the f0e == 0 arm - does NOT step `i` back, where the
+ * other two do. So the particle swapped into the hole is skipped for one frame.
+ * That is the original's, kept.
+ */
+void far particles_step(void)
+{
+    int16_t i, px, py;                             /* si, di, [bp-2] */
+
+    for (i = 0; i < particle_count; i++) {         /* 0x0aafc */
+        particle_t far *p = &particle_array[i];
+
+        p->x += p->vx;                             /* 0x0a988 */
+        p->y += p->vy;                             /* 0x0a9b4 */
+        p->vy++;                                   /* 0x0a9c7 - gravity */
+
+        /* 0x0a9cb, 0x0a9f5. Off the level in any direction. */
+        if ((uint32_t) p->x > (uint32_t) (int32_t) (int16_t) (level_w << 3)
+            || (uint32_t) p->y > (uint32_t) (int32_t) (int16_t) (level_h << 3)) {
+            particle_retire(i);                    /* 0x0aa22 */
+            i--;
+            continue;
+        }
+
+        px = (int16_t) (p->x >> 3);                /* 0x0aa40, a long sar by 3 */
+        py = (int16_t) (p->y >> 3);                /* 0x0aa5c */
+        if (!terrain_at(py, px))                   /* 0x0aa73 - still in the air */
+            continue;
+
+        if (!p->f0e) {                             /* 0x0aa87 */
+            particle_retire(i);                    /* 0x0aaf5, and no i-- */
+            continue;
+        }
+
+        /* 0x0aa8e. The stain. Guarded on the level's own bounds as well as the
+         * setting, which the original does not need to be: a coordinate exactly
+         * on the far edge indexes one past the row, and that was a farmalloc
+         * header there and is a separate allocation's malloc header here. */
+        if (settings[1] && px >= 0 && px < backdrop.w
+            && py >= 0 && py < backdrop.h)
+            backdrop.rows[py][px] = p->colour;     /* 0x0aab3 */
+
+        p->vy = 8;                                 /* 0x0aac1 */
+        if (--p->f0d == 0) {                       /* 0x0aad2, 0x0aae1 */
+            particle_retire(i);                    /* 0x0aaea */
+            i--;
+        }
     }
 }
 
@@ -2820,7 +2901,13 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                  * next_life starts at 5000 and moves up by 5000 each time, so
                  * it is one life per 5000 points however the score arrives -
                  * and the check is here, after the bonus screen, so the
-                 * bonuses count toward it. */
+                 * bonuses count toward it.
+                 *
+                 * `>` and not `>=`, which looks like a slip and is not: 0x138cb
+                 * is `jle` over the whole block, so a score of exactly 5000
+                 * does not earn the life and 5001 does. Signed, too - `jle`
+                 * rather than `jbe` - which is what both declarations say.
+                 * Leave it alone. */
                 if (score > next_life) {
                     lives++;
                     sound_play_guarded(0x20, 1);
@@ -4493,7 +4580,14 @@ particle_t far  *particle_array;     /* 0x18c1 - run_level's own allocation */
 int16_t          duck_count;         /* 0x2007 - what the HUD's second number
                                       * shows, and what the "not enough got
                                       * home" ending compares against */
-uint8_t          particle_colours[8]; /* 0x18c5 */
+/* 0x18c5, and initialised DATA - nothing in the image ever writes it, the only
+ * reference at all is the read at 0x07854. Declared bare here, so every particle
+ * came out colour 0, and colour 0 is empty terrain: each hit ERASED the pixel it
+ * landed on instead of staining it, the particle fell into the hole it had just
+ * made, and the flock drilled straight down through the ground. Read out of the
+ * image at d+0x18c5 and checked against a live guest. */
+uint8_t          particle_colours[8] = { 0x5c, 0x5d, 0x5e, 0x5c,
+                                         0x5d, 0x52, 0x64, 0x58 };
 
 void far particles_spawn(int16_t x, int16_t y, int16_t n)
 {
@@ -4542,6 +4636,38 @@ void far duck_dies(entity_t far *e, int16_t force, int16_t noisy)
     entity_set_type(e, 3);
     e->f14 = 0;
     particles_spawn((int16_t) e->x, (int16_t) e->y, 0x28);
+}
+
+/* ------------------------------------------------- 0x07955: abandon the attempt
+ *
+ * Every duck in scene 0 through duck_dies with force set, which is 40 particles
+ * each and the type set to 3 - so the flock blows up where it stands. Nothing
+ * here ends the level directly. What ends it is [0x2016]: run_level's frame
+ * counts 0x20 of those and only then sets outcome 3, which is the delay the
+ * explosion plays out in.
+ *
+ * The sound is guarded on [0x2016] rather than played every time, so aborting an
+ * attempt that has already ended is silent. `force` is 1 because [0x509] holds
+ * duck deaths off during a demo and this has to work anyway - though the only
+ * three callers are all played-level ones:
+ *
+ *   0x0cffe  ESC, Q or q                          - the player gives up
+ *   0x07a22  the third bridge-stacking warning     - the game gives up for them
+ *   0x0de2e  run_level's frame, when [0x1ffe] is set and [0x2003] has run out
+ *
+ * The third is a secret level's clock running out - [0x2003] is level_timer and
+ * [0x1ffe] the secret-level flag - and it is the reason those levels are timed.
+ */
+void far kill_all_ducks(void)
+{
+    int16_t i;
+
+    for (i = 0; i < scenes[0].count; i++)          /* 0x0797b, [0xd65] */
+        duck_dies(&scenes[0].entities[i], 1, 0);   /* 0x07974 */
+
+    if (!g_2016)                                   /* 0x07981 */
+        sound_play_guarded(5, 1);
+    g_2016 = 1;                                    /* 0x07993 */
 }
 
 /* ======================================================================
@@ -4878,7 +5004,7 @@ int16_t      level_timer;        /* 0x2003 - counts down at one per [0x2001] */
 int16_t      can_finish;         /* 0x2009 - decides one of the four endings */
 int16_t      can_finish_alt;     /* 0x200b - and another */
 int16_t      level_outcome;      /* 0x200d - what run_level returns == 2 */
-int16_t      g_2016, g_2018, g_1fd8, g_1fda;
+int16_t      g_2018, g_1fd8, g_1fda;
 int16_t      play_log;           /* 0x51d - the fprintf gate, cleared here and
                                   * nothing has been seen to set it */
 int16_t      g_517;              /* 0x517 - with [0x1ffa], decides whether a
@@ -5139,7 +5265,7 @@ void far played_tool_events(int16_t far *fast)
     case 0x14d:  tool_at++;  break;                /* 0x0d00b - right arrow */
 
     case 0x1b: case 0x51: case 0x71:               /* ESC, Q, q */
-        f_07955();                                 /* 0x0cffd */
+        kill_all_ducks();                          /* 0x0cffd */
         break;
 
     case 0x50: case 0x70:                          /* P, p - pause, if allowed */
@@ -5487,7 +5613,7 @@ void far ground_check(int16_t far *x, int16_t y)
     message_post(menu_text[41 + too_deep_count], 0);
     too_deep_count++;
     if (too_deep_count == 3)
-        f_07955();                                 /* 0x07a22 - not written */
+        kill_all_ducks();                          /* 0x07a22 */
     else
         sound_play_guarded(0x2d, 1);
 }
@@ -6404,6 +6530,7 @@ int16_t far run_level(int16_t demo)
      * is not written - so in a demo it stays 0, the half-rate mode never fires,
      * and the tool announcement is always three frames. */
     int16_t tool_slot = 0;
+    int16_t tick;                                  /* [bp-0xc], 0x0d820 */
     int16_t ending_said = 0;                       /* [bp-0x22], 0x0d846 */
     int16_t running = 1;                           /* [bp-0x10], 0x0d829 */
     int16_t hold = 0;                              /* [bp-0x28] */
@@ -6488,6 +6615,7 @@ int16_t far run_level(int16_t demo)
     combo_hi        = 0xa00;
     combo_lo        = 0;
     level_timer     = 0x1b;
+    tick            = timer_period;                /* 0x0d81d */
 
     /* 0x0db86. Two flags the endings test, and they differ only in what they say
      * about [0xda1]: whether the level can be finished at all without the tool
@@ -6525,6 +6653,27 @@ int16_t far run_level(int16_t demo)
      * can be seen. See docs/notes/run-level.md for the map of what belongs here.
      */
     do {
+        /* 0x0ddfe. The clock. `tick` is the frames left in the current second
+         * and timer_period is how many that is, so level_timer comes down one
+         * per period and the warning at 0x1c plays once as it lands on zero.
+         *
+         * The else is 0x0de2e, and it is what a secret level's clock is for:
+         * [0x1ffe] is the secret-level flag moved off [0x1ffc] at 0x0d876, so
+         * on an ordinary level the clock simply stops and is worth five points
+         * a tick on the bonus screen, and on a secret level running out of time
+         * blows the flock up. */
+        if (level_timer) {
+            if (tick)
+                tick--;                            /* 0x0de0b */
+            else {
+                tick = timer_period;               /* 0x0de10 */
+                if (--level_timer == 0)            /* 0x0de16 */
+                    sound_play_guarded(0x1c, 1);
+            }
+        } else if (!g_2016 && g_1ffe) {            /* 0x0de2e */
+            kill_all_ducks();                      /* 0x0de3d */
+        }
+
         input_poll(level_w, level_h);
         tool_step();                               /* 0x0de4f */
 
@@ -6544,7 +6693,9 @@ int16_t far run_level(int16_t demo)
 
             /* 0x0de79. The tool. The selection is remembered first, because
              * tool_selected compares against it, and then the demo's table moves
-             * it - a played level reads 0x0cf07 instead, which is not written. */
+             * it - a played level reads 0x0cf07 instead, which is where ESC
+             * goes: it does not fade the level out, it blows the flock up and
+             * lets [0x2016] and the 0x20-frame count above end it. */
             tool_prev = tool_at;                   /* 0x0de7c */
 
             /* 0x0de7f. A demo ends the moment anything is touched - that is
@@ -6556,11 +6707,6 @@ int16_t far run_level(int16_t demo)
             } else {
                 played_tool_events(&tool_slot);    /* 0x0dea4 */
             }
-
-            /* ESC, for a played level. The four endings below only post a
-             * message, so this is still how a played level is left. */
-            if (!demo && last_key == 0x1b)
-                fade_direction = -1;
 
             /* The events only fire while no tool is in progress, which is the
              * guard at 0x0deaa, and the cursor entity's type follows the tool:
@@ -6738,6 +6884,7 @@ int16_t far run_level(int16_t demo)
         for (i = 0; i < 6; i++)
             animate_scene(&scenes[i]);
         animate_scene(&tool_scene);
+        particles_step();                          /* 0x0e482 */
 
         /* 0x0e485. The two panel numbers, and they are not kept the same way.
          * The score CHASES its target - a quarter of the gap plus one a frame -
@@ -6892,14 +7039,16 @@ int16_t far run_level(int16_t demo)
  *   then the instructions page, if the level has one, with the same name banner
  *   over a fresh picture and one animated entity  0x1131f
  *
- * Returns non-zero only to tell game_main to leave the play loop, which happens
- * on the level-select key in the [0x507] branch and nowhere else.
+ * Returns non-zero only on the level-select key in the [0x507] branch, and
+ * game_main's `while` at 0x13835 sends that straight back in here - the screens
+ * have to be built again for whatever level was just picked. It is a retry, not
+ * a way out of the play loop.
  *
  * The tools that belong on the first screen at y=0xb4 need 0x7259, which is not
  * written; the branch that draws the level's name over the picture when [0x507]
  * is set is here, because it is two calls.
  */
-int16_t far level_screens(int16_t demo)
+int16_t far level_screens(int16_t fresh)
 {
     desc_t  name, pic;
     scene_t scene;
@@ -6907,7 +7056,16 @@ int16_t far level_screens(int16_t demo)
 
     text_colour[1] = 0;                            /* 0x11041 */
     text_colour[0] = 0x6f;
-    episode_intro();                               /* 0x1105f */
+
+    /* 0x1104b. Three ways past here and only the middle one is ordinary play:
+     * [0x507] set takes the cheat's level picker at 0x10c06, which is not
+     * written; otherwise the episode intro runs, but only when `fresh` is
+     * non-zero. That argument is game_main's [0x21a3] - 1 for a new game or
+     * after a level was completed, 0 after an attempt was abandoned - so
+     * retrying a level plays its own intro and not the episode's. It was called
+     * unconditionally here, which replayed the episode intro on every retry. */
+    if (!g_507 && fresh)                           /* 0x11058 */
+        episode_intro();                           /* 0x1105f -> 0x1089b */
 
     i       = episode_for_level();                 /* 0x11063 */
     ordinal = (i == 0xff) ? 0xff : episode_index[i].ordinal;
@@ -6975,7 +7133,9 @@ int16_t far level_screens(int16_t demo)
             if (g_507 && last_key == 0x20) {       /* 0x1129b - level select */
                 leave    = 1;
                 has_page = 0;
-                demo     = 0;
+                fresh    = 0;                      /* 0x112a9, and dead: the
+                                                    * intro decision is already
+                                                    * made. The original's. */
             }
             if (last_key || g_18e5) {
                 fade_direction = -1;
@@ -7035,7 +7195,6 @@ int16_t far level_screens(int16_t demo)
     level_seed = (int16_t) time(NULL);
     play_log   = 0;
 
-    (void) demo;
     return leave;
 }
 
