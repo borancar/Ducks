@@ -2700,7 +2700,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                 g_21a3 = 1;                      /* the level was completed */
                 sound_play_guarded(2, 1);
                 show_resource(0x4d, 2, 50, 0xff);  /* the BONUS SCREEN */
-                f_0becb();
+                bonus_screen();      /* 0x0becb - the bonus tally */
                 /* TODO 0x138c4-0x13904: a comparison of [0x2036] against
                  * [0x201c] and whatever it guards, not read. */
 
@@ -5566,6 +5566,217 @@ void far level_update(void)
         break;
     default:
         break;
+    }
+}
+
+/* ==================================================== 0x0bba1: the bonus screen
+ *
+ * What comes between "level complete" and the next level: five rows of numbers
+ * that count themselves up and then pour into each other. game_main calls
+ * bonus_screen (0x0becb) straight after showing resource 0x4d:2.
+ *
+ * The five rows are a table of counters at d+0x2159, one per label - Time bonus,
+ * Survivors bonus, Lives bonus, Total, Score - and row 4 doubles as [0x2161],
+ * which is where the score is parked while the screen runs and read back out of
+ * afterwards. So the last row IS the score, counting up in front of you.
+ * ========================================================================= */
+
+int16_t bonus_row[5];            /* 0x2159, and [0] is Time bonus */
+
+/* --------------------------------------------------------- 0x0bba1: one row
+ *
+ * Counts `dst` from where it is to where it should be, a frame at a time,
+ * drawing as it goes. Two shapes, chosen by `moving`:
+ *
+ *   moving == 0   `src` is a number, and it is added to row `dst`
+ *   moving == 1   `src` is another ROW, which empties into `dst` as it fills -
+ *                 both are drawn each frame, which is what makes the bonuses
+ *                 visibly pour into the total
+ *
+ * The step is a sixteenth of what is left plus one, so it starts fast and eases
+ * in. It only terminates because the amounts are counts and so never negative:
+ * a negative one would step by 0 within sixteen of the target and never arrive.
+ * The original is the same, and level_timer stops at 0 rather than going below
+ * it, so nothing here can reach that - and a keypress escapes it regardless.
+ * `gap` is re-armed on every frame that moves - which means it is not
+ * really a speed but the pause AFTER the row lands. The ticking is sound 0x12,
+ * spaced by how big the step is: a big step ticks every three frames, a small
+ * one waits longer, so the sound thins out as the row slows.
+ *
+ * A key or a button sets the caller's `skipped`, and every later row sees it and
+ * finishes instantly - which is how one press skips the whole screen rather than
+ * one row of it.
+ */
+static void tally_row(int16_t moving, int16_t dst, int16_t src,
+                      int16_t gap, int16_t far *skipped)
+{
+    int16_t amount = moving ? bonus_row[src] : src;   /* [bp-2] */
+    int16_t cur    = bonus_row[dst];                  /* si */
+    int16_t target = cur + amount;                    /* [bp-6] */
+    int16_t frames = 1;                               /* [bp-8] */
+    int16_t quiet  = 0;                               /* [bp-0xa] */
+    int16_t remain = moving ? bonus_row[src] : 0;     /* [bp-0xe] */
+
+    while (!*skipped) {                               /* 0x0bbec */
+        int16_t plane;
+
+        if (cur != target) {                          /* 0x0bbf8 */
+            int16_t step = ((target - cur) >> 4) + 1;
+
+            frames = gap;
+            cur   += step;
+            if (moving)
+                remain -= step;
+            if (quiet) {
+                quiet--;
+            } else {
+                quiet = (step > 0xc) ? 3 : (int16_t) (0xc - step + 3);
+                sound_play_guarded(0x12, 1);
+            }
+        }
+
+        for (plane = 0; plane < 4; plane++) {         /* 0x0bc4b */
+            set_plane((uint8_t) plane);
+            draw_number(cur, 0x96, (int16_t) (dst * 0x14 + 0x46),
+                        &viewport_screen, 0, 6);
+            if (moving)
+                draw_number(remain, 0x96, (int16_t) (src * 0x14 + 0x46),
+                            &viewport_screen, 0, 6);
+        }
+        page_flip();
+        frames--;
+        input_poll(0x140, 0xc8);
+        if (g_18e5 || last_key) {                     /* 0x0bcbd */
+            *skipped = 1;
+            frames   = 0;
+        }
+        if (!frames)                                  /* 0x0bcd8 */
+            break;
+    }
+
+    bonus_row[dst] += amount;                         /* 0x0bce1 */
+    if (moving)
+        bonus_row[src] = 0;
+}
+
+/* ------------------------------------------------- 0x0bd00: the five numbers
+ *
+ * Both pages, four planes, five rows, six digits - and each digit is drawn
+ * twice: sprite 0x70 to wipe the cell, then 0x71 + the digit over it. Least
+ * significant on the right, no leading-zero suppression, the same shape
+ * draw_number has.
+ */
+static void bonus_numbers(void)
+{
+    int16_t page, plane, row, digit;
+
+    for (page = 0; page < 2; page++) {
+        for (plane = 0; plane < 4; plane++) {
+            set_plane((uint8_t) plane);
+            for (row = 0; row < 5; row++) {
+                int16_t v = bonus_row[row];
+
+                for (digit = 5; digit >= 0; digit--) {
+                    int16_t x     = (int16_t) (digit * 12 + 0x96);
+                    int16_t y     = (int16_t) (row * 0x14 + 0x46);
+                    int16_t blank = 0x70;
+                    int16_t glyph = (int16_t) (v % 10 + 0x71);
+
+                    draw_sprite(&blank, x, y, &sprite_table,
+                                &viewport_screen, 0);
+                    draw_sprite(&glyph, x, y, &sprite_table,
+                                &viewport_screen, 0);
+                    v /= 10;
+                }
+            }
+        }
+        page_flip();
+    }
+}
+
+/* --------------------------------------------------------- 0x0bdee: the tally
+ *
+ * Seven passes in the order they are watched: the three bonuses count up out of
+ * nothing, then each pours into Total, then Total pours into Score.
+ *
+ *   time bonus      level_timer * 5      what is left on the clock
+ *   survivors       duck_count * 10      what got home
+ *   lives           lives * 10
+ *
+ * Then a hundred and fifty frames of holding it, or until something is pressed.
+ */
+static void bonus_tally(void)
+{
+    int16_t skipped = 0;
+    int16_t hold    = 0x96;
+
+    tally_row(0, 0, (int16_t) (level_timer * 5),  0x0a, &skipped);
+    tally_row(0, 1, (int16_t) (duck_count * 10),  0x0a, &skipped);
+    tally_row(0, 2, (int16_t) (lives * 10),       0x32, &skipped);
+    tally_row(1, 3, 0, 0x0a, &skipped);           /* time      -> total */
+    tally_row(1, 3, 1, 0x0a, &skipped);           /* survivors -> total */
+    tally_row(1, 3, 2, 0x32, &skipped);           /* lives     -> total */
+    tally_row(1, 4, 3, 0x02, &skipped);           /* total     -> score */
+
+    bonus_numbers();
+    do {                                          /* 0x0bea2 */
+        input_poll(0x140, 0xc8);
+        page_flip();
+        if (g_18e5 || last_key)
+            break;
+    } while (hold--);
+}
+
+/* -------------------------------------------------- 0x0becb: the whole screen */
+void far bonus_screen(void)
+{
+    char far   *label[5];                          /* 0x2163 */
+    desc_t      page;
+    int16_t     i, pass, plane;
+
+    label[0] = menu_text[66];                      /* "Time bonus:" */
+    label[1] = menu_text[67];                      /* "Survivors bonus:" */
+    label[2] = menu_text[68];                      /* "Lives bonus:" */
+    label[3] = menu_text[69];                      /* "Total:" */
+    label[4] = menu_text[70];                      /* "Score:" */
+
+    if (!resource_load(&page, 0x4d, 1, 0x80, 1, 0xff, 1))
+        fatal("Can't find bonus screen", NULL);    /* d+0x246e */
+
+    draw_string(&page, menu_text[52], 0x0a, 0x0a);
+    for (i = 0; i < 5; i++) {                      /* 0x0bfbb - right-aligned */
+        draw_string(&page, label[i],
+                    (int16_t) (0x8c - text_width(label[i])),
+                    (int16_t) (i * 0x14 + 0x3e));
+        bonus_row[i] = 0;
+    }
+    bonus_row[4] = score;                          /* 0x0c015 - [0x2161] */
+
+    for (pass = 0; pass < 2; pass++) {             /* 0x0c01b - into both pages */
+        for (plane = 0; plane < 4; plane++) {
+            set_plane((uint8_t) plane);
+            blit_rows(&page, viewport_screen, 0);
+        }
+        page_flip();
+    }
+    resource_release(&page);
+
+    bonus_numbers();                               /* 0x0c06f */
+    fade_level       = 0;
+    fade_direction   = 1;
+    fade_start_colour = 0;
+    while (fade_direction) {                       /* 0x0c093 - fade in */
+        palette_fade_step(0);
+        page_flip();
+    }
+
+    bonus_tally();                                 /* 0x0c09a */
+    score = bonus_row[4];                          /* 0x0c09e */
+
+    fade_direction = -1;
+    while (fade_level) {                           /* 0x0c0b8 - fade out */
+        palette_fade_step(0);
+        page_flip();
     }
 }
 
