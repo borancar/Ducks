@@ -5242,8 +5242,14 @@ static int16_t bridge_step_end(bridge_end far *end, int16_t dir)
         return 0;
     }
 
+    /* The bounds test above happens once, and then the loop steps up to
+     * bridge_span pixels - so the last few probes of a bridge running off the
+     * edge are past the row, or past the row table. terrain_at is what the
+     * physics already uses for exactly this, and reads outside the level as
+     * empty; what the original reads there is a property of its heap and can
+     * only be chosen, not matched. */
     for (i = 0; i < bridge_span; i++) {            /* 0x0767b */
-        if (backdrop.rows[end->y][end->x] && end->alive) {
+        if (terrain_at(end->y, end->x) && end->alive) {
             sound_play_guarded(0x11, 1);           /* 0x076aa - it hit something */
             end->alive = 0;
         }
@@ -7279,7 +7285,16 @@ void far level_load(void)
     timer_period = egg_read_word(egg_stream);
 
     j = egg_read_byte(egg_stream);                    /* the hero's facing */
-    if (scenes[0].flag)                               /* 0x08e25 */
+    /* 0x08e25 tests the index against 0 and nothing else, so a level with no
+     * hero - flag is 0xff, which scene_alloc set and nothing replaced - passes
+     * it and the original writes entities[255].f14, well past a 16-entry array.
+     * In DOS that lands in whatever follows on the heap and nobody notices.
+     * Level 4 is such a level, and ASan stops on it here.
+     *
+     * The 0xff is excluded, which is a deviation: the original's write goes
+     * somewhere and this one does not go anywhere. Nothing can read what it
+     * wrote, so nothing observable is lost - but it is a choice, not a match. */
+    if (scenes[0].flag && scenes[0].flag != 0xff)     /* 0x08e25 */
         scenes[0].entities[scenes[0].flag].f14 = (int8_t) (j - 1);
 
     ambience_on = egg_read_byte(egg_stream);

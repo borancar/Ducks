@@ -84,7 +84,7 @@ int16_t far sound_load(uint8_t id, int16_t scale, int16_t egg)
     if (!s->pcm)
         fatal(out_of_memory, 0);
 
-    egg_fread(s->pcm, 1, (int16_t) len);
+    egg_fread(s->pcm, 1, (uint16_t) len);           /* up to 65535, not 32767 */
     if (scale != 0x20)                             /* 0x150a5 */
         for (i = 0; i < len; i++)
             s->pcm[i] = (uint8_t) (((int8_t) s->pcm[i] * scale) >> 5);

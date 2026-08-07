@@ -90,6 +90,50 @@ constant one, that condition needs checking some other way - or say plainly that
 it is not checked. Declining on "this tool is not one I do" is safe; declining on
 "I scanned more than 28 rows" is a claim.
 
+## The port's heap is not the original's, and ASan is the instrument
+
+**2026-08-07.** Reported: "double free or corruption (out)" on quitting and
+restarting a level, and separately that some levels' sound was broken. **One bug,
+both symptoms**, and ASan named it in one run where an afternoon of reading had
+not.
+
+`egg_fread` took `int16_t` counts. Borland's `fread` takes `size_t`, which is
+*unsigned* 16-bit, and one caller can exceed 32767: a sound. Nine samples in this
+egg do - `0x4b`, level 3's ambience, is 45,818 bytes. So the length arrived
+negative, the product became astronomical, `cursor + want` wrapped past the guard,
+and the copy either ran wild or clamped to "the rest of the egg" and poured 1.7 MB
+into a 45 KB buffer. That is why the audio was noise - the samples loaded *after* a
+big one were overwritten with file bytes - and why the first `free` after a restart
+found a mangled chunk header.
+
+**A signedness error in a signature, a long way from where it hurt.**
+
+ASan then found two more, both of the same different kind: code that is
+out-of-bounds in the original too, and harmless there only because DOS gave it one
+flat heap.
+
+- `bridge_step_end` tests its bounds once and then steps up to four pixels, so a
+  bridge running off the edge probes past the row, or past the row table.
+- `level_load` writes the hero's facing to `entities[flag]` behind a test of
+  `flag != 0`, but the "no hero" sentinel is `0xff`. Level 4 has no hero, so the
+  original writes `entities[255]` of a sixteen-entry array.
+
+Both are now bounded, and both say in place that this is a **choice rather than a
+match**: what the original read or wrote there is a property of its heap and
+cannot be reproduced, only decided. `terrain_at` had already set that precedent.
+
+The port's `alloc_image` gives every row its own `calloc` where the original had
+one block, which is what turns "a few pixels past a row" from invisible into a
+corrupted malloc header. That makes the port *stricter* than the original, which
+is worth having: it finds the latent bugs. But it means a faithful transcription
+can crash where the original did not, and the fix is to bound the access and say
+so - not to widen the allocation and keep the bug.
+
+**How to apply.** `make -C reconstruct asan && ./ducks-asan`. It costs nothing
+until something is wrong, and "corruption at the next free" is exactly the class
+of bug that reading cannot find, because the report names a victim and never the
+culprit.
+
 ## Verification that works here
 
 - `--verify --verify-only <names>` byte-compares a native against the original
