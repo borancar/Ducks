@@ -1,8 +1,11 @@
 # run_level(), and the shape of the gameplay
 
-**Started 2026-08-02**, immediately after the `menu-done` tag. Nothing here is
-ported yet; this is what the first read established, so the next one does not
-have to start from the top.
+**Started 2026-08-02**, immediately after the `menu-done` tag, when nothing here
+was ported. It has been appended to since rather than rewritten, so it reads as a
+log: the early sections are what the first reads established and several of them
+were later corrected in place. **For where this stands now, read the last dated
+section first** - as of 2026-08-07 a demo plays, and six routines a demo reaches
+are unwritten (1,350 bytes).
 
 **Renamed 2026-08-03**, from `in_game_frame`, once reading it end to end showed
 it is not a frame — see [the map](#the-map). `level` was the first choice and

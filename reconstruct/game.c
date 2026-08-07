@@ -5490,12 +5490,13 @@ void far level_update(void)
  * two-entity scene, the three message rectangles, the HUD drawn once into each
  * video page, the particle pool, the camera snapped to the mouse, the ambience.
  *
- * **The frame is not.** What is here composes and flips so the level can be
- * looked at; the real one at 0x0dcc9 spawns ducks, reads the input, applies the
- * tool, collides, retires, moves the camera, animates, counts and decides which
- * of four ways the level ended. Nineteen routines under it are unwritten, 7,464
- * bytes, the largest being 0x07bb2 and 0x0d0c8. Until they exist this returns
- * when ESC is pressed rather than when the level is over.
+ * **The frame is partly written**, and the parts say so individually. Since this
+ * comment was first written 0x07bb2, 0x0d0c8, 0x0d471, 0x09565 and 0x0970c have
+ * all landed, so the spawns, the physics, the click handler, the demo's event
+ * table and the flock are real. Six routines a demo reaches are not - 0x0a956,
+ * 0x0751b, 0x09329, 0x076e2, 0x07646, 0x078a6, 1,350 bytes between them - and
+ * the four endings are not wired, so a played level still leaves on ESC while a
+ * demo ends on a touch or when its ducks run out.
  * ========================================================================= */
 int16_t far run_level(int16_t demo)
 {
