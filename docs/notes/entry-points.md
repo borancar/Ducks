@@ -612,7 +612,8 @@ it then:
 - allocates **three** 22-byte objects into `init_objects` (`[0x210c]`, far
   pointers with a stride of 4), sets `+0xc = 316` and `+0xe = 15` on each, and
   initialises them through `0x15388`
-- prints the remaining banners
+- prints the remaining banners - see below for the one that is still a comment in
+  the port
 - calls `detect_hardware`, stores the result in `sound_available`, and inits the
   sound module only if it is non-zero
 - spins on `input_poll` until `last_key` is set
@@ -637,6 +638,38 @@ main 0x144d7
 `detect_hardware` is the whole three-line block on the startup screen: it calls
 the sound check, gives up printing nothing if that fails, then checks XMS -
 `HIMEM.SYS not installed` if absent - and finally prints `Free XMS memory: %uk`.
+
+### The registration banner, 0x1432f - 0x1437d, and it is NOT transcribed
+
+Found 2026-08-08 while reading `set_text_colour`'s callers. `init` in the port
+goes straight from `load_settings()` (0x1432c) to the egg table at 0x14380; the
+eighteen instructions in between are covered by a `/* the remaining banners */`
+comment and nothing else. So "194/194 functions written" is true at the level of
+functions and not quite true inside this one.
+
+What the block does, read off the listing:
+
+```
+1432f  push 7 / lcall 0:0x1e94         ; set_text_colour(7)
+14339  push ds:0x2865 / lcall 0:0x2012 ; a cprintf of that string
+14345  cmp [0x548], 0                  ; registered?
+1434c  mov ax, 0xf                     ;   yes -> plain white
+14351  mov ax, 0x8f                    ;   no  -> BLINKING white (bit 7)
+14355  lcall 0:0x1e94
+1435d  cmp [0x548], 0
+14364  lds/mov dx:ax <- [0x544]:[0x542] ; owner_name, valid only if registered
+1436d  mov dx, ds / mov ax, 0x287c      ;   otherwise a fixed string
+14372  push dx/ax, push ds:0x2875, lcall 0:0x2012
+```
+
+Two DGROUP strings are wanted and neither is in the port yet: `d+0x2865` and the
+format at `d+0x2875`, plus `d+0x287c` for the unregistered case. `[0x548]` is
+`registered` and `[0x542]`/`[0x544]` are `owner_name`, all three of which the
+port already has, so this is transcription and not investigation.
+
+The blink is the reason `set_text_colour` in `sdl_io.c` handles bit 7 at all -
+0x8f is the only argument in the image that is not a plain 7, 14 or 15, and it
+comes from here.
 
 ### What follows the sound check
 
