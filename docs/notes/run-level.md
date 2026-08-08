@@ -1978,3 +1978,85 @@ voices - but it is the reason the behaviour looked absent.
 overwritten by init's own call before anything reads it. Carried in `sound.c`
 anyway, because it is real initialised data and the port had no variable there
 at all. See [open-dgroup-initialisers](open-dgroup-initialisers.md).
+
+## Open: the balloon stops one row too high, and the bridge is a symptom
+
+**2026-08-08. Measured, not guessed - but not fixed.**
+
+Reported: in main.egg's demo 5 (level 26, seed 42) a horizontal bridge placed
+over another stops short just after passing it.
+
+Both sides were driven through that demo with matched, temporary logging - the
+port behind an env var, the emulator behind a flag - printing every bridge
+placement, every end's stopping point with the pixel that stopped it, the whole
+backdrop row a bridge is about to walk, and every hole the bomb and the balloon
+cut. **The logging itself is deliberately not in the repo**; what it found is.
+
+**The bridge is not the bug.** Twenty-one bridge events, one difference:
+
+```
+port     f1092 right-hit 183 87 49
+original f1098 right-hit 210 87 22
+```
+
+**The terrain under it is.** Five of the seven dumped rows are identical. The two
+that are not have the port keeping pixels the original does not:
+
+```
+f1008 y=104  x=196..209
+   port    00 00 00 00 00 00 1f 22 1f 1d 22 22 1d 1f
+   original 00 00 00 00 00 00 00 00 1f 1d 22 22 1d 1f
+f1089 y=87   x=177..189
+   port    00 00 00 00 00 00 31 00 00 00 00 00 00
+   original 00 00 00 00 00 00 00 00 00 00 00 00 00
+```
+
+The bridge stops on that lone `31` at (183, 87).
+
+**And the balloon is why.** The holes the two cut are at the same x every time
+and a different y, and the error grows by exactly one each application:
+
+```
+port  f379 blast-balloon 150 192     original f378 blast-balloon 150 193
+port  f412 blast-balloon 150 176     original f410 blast-balloon 150 178
+port  f454 blast-balloon 150 160     original f451 blast-balloon 150 163
+port  f538 blast-balloon 188 112     original f537 blast-balloon 188 113
+port  f562 blast-balloon 194  98     original f560 blast-balloon 194 100
+port  f597 blast-balloon 192  82     original f594 blast-balloon 192  85
+```
+
+These are not the demo's recorded coordinates. The balloon is a tool an entity
+carries, and `entity_update` applies it at `0x0834b` **where the carrier is
+blocked** - `tool_use(e->x, e->y, e->type)` - so the y is the carrier's own
+position. The port stops it one row higher than the original, every time, and
+each application starts from where the last one left off, which is why the error
+is 1, then 2, then 3 rather than staying at 1.
+
+### What is ruled out
+
+- `blast_terrain` - byte-compared against the guest in `test_blast.py`, 200
+  cases including every edge.
+- `stamp_sprite_into` - the same, 200 more.
+- `stamp_solid` - read against `0x07490` instruction by instruction.
+- the particle stain - it only ever writes where terrain is already non-zero, so
+  it cannot create a stopper.
+- anything else writing the backdrop - every reference to the descriptor at
+  `d+0x16f5` in the image was listed, and the two arms of `tool_use` left after
+  the bomb and the bridges both *build* terrain.
+
+### What to look at next
+
+The fall-and-climb probe at `0x081f2` that decides where a carrier comes to rest.
+Read against the port it matches line for line - the probe row is
+`d + e->y` as a 16-bit add, the column `e->x + facing`, largest fall first then a
+climb of up to five, first clear column wins - so whatever is wrong is not in the
+shape of that loop. The candidates left are what it is given: `speed`
+(`(int8_t) e->f15 >> 1` at `0x0810f`), `depth`, and `terrain_at` standing in for
+the original's unchecked `backdrop.rows[y][x]`, which answers differently out of
+range - see [open-image-margins](open-image-margins.md).
+
+A one-entity, many-frame comparison is what would settle it: put one carrier on
+one level in both, step it, and diff its x, y, f15 and f21 every frame until they
+part. That is the frame runner
+[open-frame-comparison](open-frame-comparison.md) has wanted all along, on the
+smallest state that shows the effect.
