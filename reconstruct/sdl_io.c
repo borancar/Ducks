@@ -240,14 +240,16 @@ static uint64_t next_frame_ns;
 
 /* ------------------------------------------------------------- video: mode */
 
-/* The BIOS mode call has nothing to do here: SDL owns the display. Kept so the
+/* 0x04d04. The BIOS mode call has nothing to do here: SDL owns the display.
+ * Kept so the
  * caller reads the same, and because set_mode_x asks for 0x13 unconditionally. */
 void far set_bios_mode(uint8_t mode)
 {
     (void) mode;
 }
 
-/* Opens the window, or resizes it when the game changes resolution - which it
+/* 0x13519. Opens the window, or resizes it when the game changes resolution -
+ * which it
  * does from VIDEO SETTINGS, through the same [0x4fe] the original writes here.
  *
  * The geometry and the viewports are set exactly as dos_io.c sets them, because
@@ -300,7 +302,8 @@ void far set_mode_x(int16_t wide)
 
 /* ------------------------------------------------------------ video: planes */
 
-/* Still here, and still meaningful: the drawing routines below keep the x & 3
+/* 0x057ee. Still here, and still meaningful: the drawing routines below keep
+ * the x & 3
  * filter, so the four passes each write their own columns. When the plane loops
  * in game.c are collapsed this becomes an empty function and then goes away. */
 void far set_plane(uint8_t plane)
@@ -308,7 +311,8 @@ void far set_plane(uint8_t plane)
     current_plane = plane & 3;
 }
 
-/* Both pages, which is what the original does even though it looks like one
+/* 0x04d2a. Both pages, which is what the original does even though it looks
+ * like one
  * screen's worth: 0xfa00 bytes with the map mask opened to all four planes is
  * 64000 * 4 = 256,000 bytes, the whole of VRAM. Clearing only the page being
  * drawn into leaves the other holding the last picture, and page_flip then
@@ -322,7 +326,8 @@ void far clear_vram(void)
 
 /* --------------------------------------------------------------- video: DAC */
 
-/* The original writes black into `count` DAC entries. Doing the same here blanks
+/* 0x0572a. The original writes black into `count` DAC entries. Doing the same
+ * here blanks
  * whatever is on screen that used those colours, so this also clears the window -
  * which is what every caller is actually after, since it is the last thing before
  * a mode change or a fade. */
@@ -379,6 +384,9 @@ void outp(uint16_t port, uint8_t v)
     }
 }
 
+/* 0x056d2. The whole 256-entry palette at once. The original writes 768
+ * bytes to the DAC's data port; here the same values scale into the SDL
+ * palette, which is why the 6-bit components come back up to 8. */
 void far palette_upload(void)
 {
     int i;
@@ -389,11 +397,17 @@ void far palette_upload(void)
                                 palette_stored[i * 3 + 2] >> 2);
 }
 
-/* The same state machine as the original, with the 768 port writes replaced by
- * scaling into the palette array. fade_level is 0..15 and the original computes
- * (component * level) >> 6. */
-/* 0x0b10f-0x0b22f. Split out because in the original every one of the exits
- * below is a jmp to the tail rather than a ret - see palette_fade_step. */
+/* The fade state machine, with the 768 port writes replaced by scaling into the
+ * palette array. fade_level is 0..15 and the original computes
+ * (component * level) >> 6.
+ *
+ * **No image offset, because this is not a routine the original has.** It is the
+ * first half of palette_fade_step (0x0b10b), split out here because that half's
+ * every exit is a jmp to the second half rather than a ret, and C has no way to
+ * say that without either a goto or a call. The comment here used to claim
+ * `0x0b10f-0x0b22f`, which gave a range to something with no existence and started
+ * it one instruction past palette_fade_step's own prologue.
+ */
 static void fade_frame(int16_t arg)
 {
     int i;
@@ -428,15 +442,26 @@ static void fade_frame(int16_t arg)
                                 (palette_stored[i * 3 + 2] * fade_level) >> 6);
 }
 
+/* -------------------------------------------------- 0x0b10b: palette_fade_step
+ *
+ * 377 bytes, `push bp / mov bp, sp / push si` at 0x0b10b to `pop si / pop bp /
+ * retf` at 0x0b281 - one prologue, one epilogue, one body. Fourteen near calls
+ * reach it, from the screens and the plane loops, and nothing jumps into it from
+ * outside: the three jumps to 0x0b230 all come from within it.
+ *
+ * The C is in two pieces and the original is not. fade_frame above is the first
+ * half; what follows the call is the tail at 0x0b230, which always runs because
+ * every exit from that half jumps here rather than returning - the ordinary shape
+ * for a function that has registers to pop on every path.
+ */
 void far palette_fade_step(int16_t arg)
 {
     fade_frame(arg);
 
-    /* 0x0b230. One function in the original, and this half of it always runs -
-     * every exit above is a jmp here. It is the frame tick the screens do not
-     * have of their own: the cursor's animation phase, the background scroll,
-     * and the warp. A menu never calls anything else once a frame, so without
-     * it the background stands still and the cursor's tool never turns.
+    /* 0x0b230. The frame tick the screens do not have of their own: the cursor's
+     * animation phase, the background scroll, and the warp. A menu never calls
+     * anything else once a frame, so without it the background stands still and
+     * the cursor's tool never turns.
      *
      * The scroll wraps against the tile's own size, which is why load_background
      * leaves those masks one less than the width and the height. */
@@ -453,7 +478,7 @@ void far palette_fade_step(int16_t arg)
 
 /* --------------------------------------------------------- video: page flip */
 
-/* Present the back page, swap, then wait.
+/* 0x04d4b. Present the back page, swap, then wait.
  *
  * Two waits in the original: display enable, then vertical retrace. Both are gone;
  * what replaces them is a deadline. The game's speed setting still applies, at the
@@ -508,6 +533,7 @@ void far page_flip(void)
  * the four passes writes its own columns and the total work is unchanged.
  */
 
+/* 0x05761 */
 void far plot_pixel(int16_t x, int16_t y, uint8_t colour)
 {
     if (current_plane != (x & 3))
@@ -517,7 +543,8 @@ void far plot_pixel(int16_t x, int16_t y, uint8_t colour)
     fb_back[(size_t) y * screen_width + x] = colour;
 }
 
-/* The original needed a second routine because the row stride changed. Here the
+/* 0x057a1. The original needed a second routine because the row stride
+ * changed. Here the
  * stride is screen_width either way, so this is the same function - kept only
  * because the game swaps `plot` between them and reads the pointer. */
 void far plot_pixel_wide(int16_t x, int16_t y, uint8_t colour)
@@ -525,6 +552,7 @@ void far plot_pixel_wide(int16_t x, int16_t y, uint8_t colour)
     plot_pixel(x, y, colour);
 }
 
+/* 0x05c09 */
 void far blit_rows(desc_t far *desc, viewport_t rect, int16_t srcrow)
 {
     int16_t row, src_row, x;
@@ -611,6 +639,7 @@ void far blit_warped(desc_t far *desc, viewport_t rect, uint8_t step,
     }
 }
 
+/* 0x05ac2 */
 void far blit_rows_masked(desc_t far *desc, viewport_t rect, int16_t srcrow)
 {
     int16_t row, src_row, x;
@@ -1033,6 +1062,7 @@ static void key_push_extended(int16_t scan)
     key_push(scan);
 }
 
+/* 0:0x29fc */
 int16_t far key_pending(void)               /* 0:0x29fc */
 {
     return key_head != key_tail;
@@ -1172,6 +1202,7 @@ void sdl_pump_input(void)
     }
 }
 
+/* 0x0675b */
 void far mouse_motion(int16_t far *dx, int16_t far *dy)
 {
     /* input_poll calls this first, every poll, so it is where the queue gets
@@ -1183,6 +1214,7 @@ void far mouse_motion(int16_t far *dx, int16_t far *dy)
     rel_x = rel_y = 0;
 }
 
+/* 0x0678e */
 int16_t far mouse_presses(int16_t button)
 {
     int16_t n;
@@ -1196,6 +1228,7 @@ int16_t far mouse_presses(int16_t button)
     return n;
 }
 
+/* 0x067ba */
 int16_t far mouse_releases(int16_t button)
 {
     int16_t n;

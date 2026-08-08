@@ -193,7 +193,8 @@ void far set_mode_x(int16_t wide)
 
 /* ------------------------------------------------------------ video: planes */
 
-/* 0x057ee. Mode X puts column x in plane x & 3, so every drawing routine filters
+/* 0x057ee. Mode X puts column x in plane x & 3, so every drawing routine
+ * filters
  * on the selected plane and every caller runs the whole thing four times. This is
  * the call that makes a plane current, and the one a flat-drawing port turns into
  * a no-op.
@@ -212,7 +213,8 @@ void far set_plane(uint8_t plane)
 
 /* --------------------------------------------------------------- video: DAC */
 
-/* 0x0572a. Writes `count` entries of black from `first` onwards - the index goes
+/* 0x0572a. Writes `count` entries of black from `first` onwards - the index
+ * goes
  * to 0x3c8 once and the data port then takes three zeros per entry, because the
  * DAC auto-increments. The tail call is the same routine every fade ends with.
  */
@@ -231,7 +233,8 @@ void far dac_set_black(uint8_t first, uint8_t count)
                                             * by showing what it just faded */
 }
 
-/* 0x056d2. The whole 256-entry palette, unscaled, straight out of palette_stored.
+/* 0x056d2. The whole 256-entry palette, unscaled, straight out of
+ * palette_stored.
  * 768 writes to 0x3c9 per call, which is why this and the fade at 0x0b15f were
  * 94% of all port I/O before both were replaced natively.
  */
@@ -298,7 +301,8 @@ int16_t far key_read(void)     { return (int16_t) getch(); }
  * identical in menus and in play.
  */
 
-/* 0x0675b - INT 33h function 0x0b, relative motion since the last call. Note both
+/* 0x0675b - INT 33h function 0x0b, relative motion since the last call. Note
+ * both
  * out-parameters are read from the same register struct the call filled. */
 void far mouse_motion(int16_t far *dx, int16_t far *dy)
 {
@@ -370,11 +374,15 @@ void far plot_pixel(int16_t x, int16_t y, uint8_t colour)
 
 /* ---------------------------------------------------------- video: the fade */
 
-/* 0x0b10f-0x0b22f. The fade state machine, stepped once per frame by whoever is
- * showing a screen. fade_direction of 0 means "not fading"; +1 in, -1 out.
+/* The fade state machine, stepped once per frame by whoever is showing a screen.
+ * fade_direction of 0 means "not fading"; +1 in, -1 out.
  *
- * Split out of palette_fade_step because in the original every one of the exits
- * below is a jmp to the tail at 0x0b230 rather than a ret.
+ * **No image offset: the original has no such routine.** This is the first half of
+ * palette_fade_step (0x0b10b), split out because that half's every exit is a jmp
+ * to the tail at 0x0b230 rather than a ret, and C cannot say that without a goto
+ * or a call. This comment used to claim `0x0b10f-0x0b22f`, which gave a range to
+ * something that does not exist and began it one instruction after
+ * palette_fade_step's own prologue.
  */
 static void fade_frame(int16_t arg)
 {
@@ -480,7 +488,8 @@ void far palette_fade_step(int16_t arg)
  * native.py holds a verified description of each while these bodies are read out.
  */
 
-/* 0x05c09. Blits a run of rows from a decoded image. The source is a table of far
+/* 0x05c09. Blits a run of rows from a decoded image. The source is a table of
+ * far
  * pointers, one per row, indexed by the row counter and offset by the current
  * plane - so the four passes read four interleaved columns of the same source.
  *
@@ -642,7 +651,8 @@ void far compose_layer(void)
     }
 }
 
-/* 0x05dc4. compose_layer scrolled, and the one routine in the game with code that
+/* 0x05dc4. compose_layer scrolled, and the one routine in the game with code
+ * that
  * had never executed until level 80: the background warp the v1.2 changelog
  * mentions.
  *
@@ -688,7 +698,8 @@ void far compose_scroll(int16_t sx, int16_t sy)
  * which shifts the sprite horizontally and therefore also changes which plane each
  * pixel belongs to.
  */
-/* 0x0620d, and NOT written out here. It plots through the far pointer at [0x53e]
+/* 0x0620d, and NOT written out here. It plots through the far pointer at
+ * [0x53e]
  * and touches no hardware of its own, so it is the same routine whichever backend
  * is linked - and the transcription lives in sdl_io.c, byte-compared against the
  * guest through native.py. Duplicating forty lines here would give two copies to
