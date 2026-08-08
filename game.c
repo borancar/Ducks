@@ -124,17 +124,11 @@ void far  *current_buffer = default_buffer;
  * they were left in stubs.c long after they stopped being stubs. */
 uint8_t    palette_stored[768];  /* 0x10e1 */
 uint8_t    palette_washed[48];   /* 0x0dad - 16 entries, the terrain ramp */
-/* Written by set_mode_x, set_plane and page_flip, all of which are in dos_io.c,
- * so that is where these are defined. Declared here because game.c reads them:
- * show_splash centres its rect with screen_x0, particles plots through `plot`. */
-extern int16_t    video_mode;    /* 0x04fe */
-extern int16_t    screen_width;  /* 0x0538 */
-extern int16_t    screen_height; /* 0x053a */
-extern int16_t    screen_x0;     /* 0x053c - the centring offset */
-extern uint8_t    current_plane; /* 0x177d - written by set_plane */
-extern uint16_t   page_front;    /* 0x1725 - swapped by page_flip */
-extern uint16_t   page_back;     /* 0x1727 */
-extern int16_t    flip_phase;    /* 0x0d61 */
+/* The video state - video_mode, screen_width, screen_height, screen_x0,
+ * current_plane, page_front, page_back, flip_phase - is the backend's, written by
+ * set_mode_x, set_plane and page_flip. game.h declares all of it, so it is not
+ * declared again here: show_splash centres its rect with screen_x0 and particles
+ * plots through `plot`, and both take them from the header like everything else. */
 
 /* input */
 int32_t    mouse_x, mouse_y;     /* 0x18d3, 0x18d7 - 32-bit from the add/adc
@@ -337,12 +331,10 @@ uint8_t    cycle_width;          /* 0x0099 - of LEFT / RIGHT / MIDDLE */
 uint8_t    bounce_table[16] = { 16, 16, 17, 19, 23, 27, 29, 30,
                                 30, 30, 29, 27, 23, 19, 17, 16 };
 
-/* The compositor's, defined by the video layer and set here: the wrap masks are
- * one less than the background tile's size, and the scroll is what a menu starts
- * at zero and then leaves to palette_fade_step's tail to advance. */
-extern int16_t wrap_x, wrap_y;          /* 0x1729, 0x172b */
-extern uint8_t bg_scroll_x, bg_scroll_y;/* 0x177e, 0x177f */
-extern uint8_t bg_step_x, bg_step_y;    /* 0x1780, 0x1781 */
+/* The compositor's - wrap_x, wrap_y, bg_scroll_x, bg_scroll_y, bg_step_x,
+ * bg_step_y - are the video layer's and are set here: the wrap masks are one less
+ * than the background tile's size, and the scroll is what a menu starts at zero
+ * and then leaves to palette_fade_step's tail to advance. game.h declares them. */
 
 /* used but not identified */
 int16_t  g_2016;                 /* 0x2016 - the attempt is over; see 0x07955 */

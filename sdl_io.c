@@ -38,14 +38,17 @@
  * does - link one or the other, never both.
  */
 
-int16_t    video_mode;
-int16_t    screen_width;
-int16_t    screen_height;
-int16_t    screen_x0;
-void far (*plot)(int16_t x, int16_t y, uint8_t colour);
-uint8_t    current_plane;
-uint16_t   page_front, page_back;
-int16_t    flip_phase;
+int16_t    video_mode;               /* 0x04fe - non-zero is the 360-wide mode */
+int16_t    screen_width;             /* 0x0538 - 360 or 320 */
+int16_t    screen_height;            /* 0x053a - 240 or 200 */
+int16_t    screen_x0;                /* 0x053c - centring offset, 20 or 0, and
+                                      * what draw_sprite adds as x0 */
+void far (*plot)(int16_t x, int16_t y, uint8_t colour);   /* 0x053e */
+uint8_t    current_plane;            /* 0x177d - the filter every drawing routine
+                                      * applies */
+uint16_t   page_front;               /* 0x1725 - swapped by page_flip */
+uint16_t   page_back;                /* 0x1727 - what everything draws into */
+int16_t    flip_phase;               /* 0x0d61 - 0..9 */
 
 /* The compositor's state: the tile's wrap masks, the scroll into it, and how far
  * that scroll moves each frame. load_background sets the masks from the tile's

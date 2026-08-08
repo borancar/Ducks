@@ -389,7 +389,6 @@ extern menu_t menu_demos;       /* 0x1f60 - the paged demo list */
 
 extern int16_t menu_always;     /* 0x217f - 1; what most items point at */
 extern int16_t menu_never;      /* 0x2181 - 0; what a title points at */
-extern int16_t cheat_flag;      /* 0x0515 - set when a cheat word is typed */
 extern desc_t  backdrop;        /* 0x16f5 - the screen the items are drawn into */
 extern desc_t  background;      /* 0x170b - the tile compose_layer repeats */
 
