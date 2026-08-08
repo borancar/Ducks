@@ -88,7 +88,7 @@ smaller and worth much more:
 | harness | what it settles |
 | --- | --- |
 | `test_leaves.py` | 2,400 comparisons of the C leaves against the byte-compared natives |
-| `test_entity.py` | `entity_update`, `level_event`, `collide_scenes`, `flock_link` and the walk, field by field on a real level |
+| `test_entity.py` | `entity_update`, `tool_click_at`, `collide_scenes`, `flock_link` and the walk, field by field on a real level |
 | `test_blast.py` | `blast_terrain` and `stamp_sprite_into`, 400 calls, every pixel |
 | `test_particles.py` | the particle step over 400 made-up pools |
 | `test_photofade.py` | the photograph fade's state machine, and its DAC ramp |
@@ -197,7 +197,8 @@ Thirteen types changed. The ones worth knowing:
   pairs, and compared with `ja`. A negative delta wraps high and the same clamp
   catches it, which is why the position never goes below zero without an explicit
   test for it.
-- `game_speed`, `current_plane`, `shareware_limit`, `g_1fd3`, `g_2038`, `g_18f5`
+- `game_speed`, `current_plane`, `shareware_limit`, `g_1fd3`, `num_demos`,
+  `g_18f5`
   are byte-sized with the high half zeroed on every read - `uint8_t`.
 - `max_save_value` and `g_2036` are compared with `jbe`/`jb`: unsigned.
 - `next_life` (`0x201c`) is compared with `jle`: signed.
