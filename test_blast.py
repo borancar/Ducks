@@ -30,6 +30,7 @@ from native import Native
 
 LIB = "reconstruct/libducks.so"
 BLAST = 0x0751B
+STAMP = 0x0739C
 GAME_SEG = 0x4CA0
 STACK_SEG, RET = 0x3000, 0x30000 + 0x200
 SCRATCH = 0x40000               # guest side: backdrop rows, the sprite, its pixels
@@ -58,6 +59,28 @@ def guest_blast(m, rows_at, x, y):
     return [bytes(m.read(rows_at + r * W, W)) for r in range(H)]
 
 
+def guest_stamp(m, rows_at, desc_at, spr_at, x, y):
+    """Run the guest's 0x0739c - the bridge's own stamp - and read the result."""
+    g = m.dgroup_base
+    ss, sp = STACK_SEG, 0xF00
+    m.uc.mem_write(RET, b"\xF4")
+    m.uc.mem_write(ss * 16 + sp,
+                   struct.pack("<HHhhHHHH", RET & 0xF, RET >> 4, x, y,
+                               spr_at & 0xF, spr_at >> 4,
+                               desc_at & 0xF, desc_at >> 4))
+    m.uc.reg_write(UC_X86_REG_SS, ss)
+    m.uc.reg_write(UC_X86_REG_SP, sp)
+    m.uc.reg_write(UC_X86_REG_CS, (m.image_base + GAME_SEG) >> 4)
+    m.uc.reg_write(UC_X86_REG_DS, g >> 4)
+    m.uc.reg_write(UC_X86_REG_ES, g >> 4)
+    saved, m.natives = m.natives, {}
+    try:
+        m.uc.emu_start(m.image_base + STAMP, RET, count=20_000_000)
+    finally:
+        m.natives = saved
+    return [bytes(m.read(rows_at + r * W, W)) for r in range(H)]
+
+
 def main():
     lib = ctypes.CDLL(LIB)
     m = Native("Ducks.unpacked.exe", blaster=False, max_insns=1 << 62)
@@ -69,6 +92,7 @@ def main():
     table_at = rows_at + H * W             # H far pointers
     spr_at = table_at + H * 4              # one 14-byte sprite record
     pix_at = spr_at + 0x10                 # its pixels
+    desc_at = pix_at + 0x2000              # a desc_t to hand stamp_sprite_into
 
     for r in range(H):
         m.write(table_at + r * 4, struct.pack("<HH", (rows_at + r * W) & 0xF,
@@ -77,6 +101,10 @@ def main():
     m.write(g + 0x1701, struct.pack("<hh", W, H))            # level_w, level_h
     m.write(g + 0x2031, b"\x00")                             # solid_count
     m.write(g + 0x18EB, struct.pack("<HH", spr_at & 0xF, spr_at >> 4))
+    # the same rows, as a descriptor of its own: stamp_sprite_into clips against
+    # the DESTINATION's w/h, where blast_terrain clips against the level's
+    m.write(desc_at, struct.pack("<HH", table_at & 0xF, table_at >> 4)
+            + b"\x00" * 8 + struct.pack("<hh", W, H))
 
     # ---- the port's side
     rows = (ctypes.POINTER(ctypes.c_uint8) * H)()
@@ -105,6 +133,8 @@ def main():
     sprite = Sprite()
     table.count, table.base = 1, ctypes.addressof(sprite)
     lib.blast_terrain.argtypes = [ctypes.c_int16] * 3
+    lib.stamp_sprite_into.argtypes = [ctypes.c_int16, ctypes.c_int16,
+                                      ctypes.c_void_p, ctypes.c_void_p]
 
     bad = cases = 0
     for n in range(200):
@@ -131,21 +161,31 @@ def main():
         y = rng.choice([rng.randrange(0, H), rng.randrange(-SPR_H, 0),
                         rng.randrange(H - SPR_H, H + SPR_H)])
 
-        want = guest_blast(m, rows_at, x, y)
-        lib.blast_terrain(x, y, 0)
-        got = [bytes(keep[r]) for r in range(H)]
+        for name in ("blast", "stamp"):
+            for r in range(H):                 # both start from the same bytes
+                m.write(rows_at + r * W, start[r])
+                ctypes.memmove(keep[r], start[r], W)
+            if name == "blast":
+                want = guest_blast(m, rows_at, x, y)
+                lib.blast_terrain(x, y, 0)
+            else:
+                want = guest_stamp(m, rows_at, desc_at, spr_at, x, y)
+                lib.stamp_sprite_into(x, y, ctypes.addressof(sprite),
+                                      ctypes.addressof(desc))
+            got = [bytes(keep[r]) for r in range(H)]
 
-        cases += 1
-        if got != want:
-            bad += 1
-            r = next(i for i in range(H) if got[i] != want[i])
-            c = next(j for j in range(W) if got[r][j] != want[r][j])
-            print(f"  case {n}: blast at ({x},{y}) origin ({ox},{oy}) "
-                  f"differs at row {r} col {c}: guest={want[r][c]} c={got[r][c]}")
-            if bad > 4:
-                break
+            cases += 1
+            if got != want:
+                bad += 1
+                r = next(i for i in range(H) if got[i] != want[i])
+                c = next(j for j in range(W) if got[r][j] != want[r][j])
+                print(f"  case {n}: {name} at ({x},{y}) origin ({ox},{oy}) "
+                      f"differs at row {r} col {c}: "
+                      f"guest={want[r][c]} c={got[r][c]}")
+                if bad > 6:
+                    return 1
 
-    print(f"{cases} blast(s) compared C against guest, {bad} differ")
+    print(f"{cases} call(s) compared C against guest, {bad} differ")
     return 1 if bad else 0
 
 
