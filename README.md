@@ -7,12 +7,21 @@ Two things happen here: the packed executable is recovered to a plain EXE, and
 the game is run under an emulated DOS with an SDL window so its actual behaviour
 can be observed rather than guessed at from disassembly.
 
-On top of that sits a growing native port: routines in the original are hooked at
-their entry points and reimplemented in Python, each byte-compared against the
-code it replaces before being trusted. The point is reach rather than speed — the
-drawing pipeline has to be understood end to end before planar Mode X can be
-replaced with flat drawing. See [`docs/`](docs/) for where that stands, what is
-still open, and the conventions the work follows.
+On top of that sit **two** ports, and they check each other:
+
+- a **native port in Python** (`native.py`): routines in the original are hooked at
+  their entry points and reimplemented, each byte-compared against the code it
+  replaces before being trusted. The point is reach rather than speed — the drawing
+  pipeline had to be understood end to end before planar Mode X could be replaced
+  with flat drawing.
+- a **reconstruction in C** ([`reconstruct/`](reconstruct/)): the game's own code
+  segment written back out as source, which **builds and plays** on SDL3. Every
+  routine in that segment is transcribed and nothing stands in for one.
+
+The second is the deliverable; the first is the reference it is measured against.
+Almost every bug found in the C was found by running the same input through both
+and diffing, and the notes in [`docs/`](docs/) say which comparison caught what,
+what is still open, and the conventions the work follows.
 
 ## What you need
 
@@ -693,6 +702,18 @@ so this is architectural, not an optimisation.
 | `symbols.py` | names for identified image offsets; printed by the control socket |
 | `test_fn_start.py` | pins function-boundary attribution to known answers |
 | `test_symbols.py` | every native and hooked loop head is named, and the names agree |
+| `test_leaves.py` | the C leaves against the Python natives, on made-up state |
+| `test_entity.py` | `entity_update`, `collide_scenes` and the walk: C against the guest on a real level |
+| `test_gameplay.py` | the natives against the guest, frame by frame from a snapshot |
+| `test_blast.py` | `blast_terrain` and `stamp_sprite_into` against the guest, pixel for pixel |
+| `test_particles.py` | the particle step against the guest over made-up pools |
+| `test_photofade.py` | the photograph fade's state machine and its DAC ramp |
+| `test_dgroup.py` | no two declarations in the port claim the same DGROUP bytes |
+| `test_toollist.py` | one function out of `libducks.so` against the guest's own bytes |
+| `compare_level.py` | the level loader's output, C against the guest |
+| `dump_level.py` | a level's fields and its backdrop, out of a snapshot |
+| `shot.py` | a screenshot from a snapshot, for comparing screens by eye |
+| `gameio.py` | an instruction trace with ports, interrupts and far calls |
 | `test_retire.py` | drives the guest's own code to reach a state play cannot |
 | `probe_plot_ptr.py` | resolves which pixel plotter `[0x53e]` points at |
 | `show_cutscene.py` | plays the ending sequence without finishing all 80 levels |
@@ -716,13 +737,29 @@ conventions, and a condensed log of each working session — live in
 
 [`reconstruct/`](reconstruct/) holds C reconstructed from the disassembly of the
 **game's own code segment** — `0x04ca0`-`0x14620`, a full 64 KB holding `main`,
-the menus, the cutscenes and the drawing. It is not compiled and not run; every
-function carries the image offset it was read from. That the boundary falls
+the menus, the cutscenes and the gameplay. It compiles, links and plays: `make`
+there gives you `./ducks` on SDL3. Every function carries the image offset it was
+read from. That the boundary falls
 exactly there is a fact about the binary rather than a guess: Turbo C++ gives each
 translation unit its own code segment in a far-code model, so every far call
 names its target's segment, and the six that exist separate the game from the C
 runtime, the sound API, the mixer, XMS and the BLASTER parser. The other five are
 out of scope — see [`reconstruct/README.md`](reconstruct/README.md).
+
+## Branches
+
+**`develop` is where the work happens** — everything in this repository: the
+unpacker, the emulator, the native port, the snapshots, the harnesses, the notes,
+and the reconstruction.
+
+**`master` is the reconstruction alone** — `reconstruct/` and nothing else, so
+somebody who wants the port can clone it and build it without the two megabytes of
+analysis machinery that produced it. It is not a different codebase; it is the
+same files with the scaffolding left behind.
+
+That split is deliberate about which is which. The tooling is the interesting part
+of the *work* and the port is the interesting part of the *result*, and a person
+arriving at the repository is far more likely to want the second.
 
 ## Licence
 

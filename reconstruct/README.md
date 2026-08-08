@@ -80,40 +80,57 @@ worth having as source.
 
 | file | contents so far |
 | --- | --- |
-| [`game.h`](game.h) | the types and the interface both backends implement, so `game.c` does not know which it is linked against |
-| [`game.c`](game.c) | 145 functions - `main` and `init`, the resource and string loaders, the two fonts, the whole menu system and every screen it reaches, the save format, the hall of fame, and the first pieces of the gameplay. Naming them all here would rot; they are in address order in the file and in `symbols.py` |
+| [`game.h`](game.h) | the port's own header: its types, its globals and the interface both backends implement, so `game.c` does not know which it is linked against. Called `dos.h` until 2026-08-08, which described the smaller half of it |
+| [`game.c`](game.c) | the game's own code segment, all of it - `main` and `init`, the resource and string loaders, the two fonts, the whole menu system and every screen it reaches, the save format, the hall of fame, the level loader, `run_level` and its frame, every entity's behaviour, the tools, the particles, the six endings and all six cutscenes. Naming them here would rot; they are in address order in the file and in `symbols.py` |
 | [`dos_io.c`](dos_io.c) | nineteen functions: `set_bios_mode`, mode, planes, DAC, page flip, the three INT 33h wrappers, and every drawing primitive the native port replaced - `clear_vram`, `plot_pixel` and its stride-90 twin, `palette_fade_step`, `blit_rows`, `blit_rows_masked`, `compose_layer`, `compose_scroll`, `draw_sprite`, `outline_sprite`. No TODOs left in this file |
 | [`sound.c`](sound.c) | the sound module, code segments 0x1462 and 0x149e: the id-to-sample map, the eight-voice table, and the mixer. A sample lives in extended memory in the original and in a `malloc` here, which is the only difference that matters - the game asks about sounds by id either way |
 | [`sdl_io.c`](sdl_io.c) | the same interface on SDL3: a linear framebuffer, an SDL palette, a 70 Hz deadline in place of the retrace spin, SDL events counted into the INT 33h wrappers' shape, the mouse capture, and the audio device the mixer feeds |
 | [`egg.c`](egg.c) | the egg reader: the directory, `egg_find_block`, the chunk decoder and the shifted-string reader. The port maps the file and walks it with a cursor where the original seeks a `FILE *`, which is why the readers take a stream and treat NULL as the egg |
-| [`stubs.c`](stubs.c) | what is left, and the list is the to-do list in dependency order. `run_level` moved to `game.c` on 2026-08-05; **six** routines a demo reaches are still unwritten, 1,350 bytes - `0x0a956`, `0x0751b`, `0x09329`, `0x076e2`, `0x07646`, `0x078a6`. Every earlier count here (51, 37, 33, 24) was too high, all for one reason: they matched on `symbols.py` names, so a routine written under a name `symbols.py` lacked read as missing. Count by the image offset each body carries instead |
+
+**There is no `stubs.c`.** It held the to-do list in dependency order, and it went
+when its last entry did - `sound_set_rate`, to `sound.c`, on 2026-08-08. Nothing
+in the port stands in for a routine any more. That state is tagged `no-stubs`.
 
 ## How much of it exists
 
 Measured by the image offset each body carries, not by name - names are what made
-every earlier count of this wrong. As of 2026-08-07:
+every earlier count of this wrong, and one of them counted an offset that appeared
+only in a comment. As of 2026-08-08:
 
 | | | |
 | --- | --- | --- |
-| the game's own segment, `0x04ca0`-`0x14620` | 174 of 194 functions | **59,133 of 63,880 bytes, 92.6%** |
-| sound, mixer, XMS and the C runtime above it | 13 of 77 | 1,734 of 17,192 bytes, 10.1% |
+| the game's own segment, `0x04ca0`-`0x14620` | **194 of 194 functions** | **63,880 of 63,880 bytes** |
+| sound, mixer, XMS and the C runtime above it | a deliberate handful | the rest is not coming |
 
 The second row is small on purpose and will stay that way: it is Borland's
 runtime and a Sound Blaster, and the port has a host libc and SDL instead. Only
 the sound API itself was worth reconstructing, and it is in `sound.c`.
 
-What is left in the game's own segment is mostly the four cutscenes -
-`cutscene_rocket_landing` (1,052 bytes), `cutscene_doorstep` (516),
-`cutscene_night_monster` (483) and `cutscene_rocket_space` (358) - plus
-`load_eggs_ini`, `fatal`'s text-mode half, and a dozen small routines nothing has
-reached yet.
+**Written is not verified, and the gap between them is the interesting number.**
+194 of 194 is how much has a C body. What has been *compared against the guest* is
+smaller and worth much more:
 
-**Written is not verified.** That 92.6% is how much has a C body. What has been
-compared against the guest is a smaller and much more valuable set: every native
-in `native.py` byte for byte, `entity_update` over six captures, `level_load`'s
-twenty fields and all 160 backdrop rows, and the leaves in `test_leaves.py`. The
-screens are checked pixel-for-pixel against snapshots where one exists. Nothing
-else is more than a careful reading.
+| harness | what it settles |
+| --- | --- |
+| `test_leaves.py` | 2,400 comparisons of the C leaves against the byte-compared natives |
+| `test_entity.py` | `entity_update`, `level_event`, `collide_scenes`, `flock_link` and the walk, field by field on a real level |
+| `test_blast.py` | `blast_terrain` and `stamp_sprite_into`, 400 calls, every pixel |
+| `test_particles.py` | the particle step over 400 made-up pools |
+| `test_photofade.py` | the photograph fade's state machine, and its DAC ramp |
+| `compare_level.py` | the level loader: 20 fields and all 160 backdrop rows |
+| `test_dgroup.py` | that no two declarations claim the same DGROUP bytes |
+
+Everything else is a careful reading, and this session was a reminder of what that
+is worth: a `do`/`while` read as a `for` in `entity_update`, a `strcasecmp` where
+the original has `repe cmpsb`, and an `alloc_image` that fills with 1 rather than 0
+all survived being read and were caught by being run.
+
+**Where the comparisons are blind**, because it keeps mattering: they are all one
+call deep. Both bugs found in `entity_update`'s fall-and-climb probe - the `sar`
+that should not have been a divide, and the `do`/`while` - needed an entity in the
+air at the moment of the step, and no captured snapshot has one. A frame-by-frame
+runner is the missing instrument; see
+[open-frame-comparison](../docs/notes/open-frame-comparison.md).
 
 `game.c` keeps its functions in **address order**, which within a module is the
 order the compiler emits them and therefore the order they were defined in - a
@@ -122,8 +139,11 @@ free piece of information, so it is worth not throwing away. `dos_io.c` is group
 the address space, which is a reminder that this split is ours and the original
 had one module here, or several we cannot see.
 
-Still missing and worth adding as they are read: the six routines above, the
-rest of `run_level`'s frame, and the four remaining cutscene screens.
+Nothing in the game's own segment is missing now. What is left is not transcription
+but verification, and a handful of places where the port knowingly answers
+differently from the original - each one commented at the site and listed in
+[`docs/notes/`](../docs/notes/), the largest being `alloc_image`'s margin arguments
+and what `terrain_at` returns outside the level.
 
 **The level loader is in and is compared.** `level_load` (`0x088fa`) and
 `stamp_solid` (`0x07490`) were read out of the disassembly rather than
@@ -217,10 +237,13 @@ cd reconstruct && make        # -> ./ducks, against SDL3
 make run
 ```
 
-`game.c` + `sdl_io.c` + `stubs.c` + `egg.c` + `sound.c`. Link `dos_io.c` in place
-of `sdl_io.c` and the same game would talk to a VGA - that swap is the whole point
-of the split, and the fact that it compiles either way is the first real check
-that the line was drawn in the right place.
+`game.c` + `sdl_io.c` + `egg.c` + `sound.c`. Link `dos_io.c` in place of
+`sdl_io.c` and the same game would talk to a VGA - that swap is the whole point of
+the split, and the fact that it compiles either way is the first real check that
+the line was drawn in the right place.
+
+It needs your copy of the game: `Eggs/MAIN.EGG` beside the binary, or
+`DUCKS_GAME_DIR` pointing at it. Nothing from the game is in this repository.
 
 `make lib` builds the same sources as `libducks.so`, so a harness can call one
 function out of the port and compare it against the guest's own bytes under
@@ -228,16 +251,22 @@ Unicorn - see `test_toollist.py`. The emulator stays outside the port and the tw
 do not share memory: `far` is nothing here and a pointer is eight bytes, so only
 `viewport_t` has the same layout on both sides.
 
-**It is not the game yet.** About a third of the segment is unread, and `stubs.c`
-is the list of what. `run_level` is deliberately a no-op returning "the run ended",
-so `game_main`'s inner loop falls through to the screens either side of it - the
-menus are what this is for at the moment, not the gameplay.
+**It is the game.** The intro, the menus, the levels, the tools, the endings and the
+cutscenes: you can start a game, play it, lose your lives, watch the ending and get
+your name on the hall of fame. That state is tagged `no-stubs`.
 
-What happens if you run it today: the intro splashes, the version page, and then
-the menus. All fifteen of them are real - `build_menus` assembles them out of the
-string tables at startup and `run_screen` runs whichever one `game_main` points
-at - so PLAY DUCKS, OPTIONS, the settings screens, READ ME! and QUIT DUCKS all
-navigate, the toggles toggle, and QUIT takes main's teardown path and exits.
+The menus first, since they came first: all fifteen are real - `build_menus`
+assembles them out of the string tables at startup and `run_screen` runs whichever
+one `game_main` points at - so PLAY DUCKS, OPTIONS, the settings screens, READ ME!
+and QUIT DUCKS all navigate, the toggles toggle, and QUIT takes main's teardown
+path and exits. That much was tagged `menu-done`.
+
+The cheats work, and they are typed in **capitals** - the compare at `0:0x4c28` is
+`repe cmpsb`, with no case folding anywhere in it. `COLOURMAP` then `P` during a
+level draws the palette; `THECROWDSAYBO` gives you the level picker;
+`PLAYBACKTIME` opens the demo picker. `game.c` lists all ten against the flags they
+set, and one of them - `KEYCODE` - is dead in the shipped build: it toggles a word
+nothing reads.
 
 The window captures the mouse, because the game keeps the pointer position
 itself as a running total of INT 33h deltas and a pointer that stops at the edge
@@ -252,15 +281,28 @@ READ ME! list what the file actually holds, and `show_readme_section`
 
 LOAD / SAVE works too: five slots in GAME1.SG to GAME5.SG, with the name typed
 on a screen that is the menu itself with one line being edited. SAVE THIS GAME is
-only offered while a game is in progress, so it needs gameplay to reach honestly.
+only offered while a game is in progress, which is reachable now that the gameplay
+is.
 
 Leave the menu alone for a while and the hall of fame comes up on its own, read
 out of `settings.dat` at startup and written back on the way out.
 
-The menus are complete - the sliders, REGISTER DUCKS and the hall of fame all
-work, and every action code `game_main` switches on reaches something real except
-the ones that lead into the game itself. That state is tagged `menu-done`.
+The sliders, REGISTER DUCKS and the hall of fame all work, and every action code
+`game_main` switches on reaches something real.
 
 Sound works: 87 samples by id out of the egg's `0x58` blocks, eight voices, and
 the original's additive mixer feeding an SDL device at the rate the game asks
-for.
+for - including `D` mid-level, which doubles that rate exactly as the DSP time
+constant did.
+
+## This folder is going to be a branch of its own
+
+`develop` carries the whole repository - the unpacker, the emulator, the native
+port, the snapshots, the harnesses and the notes. **`master` will carry this folder
+and nothing else**, so somebody who wants the port can clone and build it without
+the analysis machinery that produced it.
+
+Nothing about the code changes across that line. What changes is what a stranger
+sees first, and it should be the game rather than the toolchain. The harnesses stay
+on `develop` with the emulator they need: every one of them drives the original
+under Unicorn on one side, so they cannot travel without it.

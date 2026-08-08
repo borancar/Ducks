@@ -45,14 +45,16 @@ Current, and kept current. Where these disagree with
 - [editing-conventions](editing-conventions.md) — the three layers, why behaviour
   goes in `native.py`, and the anchored one-shot edit scripts
 
-**On the coverage figure.** `creport` counts a function as written if any `.c`
-outside `stubs.c` mentions its offset — including in a *comment*. `0x10c06`,
-the cheat's level picker, was counted as done for months because `0x507`'s
-comment said "picks 0x10c06's level picker over the episode intro".
+**On the coverage figure.** Counting a function as written because some `.c`
+mentions its offset counts *comments* too. `0x10c06`, the cheat's level picker, was
+counted as done for months because `0x507`'s comment said "picks 0x10c06's level
+picker over the episode intro".
 
 The obvious fix — ignore mentions inside comments — is useless here, because the
 convention is to put every routine's offset in the comment *above* it, so
-stripping comments loses all 193. The check that does discriminate is whether a
-**function definition follows the mention** before the next one starts. Run that
-and exactly one offset fails, `0x0b9ea`, which is `set_buffer` and is defined in
-`stubs.c` — excluded from the scan by the same rule. Everything else has a body.
+stripping comments loses them all. The check that does discriminate is whether a
+**function definition follows the mention** before the next one starts.
+
+`stubs.c` used to be excluded from that scan, which hid `set_buffer` in it. Both
+problems are gone: the file went with its last entry on 2026-08-08, and every
+routine in the game's own segment has a body — 194 of 194, 63,880 bytes.
