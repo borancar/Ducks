@@ -46,8 +46,6 @@ int16_t    screen_x0;                /* 0x053c - centring offset, 20 or 0, and
 void far (*plot)(int16_t x, int16_t y, uint8_t colour);   /* 0x053e */
 uint8_t    current_plane;            /* 0x177d - the filter every drawing routine
                                       * applies */
-uint16_t   page_front;               /* 0x1725 - swapped by page_flip */
-uint16_t   page_back;                /* 0x1727 - what everything draws into */
 int16_t    flip_phase;               /* 0x0d61 - 0..9 */
 
 /* The compositor's state: the tile's wrap masks, the scroll into it, and how far
@@ -239,10 +237,37 @@ static void         capture_reassert(void);  /* ... and after a resize */
 static SDL_Surface *surface;
 static int          scale = SCALE_DEFAULT;
 
-static uint8_t  page_a[360 * 240];      /* the two video pages, linear */
+/* 0x1725 and 0x1727 in the original, where they are CRTC start addresses into one
+ * 64 KB aperture. Here they are the pages themselves - two linear buffers, sized
+ * for the larger mode - so the names sit on the memory rather than on an offset
+ * into it, and game.h declares neither: which page is which is the driver's
+ * business and nothing above this file has any use for it.
+ *
+ * **Both pages are needed, and not for presenting.** page_front's contents are
+ * never read: page_flip copies page_back into SDL's surface and then swaps the
+ * two, so one buffer would be enough to get pixels onto the screen. What the
+ * second one provides is RETENTION - after the swap, page_back is the frame
+ * before last, with that frame still in it - and the game depends on that:
+ *
+ *   - the HUD is drawn once into each page at level start (0x0d9a2) and never
+ *     again. Hooking that block and the flip over a demo gives 720 flips and 0
+ *     re-entries, so each page keeps its own copy for the whole level.
+ *   - anything that writes full-screen therefore lands on ONE page. The COLOURMAP
+ *     chart at 0x0ce2e does exactly that, and the guest's own memory shows the
+ *     result: one page keeps all 38 of the panel's colours, the other goes to a
+ *     flat band of colour 1. The alternation that follows is the original's, and
+ *     is deliberately reproduced rather than fixed - see run-level.md.
+ *
+ * Collapse these to one buffer and that behaviour disappears: the chart would wipe
+ * the only page and the damage would be permanent instead of alternating. It would
+ * look like a tidy-up and would quietly undo a decision made on evidence. */
+static uint8_t  page_a[360 * 240];
 static uint8_t  page_b[360 * 240];
-static uint8_t *fb_back  = page_a;      /* what everything draws into */
-static uint8_t *fb_front = page_b;      /* what the last flip presented */
+static uint8_t *page_back  = page_a;    /* what everything draws into */
+static uint8_t *page_front = page_b;    /* what the last flip presented, kept so
+                                         * the NEXT flip draws onto the frame
+                                         * before last rather than onto a clear
+                                         * page - see above */
 
 static uint32_t palette[256];           /* already in the surface's format */
 
@@ -320,9 +345,6 @@ void far set_mode_x(int16_t wide)
 
     memset(page_a, 0, sizeof page_a);
     memset(page_b, 0, sizeof page_b);
-    page_front = page_back = 0;         /* the game reads these; both pages are
-                                         * whole arrays here, so the offsets are
-                                         * only ever zero */
 
     make_rect(&viewport_panel,  screen_height - 40, screen_height,
               screen_x0, screen_x0 + 320);
@@ -544,7 +566,7 @@ void far page_flip(void)
             for (y = 0; y < rows; y++) {
                 uint32_t      *dst = (uint32_t *) ((uint8_t *) dst_surface->pixels
                                                    + (size_t) y * dst_surface->pitch);
-                const uint8_t *src = fb_back + (size_t) (y / scale) * screen_width;
+                const uint8_t *src = page_back + (size_t) (y / scale) * screen_width;
 
                 for (x = 0; x < cols; x++)
                     dst[x] = palette[src[x / scale]];
@@ -554,10 +576,12 @@ void far page_flip(void)
         }
     }
 
-    {   /* swap the pages, as the CRTC start address swap did */
-        uint8_t *t = fb_back;
-        fb_back = fb_front;
-        fb_front = t;
+    {   /* The swap the CRTC start address did, and the reason there are two
+         * buffers at all: the next frame draws onto what was presented one flip
+         * ago, not onto a clear page. */
+        uint8_t *t = page_back;
+        page_back = page_front;
+        page_front = t;
     }
 
     /* The deadline, not a sleep of a fixed length: overruns reset the schedule
@@ -586,7 +610,7 @@ void far plot_pixel(int16_t x, int16_t y, uint8_t colour)
         return;
     if (x < 0 || y < 0 || x >= screen_width || y >= screen_height)
         return;
-    fb_back[(size_t) y * screen_width + x] = colour;
+    page_back[(size_t) y * screen_width + x] = colour;
 }
 
 /* 0x057a1. The original needed a second routine because the row stride
@@ -628,7 +652,7 @@ void far blit_rows(desc_t far *desc, viewport_t rect, int16_t srcrow)
         if (row < 0)
             continue;
         src = desc->rows[src_row];
-        dst = fb_back + (size_t) row * screen_width;
+        dst = page_back + (size_t) row * screen_width;
 
         /* The source is read from its own column 0 - rect.left only moves the
          * destination, which is what centres a 320-wide picture in 360. */
@@ -676,7 +700,7 @@ void far blit_warped(desc_t far *desc, viewport_t rect, uint8_t step,
         if (y < 0)
             continue;
         src = desc->rows[row];
-        dst = fb_back + (size_t) y * screen_width;
+        dst = page_back + (size_t) y * screen_width;
         /* The source is indexed by the ABSOLUTE column, not by one relative to
          * rect.left - that is what makes the mask a tile rather than a clip. */
         for (x = current_plane + rect.left; x < rect.right; x += 4)
@@ -702,7 +726,7 @@ void far blit_rows_masked(desc_t far *desc, viewport_t rect, int16_t srcrow)
         if (row < 0)
             continue;
         src = desc->rows[src_row];
-        dst = fb_back + (size_t) row * screen_width;
+        dst = page_back + (size_t) row * screen_width;
 
         for (x = current_plane; rect.left + x < rect.right; x += 4)
             if (x < desc->w && rect.left + x >= 0 && rect.left + x < screen_width
@@ -765,7 +789,7 @@ void far draw_sprite(int16_t far *index, int16_t x, int32_t y,
             if ((col & 3) == current_plane) {
                 uint8_t px = desc->pixels[src + (col - x)];
                 if (px)
-                    fb_back[(size_t) row * screen_width + col + x0] =
+                    page_back[(size_t) row * screen_width + col + x0] =
                         (uint8_t) (px + colour);
             }
         src += (x_end - x) + row_extra;
@@ -856,7 +880,7 @@ void far compose_layer(void)
     for (row = 0; row < screen_height; row++) {
         uint8_t far *fg  = backdrop.rows[row];
         uint8_t far *bg  = background.rows[(row + bg_scroll_y) & wrap_y];
-        uint8_t far *dst = fb_back + (size_t) row * screen_width;
+        uint8_t far *dst = page_back + (size_t) row * screen_width;
 
         for (x = current_plane; x < screen_width; x += 4)
             dst[x] = fg[x] ? fg[x] : bg[x & wrap_x];
@@ -906,7 +930,7 @@ void far compose_scroll(int16_t sx, int16_t sy)
             phase  = (phase + warp_step) & 0xff;
         }
         bg  = background.rows[(((sy >> 1) + bg_scroll_y + row0 + r)) & wrap_y];
-        dst = fb_back + (size_t) (row0 + r) * screen_width + viewport_game.left;
+        dst = page_back + (size_t) (row0 + r) * screen_width + viewport_game.left;
 
         for (x = current_plane; x < right; x += 4) {
             uint8_t px = fg[sx + x];
