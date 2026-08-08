@@ -118,7 +118,16 @@ the next run instead of being found by its symptoms months later. The four-guest
 comparison above is what the known-written list is derived from, so a future
 addition to it needs the same evidence rather than an assertion.
 
-And close the blind spot the third one came through: every global the port
-defines should carry its DGROUP offset, so the test can see it at all. A count of
-definitions in `game.c`/`sdl_io.c`/`sound.c`/`egg.c` against the 164 the parser
-currently finds says how many are still invisible to it.
+And close the blind spot the third one came through. Two parts to it:
+
+- **Declarations with no offset comment.** `current_buffer`, `egg_stream` and the
+  two palette arrays all sat in `stubs.c` without one. Moving them to the module
+  that owns them and annotating them took the parser from 164 to 167. A count of
+  definitions across `game.c`/`sdl_io.c`/`sound.c`/`egg.c` against that 167 says
+  how many are still invisible.
+- **`DECL` requires the `;` straight after the name**, so any definition with an
+  initialiser is skipped: `game_speed = 29`, `gamma_level = 16` and now
+  `current_buffer = default_buffer`. For the initialiser hunt that is harmless -
+  those are the ones that already have what the hunt is looking for - but they
+  are also skipped by the *offset-collision* check in the same pass, so they can
+  claim DGROUP bytes that overlap something else and nothing will say so.
