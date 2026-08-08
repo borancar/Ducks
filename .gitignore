@@ -1,0 +1,16 @@
+# Your copy of the game's data, fetched by `make eggs` or put here by hand.
+# Nothing of Ducks! belongs in this repository - it is the property of its
+# authors and none of it is redistributed here.
+Eggs/
+*.egg
+
+# What the game writes beside itself: the five save slots and the settings and
+# high-score file.
+*.SG
+*.dat
+
+# Build output.
+*.o
+*.so
+ducks
+ducks-asan
