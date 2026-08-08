@@ -5,13 +5,18 @@ Software, 1998-2000), one file per unit of the original we can argue for. It
 builds and plays:
 
 ```sh
-make && ./ducks
+make run
 ```
 
-**You need your own copy of the game.** Nothing of Ducks! is distributed here — no
-executable, no `.egg` data, no artwork. Put `Eggs/MAIN.EGG` beside the binary, or
-point `DUCKS_GAME_DIR` at your copy. The game is available from
-<https://www.kieranmillar.com/ducks/>.
+**You need your own copy of the game, and `make run` will fetch it for you.**
+Nothing of Ducks! is distributed here — no executable, no `.egg` data, no artwork.
+What `make run` does is download the archive from the authors' own page,
+<https://www.kieranmillar.com/ducks/>, and keep the one file the port needs:
+`Eggs/Main.egg`, which holds every picture, level, sound and line of text in the
+game. It needs `curl` and `7z`, does nothing if `Eggs/` is already there, and does
+not touch the network at all if `DUCKS_GAME_DIR` points at a copy you already have.
+
+`make` on its own just builds; `make eggs` just fetches.
 
 Every line should be checkable against an image offset, and where a name or a type
 is a guess, it says so.
@@ -260,8 +265,9 @@ make run
 the split, and the fact that it compiles either way is the first real check that
 the line was drawn in the right place.
 
-It needs your copy of the game: `Eggs/MAIN.EGG` beside the binary, or
-`DUCKS_GAME_DIR` pointing at it. Nothing from the game is in this repository.
+It needs your copy of the game's data: `Eggs/` beside the binary, which `make run`
+will fetch, or `DUCKS_GAME_DIR` pointing at a copy you already have. Nothing from
+the game is in this repository, and `clean` deliberately leaves `Eggs/` alone.
 
 `make lib` builds the same sources as `libducks.so`, so a harness can call one
 function out of the port and compare it against the guest's own bytes under

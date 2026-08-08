@@ -63,3 +63,10 @@ reconstruct/*.o
 reconstruct/*.so
 reconstruct/ducks
 reconstruct/ducks-*
+
+# The symlink that puts your game's Eggs beside the port, so the relative paths
+# inside the game resolve when you run ./ducks from reconstruct/. It points into
+# game/, so it is as much "your copy of the game" as game/ itself is - and it was
+# tracked by accident until 2026-08-08, which put a symlink to somebody's home
+# directory into the distribution branch.
+reconstruct/Eggs
