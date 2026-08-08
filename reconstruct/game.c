@@ -6096,6 +6096,54 @@ static uint8_t terrain_at(int32_t y, int32_t x)
     return backdrop.rows[y][x];
 }
 
+/* ================================================== 0x0ce2e: the colour chart
+ *
+ * P during a played level, and only with cheat_state[5] - the word for which is
+ * COLOURMAP, which is what this draws and not a pause at all. It had been
+ * stubbed here as "the pause screen" on the strength of the key alone; the cheat
+ * table in the egg's 0xfe block names it.
+ *
+ * A full-screen image with the 256 palette entries as a 16x16 grid of 10x10
+ * swatches - colour i at row (i / 16) * 10, column (i % 16) * 10, so the chart
+ * is 160x160 in the top-left corner and the rest is whatever alloc_image left,
+ * which is colour 1 and not 0. Checked against the guest: stopping the original
+ * one instruction before its flip and reading the page back, every pixel inside
+ * the chart matches and all 38400 outside it are 1.
+ *
+ * Then the four planes, a flip, and a blocking getch: the game stands still
+ * until a key is pressed, which is the only sense in which it pauses. The image
+ * is freed on the way out, so the chart is gone when play resumes and the caller
+ * does not have to redraw anything.
+ */
+void far pause_screen(void)
+{
+    desc_t  page;                                  /* [bp-0x1a] */
+    int16_t i, row, plane;                         /* [bp-2], si, di */
+
+    page.w = 0x140;                                /* 0x0ce36 */
+    page.h = 0xc8;                                 /* 0x0ce3b */
+    alloc_image(&page, 0, 0, 0, 1);                /* 0x0ce4e */
+
+    for (i = 0; i < 0x100; i++) {                  /* 0x0ceb1 */
+        int16_t top = (int16_t) (i / 16 * 10);     /* 0x0ce5b - di */
+        int16_t x   = (int16_t) (i % 16 * 10);     /* 0x0ce6b - [bp-4] */
+
+        /* si runs from di while di + 10 > si, so ten rows. */
+        for (row = top; row < top + 10; row++)     /* 0x0cea5 */
+            memset(page.rows[row] + x, i, 10);     /* 0x0ce9c - 0:0x4c09 */
+    }
+
+    for (plane = 0; plane < 4; plane++) {          /* 0x0cee8 */
+        set_plane((uint8_t) plane);                /* 0x0cec4 */
+        blit_rows(&page, viewport_screen, 0);      /* 0x0cedf */
+    }
+    page_flip();                                   /* 0x0ceee - 0x14d4b, which
+                                                    * wraps to 0x04d4b */
+    key_read();                                    /* 0x0cef2 - 0:0x2814, getch,
+                                                    * and it blocks */
+    resource_release(&page);                       /* 0x0cefd */
+}
+
 /* ============================================== 0x0cf07: played_tool_events
  *
  * A played level's input, and the counterpart of tool_events: that one moves the

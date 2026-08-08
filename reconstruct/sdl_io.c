@@ -982,15 +982,32 @@ static void capture_refresh(void)
 static int16_t key_queue[KEY_QUEUE];
 static int     key_head, key_tail;
 
+void sdl_pump_input(void);                  /* defined below; key_read waits on it */
+
+static int key_room(int n)
+{
+    return (key_head - key_tail - 1 + KEY_QUEUE) % KEY_QUEUE >= n;
+}
+
 void key_push(int16_t k)
 {
-    int next = (key_tail + 1) % KEY_QUEUE;
-
-    if (next != key_head) {                 /* a full queue drops the key, which
+    if (key_room(1)) {                      /* a full queue drops the key, which
                                              * is what the BIOS buffer did */
         key_queue[key_tail] = k;
-        key_tail = next;
+        key_tail = (key_tail + 1) % KEY_QUEUE;
     }
+}
+
+/* An extended key is a zero followed by its scan code, and input_poll reads the
+ * two as one - so they go in together or not at all. Dropping only the second
+ * half used to mean a wrong key; now that key_read blocks, it would mean waiting
+ * for a scan code that is never coming. */
+static void key_push_extended(int16_t scan)
+{
+    if (!key_room(2))
+        return;
+    key_push(0);
+    key_push(scan);
 }
 
 int16_t far key_pending(void)               /* 0:0x29fc */
@@ -998,12 +1015,25 @@ int16_t far key_pending(void)               /* 0:0x29fc */
     return key_head != key_tail;
 }
 
-int16_t far key_read(void)                  /* 0:0x2814 */
+/* 0:0x2814 is DOS's getch, and getch BLOCKS - dos_io.c's one-liner is the real
+ * thing and blocks too. This used to return 0 on an empty queue, which nothing
+ * noticed because input_poll, its only caller, guards every read with kbhit.
+ *
+ * pause_screen is the caller that does not: it draws the colour chart, flips,
+ * and calls getch with nothing pending, meaning "stand still until a key". So
+ * this waits, and pumps SDL while it waits - without the pump no key could ever
+ * arrive and the queue would stay empty for ever. Ten milliseconds a turn keeps
+ * the window answering the compositor rather than being reported as hung, and
+ * the pump is also what keeps the close button working while we are in here.
+ */
+int16_t far key_read(void)
 {
     int16_t k;
 
-    if (key_head == key_tail)
-        return 0;
+    while (key_head == key_tail) {
+        sdl_pump_input();
+        SDL_Delay(10);
+    }
     k = key_queue[key_head];
     key_head = (key_head + 1) % KEY_QUEUE;
     return k;
@@ -1029,10 +1059,10 @@ void sdl_pump_input(void)
             /* Into the queue, in the shape the BIOS hands them over: an ASCII
              * code, or a zero followed by a scan code for the keys that have no
              * ASCII. input_poll is what turns the second form into 0x1xx. */
-            if (e.key.key == SDLK_UP)           { key_push(0); key_push(0x48); }
-            else if (e.key.key == SDLK_DOWN)    { key_push(0); key_push(0x50); }
-            else if (e.key.key == SDLK_LEFT)    { key_push(0); key_push(0x4b); }
-            else if (e.key.key == SDLK_RIGHT)   { key_push(0); key_push(0x4d); }
+            if (e.key.key == SDLK_UP)           key_push_extended(0x48);
+            else if (e.key.key == SDLK_DOWN)    key_push_extended(0x50);
+            else if (e.key.key == SDLK_LEFT)    key_push_extended(0x4b);
+            else if (e.key.key == SDLK_RIGHT)   key_push_extended(0x4d);
             else if (e.key.key == SDLK_ESCAPE)  key_push(0x1b);
             else if (e.key.key == SDLK_RETURN)  key_push(0x0d);
             else if (e.key.key < 0x80)          key_push((int16_t) e.key.key);

@@ -6,9 +6,10 @@
  * game.c, dos_io.c or sdl_io.c and comes off this list, so the list is also the
  * to-do list.
  *
- * Every routine in the game's own module is now written, so what is left here is
- * two routines and no more, each behind a cheat or a settings toggle that a demo
- * cannot reach. Nothing below is on the gameplay path.
+ * Every routine in the game's own module is now written, and 0x0ce2e - the
+ * COLOURMAP chart, which was stubbed here as "the pause screen" - went to game.c
+ * on 2026-08-08. What is left is one routine in the sound module that the port
+ * has no hardware to obey.
  *
  * The file also used to hold real data - the two palette arrays, current_buffer,
  * egg_stream - left over from bring-up. Data that belongs to a module belongs in
@@ -22,8 +23,8 @@
 
 /* ------------------------------------------ stubbed because nothing reaches them
  *
- * Both of the two below are off the path *by reading* - a named caller, behind a
- * cheat or a settings toggle - and that is the only kind of evidence worth
+ * The one below is off the path *by reading* - a named caller, behind a
+ * settings toggle - and that is the only kind of evidence worth
  * writing down here. "Never observed" is not evidence, and it misled us once:
  * every capture we had was mid-level, so run_level's setup and teardown never
  * appeared in a trace taken from one, and 0x0881d, 0x0d5c5, 0x0615a, 0x04f4b and
@@ -39,17 +40,6 @@ static void unwritten(const char *what, int *said)
         return;
     *said = 1;
     fprintf(stderr, "  [stub] %s is not written yet\n", what);
-}
-
-/* 0x0ce2e, 217 bytes: what P does when the pause cheat is on. It builds a
- * 320x200 image, draws over the screen and waits on getch. Off the demo path by
- * reading - played_tool_events is its only caller - and behind cheat_state[5]
- * besides, so nothing reaches it without being asked for twice. */
-void far pause_screen(void)
-{
-    static int said;
-
-    unwritten("0x0ce2e, the pause screen", &said);
 }
 
 /* 0x149e:0x346: the DSP's rate register, which D toggles between 11000 and
