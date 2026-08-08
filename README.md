@@ -44,8 +44,8 @@ from it is ever committed. Set `DUCKS_GAME_DIR` to put it somewhere else.
 
 The tooling needs the whole thing, `Ducks.exe` included, because unpacking and
 emulating it is the point. The C port needs only `Eggs/Main.egg`, and
-`make run` in [`reconstruct/`](reconstruct/) will fetch that from the authors' page
-if you have not already got it.
+`make run` in [`reconstruct/`](reconstruct/) will fetch that from the archive page
+above if you have not already got it.
 
 A fresh clone will not run anything until you unpack: `Ducks.unpacked.exe` is
 derived from the game and deliberately untracked. `native.py` defaults to it, and
