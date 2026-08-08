@@ -10,10 +10,10 @@ make run
 
 **You need your own copy of the game, and `make run` will fetch it for you.**
 Nothing of Ducks! is distributed here — no executable, no `.egg` data, no artwork.
-What `make run` does is download the archive from the authors' own page,
+What `make run` does is download the archive from an archive page,
 <https://www.kieranmillar.com/ducks/>, and keep the one file the port needs:
 `Eggs/Main.egg`, which holds every picture, level, sound and line of text in the
-game. It needs `curl` and `7z`, does nothing if `Eggs/` is already there, and does
+game. That page is not the authors' — it is where a copy can still be found. It needs `curl` and `7z`, does nothing if `Eggs/` is already there, and does
 not touch the network at all if `DUCKS_GAME_DIR` points at a copy you already have.
 
 `make` on its own just builds; `make eggs` just fetches.

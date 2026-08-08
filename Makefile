@@ -29,10 +29,10 @@ ducks: $(OBJS)
 # repository. Ducks! belongs to Tim Furnish / Hungry Software and is not
 # redistributed here.
 #
-# So this fetches YOUR copy, from the authors' own download page, and keeps only
-# the egg - the DOS executable in that archive is of no use to a port that has
-# replaced it. If you already have the game somewhere, point DUCKS_GAME_DIR at it
-# instead and nothing is downloaded.
+# So this fetches YOUR copy, from an archive download page, and keeps only the
+# egg - the DOS executable in that archive is of no use to a port that has
+# replaced it. If you already have the game somewhere, point DUCKS_GAME_DIR at
+# it instead and nothing is downloaded.
 GAME_URL ?= https://www.kieranmillar.com/ducks/Ducks.zip
 GAME_ZIP  = .ducks-download.zip
 
