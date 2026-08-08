@@ -48,12 +48,6 @@ void far set_text_colour(int16_t c)       { (void) c; }
 /* 0x088fa is level_load, in game.c */
 
 
-/* The palette the DAC loops upload, and the washed copy the blink alternates
- * with: 0x10e1 and 0x0dad. palette_build fills the first; nothing fills the
- * second yet. */
-uint8_t palette_stored[768];
-uint8_t palette_washed[48];
-
 
 /* ------------------------------------- stubbed because a demo does not run them
  *
