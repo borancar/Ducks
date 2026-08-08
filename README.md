@@ -1,8 +1,26 @@
-# Reconstructed source
+# Ducks! — the game's own code, reconstructed
 
-C reconstructed from the disassembly, one file per unit of the original we can
-argue for. Every line should be checkable against an image offset, and where a
-name or a type is a guess, it says so.
+C reconstructed from the disassembly of **Ducks! v1.2** (Tim Furnish / Hungry
+Software, 1998-2000), one file per unit of the original we can argue for. It
+builds and plays:
+
+```sh
+make && ./ducks
+```
+
+**You need your own copy of the game.** Nothing of Ducks! is distributed here — no
+executable, no `.egg` data, no artwork. Put `Eggs/MAIN.EGG` beside the binary, or
+point `DUCKS_GAME_DIR` at your copy. The game is available from
+<https://www.kieranmillar.com/ducks/>.
+
+Every line should be checkable against an image offset, and where a name or a type
+is a guess, it says so.
+
+> **This is a distribution branch.** It is generated from the `develop` branch,
+> which holds the machinery that produced it: the unpacker, the DOS/VGA emulator
+> the port is compared against, the snapshots, every verification harness, and the
+> working notes. If you want to know *why* a routine looks like this, or to check
+> the port against the original yourself, that is where to go.
 
 The originals are not available. This is what the code must have looked like for
 the compiler to have emitted what it did.
