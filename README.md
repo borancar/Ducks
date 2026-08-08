@@ -752,14 +752,27 @@ out of scope — see [`reconstruct/README.md`](reconstruct/README.md).
 unpacker, the emulator, the native port, the snapshots, the harnesses, the notes,
 and the reconstruction.
 
-**`master` is the reconstruction alone** — `reconstruct/` and nothing else, so
-somebody who wants the port can clone it and build it without the two megabytes of
-analysis machinery that produced it. It is not a different codebase; it is the
-same files with the scaffolding left behind.
+**`master` is the distribution branch** — the port alone, with `reconstruct/`'s
+files at the repository root so a consumer can clone and `make`. It is *generated*,
+not merged:
+
+```sh
+git subtree split -P reconstruct -b dist    # the port's own history, paths rebased
+git push -f origin dist:master
+```
+
+so each refresh is a force-push, and `master` is never committed to directly. The
+force is expected rather than destructive: nothing lives only there.
 
 That split is deliberate about which is which. The tooling is the interesting part
 of the *work* and the port is the interesting part of the *result*, and a person
 arriving at the repository is far more likely to want the second.
+
+**The harnesses stay on `develop`, and cannot follow.** Every one of them drives
+the original under Unicorn on one side — `test_leaves`, `test_entity`, `test_blast`,
+`compare_level` and the rest — so they need the emulator and the snapshots to mean
+anything. `master` is therefore a branch the port cannot be *validated* on, only
+built and played, and `reconstruct/README.md` says so at the top.
 
 ## Licence
 
