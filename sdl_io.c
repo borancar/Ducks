@@ -1078,18 +1078,43 @@ void sdl_pump_input(void)
             SDL_Quit();
             exit(0);
             break;
-        case SDL_EVENT_KEY_DOWN:
+        case SDL_EVENT_KEY_DOWN: {
             /* Into the queue, in the shape the BIOS hands them over: an ASCII
              * code, or a zero followed by a scan code for the keys that have no
-             * ASCII. input_poll is what turns the second form into 0x1xx. */
+             * ASCII. input_poll is what turns the second form into 0x1xx.
+             *
+             * `e.key.key` is the UNSHIFTED keycode - SDLK_a is 'a' whatever the
+             * shift key is doing - so pushing it directly means the game can
+             * never see a capital. That was invisible while typed_push compared
+             * case-insensitively, and it broke every cheat the moment that was
+             * corrected to the strcmp the original actually uses. The name on
+             * the high-score table had the same limit and nobody had noticed.
+             *
+             * SDL_GetKeyFromScancode with the event's own modifier state applies
+             * shift, caps lock and the keyboard layout, which is exactly what
+             * the DOS keyboard handler did before the BIOS buffer.
+             *
+             * The `false` is load-bearing and is not the obvious choice: it is
+             * `key_event`, and TRUE means "the keycode a key event carries",
+             * which for a letter is the unshifted one. Checked rather than
+             * assumed - with true, shift and caps lock both give `colourmap`;
+             * with false, shift gives `COLOURMAP` and caps lock gives the same
+             * for letters while leaving the digits alone, which is what a
+             * keyboard does. It is also what makes '#' reachable at all, since
+             * that is shift+3 here and BUSHKANGAROO's finish key. */
+            SDL_Keycode k = SDL_GetKeyFromScancode(e.key.scancode, e.key.mod,
+                                                   false);
+
             if (e.key.key == SDLK_UP)           key_push_extended(0x48);
             else if (e.key.key == SDLK_DOWN)    key_push_extended(0x50);
             else if (e.key.key == SDLK_LEFT)    key_push_extended(0x4b);
             else if (e.key.key == SDLK_RIGHT)   key_push_extended(0x4d);
             else if (e.key.key == SDLK_ESCAPE)  key_push(0x1b);
             else if (e.key.key == SDLK_RETURN)  key_push(0x0d);
+            else if (k >= 0x20 && k < 0x7f)     key_push((int16_t) k);
             else if (e.key.key < 0x80)          key_push((int16_t) e.key.key);
             break;
+        }
         case SDL_EVENT_MOUSE_MOTION:
             if (capture_now) {          /* a loose pointer is not the game's */
                 rel_x += (int16_t) e.motion.xrel;
