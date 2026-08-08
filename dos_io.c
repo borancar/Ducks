@@ -14,83 +14,83 @@
  * decision about how a score looks, and it reaches the hardware only by calling
  * draw_sprite.
  *
- * C99, aimed at eventually building. Every function carries the image offset it
- * was read from.
- */
-
-#include <stdint.h>
-
-/* --------------------------------------------------------- what game.c owns
+ * **This file is a record, not a build target.** The port runs on sdl_io.c, and
+ * reimplementing the DOS side is not the aim - so what is here is what we know
+ * about the original's hardware layer, written as C because C is the clearest way
+ * to say it. The Makefile does not compile it. Nothing here has been run, and
+ * where it is checked at all it is because native.py byte-compared the routine it
+ * describes.
  *
- * Every one of these is defined in game.c - the write-scan that decided that
- * question is described there - so here they are declarations, which is what
- * `extern` is actually for. The offsets are DGROUP, and the names match
- * symbols.py, so `read d+0x1798` over the control socket prints `fade_level`
- * and so does this.
+ * Read it that way and two rules follow, both learned by breaking them:
+ *
+ *   - **No sketches.** A body that reads like code and is not - an invented
+ *     helper, a field that does not exist - is worse than a TODO, because a TODO
+ *     admits what it does not know. `outline_sprite` had `sprite_pixel()` and
+ *     `clip->shift_x` in it, and `page_flip` had a `swap()` and two undeclared
+ *     variables. Both are gone: one for the real thing's address, one written out
+ *     of the listing.
+ *   - **No second copies.** Anything that touches no hardware belongs above this
+ *     line, and if it is already transcribed in sdl_io.c then this file points at
+ *     it rather than repeating it.
+ *
+ * C99. Every function carries the image offset it was read from.
  */
 
-/* Owned here, because the routines in this file are the ones that write them:
- * set_mode_x sets the geometry and swaps the plotter, set_plane sets the plane,
- * page_flip swaps the pages. game.c declares these extern and reads a few. */
+#include "game.h"
+
+/* ------------------------------------------------------- what this file owns
+ *
+ * The video state, which the routines here are the ones that write: set_mode_x
+ * sets the geometry and swaps the plotter, set_plane sets the plane, page_flip
+ * swaps the pages. game.h declares them extern for game.c to read, and sdl_io.c
+ * defines exactly the same set - link one backend or the other, never both.
+ */
 int16_t    video_mode;               /* 0x04fe - non-zero is the 360-wide mode */
 int16_t    screen_width;             /* 0x0538 - 360 or 320 */
 int16_t    screen_height;            /* 0x053a - 240 or 200 */
 int16_t    screen_x0;                /* 0x053c - centring offset, 20 or 0 */
-void far (*plot)();                  /* 0x053e - plot_pixel or its stride-90 twin */
+void far (*plot)(int16_t x, int16_t y, uint8_t colour);   /* 0x053e */
 uint8_t    current_plane;            /* 0x177d - the filter every drawing routine
                                       * applies */
 uint16_t   page_front;               /* 0x1725 - swapped by page_flip */
 uint16_t   page_back;                /* 0x1727 - what everything draws into */
 int16_t    flip_phase;               /* 0x0d61 - 0..9 */
 
-/* the rest is game.c's */
-extern uint8_t    game_speed;        /* 0x1fd4 - delay(0x1f - this) per flip */
-extern void far  *vram;              /* 0x16f1 - the Mode X aperture */
+/* 0x16f1 - the Mode X aperture, a far pointer at A000:0000. Nothing above this
+ * file has any use for it, which is why it is defined here and not in game.c. */
+void far  *vram;
 
-/* the palette and the fade */
-extern int16_t    fade_level;        /* 0x1798 - 0..15 */
-extern int8_t     fade_direction;    /* 0x179a - +1 in, -1 out, 0 idle */
-extern int16_t    fade_start_colour; /* 0x179b */
-extern uint8_t    palette_stored[];  /* 0x10e1 - 768 bytes, the level's colours */
-extern uint8_t    palette_washed[];  /* 0x0dad - 48 bytes, v*0.75+64 */
-extern int16_t    blink_enable;      /* 0x2157 - nothing in this build sets it */
-extern int16_t    blink_countdown;   /* 0x0ddf */
-extern int16_t    blink_toggle;      /* 0x0ddd */
+/* 0x179f - the background warp's per-row x displacement, initialised DATA: a
+ * 0 -> 16 -> 0 hump indexed `& 0x1f`. sdl_io.c carries the same table for the same
+ * reason; see open-dgroup-initialisers. */
+uint8_t    warp_table[32] = {
+    0x00, 0x00, 0x00, 0x01, 0x01, 0x02, 0x03, 0x04,
+    0x06, 0x08, 0x0a, 0x0c, 0x0d, 0x0e, 0x0f, 0x0f,
+    0x10, 0x10, 0x10, 0x0f, 0x0f, 0x0e, 0x0d, 0x0c,
+    0x0a, 0x08, 0x06, 0x04, 0x03, 0x02, 0x01, 0x01,
+};
 
-/* the compositors' inputs, all globals - compose_layer takes no arguments */
-extern uint8_t far **fg_rows;        /* 0x16f5 - one far pointer per row */
-extern uint8_t far **bg_rows;        /* 0x170b */
-extern int16_t    layer_width;       /* 0x0538 via the same geometry */
-extern int16_t    layer_height;      /* 0x053a */
-extern int16_t    dest_row;          /* 0x1727 - the destination row offset */
-extern uint8_t    bg_scroll_x, bg_scroll_y;  /* 0x177e, 0x177f */
-extern uint8_t    bg_step_x, bg_step_y;      /* 0x1780, 0x1781 */
-extern uint8_t    cursor_divider, cursor_phase;  /* 0x179d, 0x179e */
-extern int16_t    wrap_x, wrap_y;    /* 0x1729, 0x172b - background wrap masks */
-extern int16_t    background_warp;   /* 0x2022 - first seen set on level 80 */
-extern uint8_t    warp_table[32];    /* 0x179f */
-extern uint8_t    warp_phase;        /* 0x17bf */
-extern uint8_t    warp_step;         /* 0x17c0 */
+/* ------------------------------------------------ what Borland supplied, at the
+ * addresses the image calls them:
+ *
+ *   0:0x0293a  int86      builds the interrupt on its own stack, which is why no
+ *                         INT 33h instruction exists anywhere in the image
+ *   0:0x29fc   kbhit      the game reaches the keyboard through these two and
+ *   0:0x2814   getch      nothing else - no INT 16h, no INT 09h hook
+ *   0:0x0223e  delay      milliseconds, calibrated against the PIT at startup
+ *
+ * A DOS build would get all of them from Borland's own headers. `union REGS` is
+ * written out because int86's signature is meaningless without it, and because the
+ * shape says what the routines below are actually passing.
+ */
+union REGS {
+    struct { uint16_t ax, bx, cx, dx, si, di, cflag, flags; } x;
+    struct { uint8_t al, ah, bl, bh, cl, ch, dl, dh; } h;
+};
 
-/* the viewports set_mode_x builds */
-extern viewport_t viewport_panel;    /* 0x1741 - the bottom 40 rows */
-extern viewport_t viewport_screen;   /* 0x1769 - the centred 320x200 window */
-extern viewport_t viewport_full;     /* 0x1755 - everything */
-
-/* Borland's, in the runtime segment below 0x04ca0 - not the game's code at all,
- * and a port supplies its own. */
-extern void far   delay(int16_t ms);         /* 0x0223e */
 extern int16_t far int86(int16_t n, union REGS far *in, union REGS far *out);
-                                             /* 0x0293a - builds the INT on its
-                                              * own stack, which is why no INT 33h
-                                              * instruction exists in the image */
-
-/* the game's, but in game.c */
-extern void far   make_rect(viewport_t far *r, int16_t top, int16_t bottom,
-                            int16_t left, int16_t right);   /* 0x0881d */
-extern void far   palette_build(void);       /* 0x0b0c5 */
-extern void far   f_057db(void);             /* 0x057db - unnamed; the tail every
-                                              * dac_set_black caller reaches */
+extern int kbhit(void);
+extern int getch(void);
 
 /* ------------------------------------------------------------- video: mode */
 
@@ -226,8 +226,9 @@ void far dac_set_black(uint8_t first, uint8_t count)
         outp(0x3c9, 0);                    /* g */
         outp(0x3c9, 0);                    /* b */
     }
-    f_057db();                             /* 0x057db - unnamed; every caller of
-                                            * dac_set_black reaches it */
+    page_flip();                           /* 0x0575a `push cs; call 0x4d4b`, and
+                                            * that is page_flip - every fade ends
+                                            * by showing what it just faded */
 }
 
 /* 0x056d2. The whole 256-entry palette, unscaled, straight out of palette_stored.
@@ -251,15 +252,32 @@ void far palette_upload(void)
  */
 void far page_flip(void)
 {
-    delay(0x1f - game_speed);              /* [0x1fd4]; 31 is no delay at all */
-    while (inp(0x3da) & 1)                 /* wait for display enable to fall */
+    uint16_t was;                          /* [bp-6] */
+    uint16_t high, low;                    /* [bp-2], [bp-4] */
+
+    delay((int16_t) (0x1f - game_speed));  /* 0x04d51 - [0x1fd4]; 31 is no delay */
+    while (inp(0x3da) & 1)                 /* 0x04d66 - display enable must fall */
         ;
-    swap(&page_front, &page_back);         /* [0x1725], [0x1727] */
-    outpw(0x3d4, (hi << 8) | 0x0c);        /* CRTC start address high */
-    outpw(0x3d4, (lo << 8) | 0x0d);        /* ... and low */
-    while (!(inp(0x3da) & 8))              /* wait for vertical retrace */
+
+    was        = page_front;               /* 0x04d71 - [0x1725], [0x1727] */
+    page_front = page_back;
+    page_back  = was;
+
+    /* 0x04d83. The start address, high byte to CRTC 0x0c and low to 0x0d, each
+     * written as one 16-bit OUT with the index in AL and the datum in AH - which
+     * is why the value is masked and shifted rather than shifted twice. */
+    high = (uint16_t) ((page_front & 0xff00) | 0x0c);
+    low  = (uint16_t) (((page_front << 8) & 0xffff) | 0x0d);
+    outpw(0x3d4, high);                    /* 0x04d9f */
+    outpw(0x3d4, low);                     /* 0x04da6 */
+
+    while (!(inp(0x3da) & 8))              /* 0x04daf - and then vertical retrace */
         ;
-    flip_phase = (flip_phase + 1) % 10;    /* [0xd61] */
+
+    /* 0x04dba. The original increments and then takes the remainder, which is a
+     * signed idiv - the same thing as a modulo here because it never goes negative. */
+    flip_phase++;
+    flip_phase = (int16_t) (flip_phase % 10);
 }
 
 /* --------------------------------------------------------------- keyboard
@@ -613,11 +631,11 @@ void far compose_layer(void)
 {
     int16_t row, x;
 
-    for (row = 0; row < layer_height; row++) {          /* [0x53a] */
-        uint8_t far *fg  = fg_rows[row];
-        uint8_t far *bg  = bg_rows[(row + bg_scroll_y) & wrap_y];
-        uint8_t far *dst = &((uint8_t far *) vram)[row * 80 + dest_row];
-        for (x = current_plane; x < layer_width; x += 4) {
+    for (row = 0; row < screen_height; row++) {          /* [0x53a] */
+        uint8_t far *fg  = backdrop.rows[row];
+        uint8_t far *bg  = background.rows[(row + bg_scroll_y) & wrap_y];
+        uint8_t far *dst = &((uint8_t far *) vram)[row * 80 + page_back];
+        for (x = current_plane; x < screen_width; x += 4) {
             uint8_t px = fg[x];
             dst[x >> 2] = px ? px : bg[x & wrap_x];
         }
@@ -628,7 +646,7 @@ void far compose_layer(void)
  * had never executed until level 80: the background warp the v1.2 changelog
  * mentions.
  *
- * When background_warp is set, each row's x displacement comes from the 32-entry
+ * When level_flags[2] is set, each row's x displacement comes from the 32-entry
  * table at warp_table, starting at warp_phase and stepped by warp_step per row -
  * and the phase is re-masked to 0x1f **every row**, so it is not an arithmetic
  * progression and cannot be flattened to `table[(phase + row * step) & 0x1f]`.
@@ -637,18 +655,18 @@ void far compose_scroll(int16_t sx, int16_t sy)
 {
     int16_t row, x, phase = warp_phase;
 
-    for (row = 0; row < layer_height; row++) {
+    for (row = 0; row < screen_height; row++) {
         int16_t dx = sx;
 
-        if (background_warp) {                 /* [0x2022] */
+        if (level_flags[2]) {                 /* [0x2022] */
             dx += warp_table[phase & 0x1f];
             phase = (phase + warp_step) & 0x1f;   /* re-masked every row */
         }
         {
-            uint8_t far *fg  = fg_rows[(row + sy) & wrap_y];
-            uint8_t far *bg  = bg_rows[(row + sy) & wrap_y];
-            uint8_t far *dst = &((uint8_t far *) vram)[row * 80 + dest_row];
-            for (x = current_plane; x < layer_width; x += 4) {
+            uint8_t far *fg  = backdrop.rows[(row + sy) & wrap_y];
+            uint8_t far *bg  = background.rows[(row + sy) & wrap_y];
+            uint8_t far *dst = &((uint8_t far *) vram)[row * 80 + page_back];
+            for (x = current_plane; x < screen_width; x += 4) {
                 uint8_t px = fg[(x + dx) & wrap_x];
                 dst[x >> 2] = px ? px : bg[(x + dx) & wrap_x];
             }
@@ -670,20 +688,16 @@ void far compose_scroll(int16_t sx, int16_t sy)
  * which shifts the sprite horizontally and therefore also changes which plane each
  * pixel belongs to.
  */
-void far outline_sprite(int16_t far *index, int16_t x, int16_t y,
-                        sprite_t far *table, viewport_t far *clip)
-{
-    int16_t row, col;
-
-    for (row = clip->top + 1; row < clip->bottom - 1; row++)      /* the inset */
-        for (col = 0; col < table[*index].width; col++)
-            if (sprite_pixel(table, *index, col, row)) {
-                plot(x + col + clip->shift_x, y + row - 1, 0);    /* clip[+4] */
-                plot(x + col + clip->shift_x, y + row + 1, 0);
-                plot(x + col - 1 + clip->shift_x, y + row, 0);
-                plot(x + col + 1 + clip->shift_x, y + row, 0);
-            }
-}
+/* 0x0620d, and NOT written out here. It plots through the far pointer at [0x53e]
+ * and touches no hardware of its own, so it is the same routine whichever backend
+ * is linked - and the transcription lives in sdl_io.c, byte-compared against the
+ * guest through native.py. Duplicating forty lines here would give two copies to
+ * keep in step and tell you nothing about the VGA.
+ *
+ * What this file used to hold in its place was a sketch: `table[*index].width`,
+ * a `sprite_pixel()` that does not exist, and a `clip->shift_x` that is not a
+ * field. It read like code and was not.
+ */
 
 /* 0x057a1. plot_pixel with a stride of 90 - the 360-pixel mode. The game swaps
  * the far pointer at [0x53e] between this and 0x05761 when the resolution
@@ -712,10 +726,7 @@ void far plot_pixel_wide(int16_t x, int16_t y, uint8_t colour)
  * not** - they are the shape, not a build.
  */
 
-/* The runtime's, like delay and int86 above - a port supplies its own. */
-extern int  fprintf(void far *stream, const char far *fmt, ...);
 extern void exit(int status);
-extern void far *stderr;
 
 static int16_t (far *break_handler)(void);   /* d+0x3da2 */
 
