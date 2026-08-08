@@ -7,7 +7,7 @@ name or a type is a guess, it says so.
 The originals are not available. This is what the code must have looked like for
 the compiler to have emitted what it did.
 
-**Two backends, one interface.** `dos.h` declares what the game needs from below
+**Two backends, one interface.** `game.h` declares what the game needs from below
 it; `dos_io.c` is the original reconstructed and `sdl_io.c` is SDL3. The game
 should not be able to tell which one it is linked against - that is the test of
 whether the split was drawn in the right place, and it is why `input_poll` and the
@@ -80,7 +80,7 @@ worth having as source.
 
 | file | contents so far |
 | --- | --- |
-| [`dos.h`](dos.h) | the types and the interface both backends implement, so `game.c` does not know which it is linked against |
+| [`game.h`](game.h) | the types and the interface both backends implement, so `game.c` does not know which it is linked against |
 | [`game.c`](game.c) | 145 functions - `main` and `init`, the resource and string loaders, the two fonts, the whole menu system and every screen it reaches, the save format, the hall of fame, and the first pieces of the gameplay. Naming them all here would rot; they are in address order in the file and in `symbols.py` |
 | [`dos_io.c`](dos_io.c) | nineteen functions: `set_bios_mode`, mode, planes, DAC, page flip, the three INT 33h wrappers, and every drawing primitive the native port replaced - `clear_vram`, `plot_pixel` and its stride-90 twin, `palette_fade_step`, `blit_rows`, `blit_rows_masked`, `compose_layer`, `compose_scroll`, `draw_sprite`, `outline_sprite`. No TODOs left in this file |
 | [`sound.c`](sound.c) | the sound module, code segments 0x1462 and 0x149e: the id-to-sample map, the eight-voice table, and the mixer. A sample lives in extended memory in the original and in a `malloc` here, which is the only difference that matters - the game asks about sounds by id either way |

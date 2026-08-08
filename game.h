@@ -1,13 +1,17 @@
-/* dos.h - the types and the I/O interface both backends implement.
+/* game.h - the port's own header: its types, its globals and the I/O interface
+ * both backends implement.
  *
- * dos_io.c is the original, reconstructed: VGA ports, Mode X planes, INT 33h.
- * sdl_io.c is the same interface on SDL3. game.c does not know which it is
- * linked against, which is the point of having split them.
+ * It was called dos.h until 2026-08-08, which described the smaller half of it -
+ * dos_io.c is the original reconstructed (VGA ports, Mode X planes, INT 33h) and
+ * sdl_io.c is that same interface on SDL3, and game.c does not know which it is
+ * linked against. But most of what is here is the game's, not DOS's: the entity,
+ * the scene, the viewport, the sprite table, and the prototypes for every routine
+ * in game.c, egg.c and sound.c.
  *
  * `far` is what the 16-bit original said; on anything modern it is nothing.
  */
-#ifndef DUCKS_DOS_H
-#define DUCKS_DOS_H
+#ifndef DUCKS_GAME_H
+#define DUCKS_GAME_H
 
 #include <stdint.h>
 #include <stdio.h>
@@ -686,4 +690,4 @@ extern viewport_t   message_rect[3];     /* 0x2118 */
 extern uint8_t      message_time[3];     /* 0x2154 */
 void far message_post(const char far *fmt, const char far *arg);
 
-#endif /* DUCKS_DOS_H */
+#endif /* DUCKS_GAME_H */

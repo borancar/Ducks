@@ -42,7 +42,7 @@
 #include <strings.h>
 #include <sys/stat.h>
 
-#include "dos.h"
+#include "game.h"
 
 #define MAX_ENTRIES 1024
 

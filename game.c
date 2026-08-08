@@ -30,7 +30,7 @@
  * and the cheats and the EGGS.INI section header are both case-SENSITIVE. */
 #include <ctype.h>         /* toupper, at 0:0x184f */
 
-#include "dos.h"
+#include "game.h"
 
 
 /* The fifteen menu descriptors, consecutive in DGROUP from 0x1916 to 0x1fd2 and
@@ -247,7 +247,7 @@ char       save_name[] = "GAME-.SG";
 char far  *settings_name = "settings.dat";       /* 0x21d2 - a pointer in the
                                                   * image, to d+0x27c7 */
 uint8_t    g_28ff[1];            /* 0x28ff - main's first splash source */
-/* The string tables - see dos.h. Two of them are far data at 0x1894:0 and
+/* The string tables - see game.h. Two of them are far data at 0x1894:0 and
  * 0x1894:4, which is why main loads them with an explicit segment. */
 char far **menu_text;            /* 0x1894:0000 */
 uint8_t    menu_text_count;      /* 0x0096 */
@@ -1583,7 +1583,7 @@ glyph_t font[256];               /* 0x054d alias - glyph 0's first byte
                                   * is text_colour[1], and nothing draws
                                   * character 0: charmap sends everything
                                   * unknown to 0x1b */
-uint8_t text_colour[2];          /* 0x054c - see dos.h on the shared byte */
+uint8_t text_colour[2];          /* 0x054c - see game.h on the shared byte */
 uint8_t far *font_codes;         /* 0x20f6 - the first code of each glyph */
 uint8_t      font_glyph_count;   /* 0x20fa */
 char far    *out_of_memory;      /* 0x0500 - "Out of memory" */
