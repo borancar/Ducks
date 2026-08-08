@@ -1847,3 +1847,51 @@ One harness trap worth keeping: the leak checker first reported one string per
 level, from `egg_read_string` in `level_load`. That is `level_text`, which
 `level_screens` frees at `0x110b8` - the probe was calling `level_load`
 directly and skipping it. The leak was the harness, not the port.
+
+## The HUD is drawn twice a level, and COLOURMAP wrecks half of it (0x0ce2e)
+
+**Reported 2026-08-08 as a port bug: after the COLOURMAP chart the HUD flickers
+or is gone. It is the original's behaviour. Recorded so it is not chased again.**
+
+Two things, and neither is a port defect.
+
+**The panel is drawn once into each page at level start and never again.** The
+block at `0x0d9a2` blits the 0x4d/0x21 resource into `viewport_panel`, draws the
+tool slots and the score/ducks/lives labels, flips, and does it again for the
+other page. Per frame the loop draws only the tool cursor, the two numbers, the
+three message slots and the timer bar - the background and the labels are not
+among them.
+
+Counted rather than read off the listing. Hooking `0x0d9a2` and the flip at
+`0x04d4b` and running the guest forward from `snapshots/snap012.snap`:
+
+```
+page flips: 720   HUD block entered: 0
+```
+
+**The chart is a full-screen image and lands on one page.** `0x0ce2e` builds a
+320x200 page, blits it through `viewport_screen` for each of the four planes,
+and flips once - so the page it landed on has the chart and the other still has
+the frame before it. Rows 160-199 of that image are never painted, so they hold
+`alloc_image`'s fill, which is 1.
+
+Reading both pages' bottom 40 rows out of the guest, before and after running
+`0x0ce2e` up to the instruction before its `getch`:
+
+```
+pages: front 0x7d00  back 0x0000
+before:  front panel  38 distinct values, commonest [(7,1739),(5,1663),(8,1400)]
+         back  panel  38 distinct values, the same
+after:   front panel   1 distinct value,  [(1,12800)]      <- the chart's page
+         back  panel  38 distinct values, unchanged
+```
+
+So from the moment the chart is dismissed, one page carries a HUD and the other
+a flat band of colour 1, and the flip alternates them every frame until the level
+ends. That is what the report described, and the port reproduces it exactly.
+
+Deliberately **not** fixed (2026-08-08, the user's call): redrawing the panel
+after the chart would be an improvement on the game rather than a correction to
+the port. If that decision is ever revisited, the fix is the `0x0d9a2` block
+again - both pages, with a flip between - and it belongs behind a note saying it
+is a departure.

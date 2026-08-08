@@ -6111,9 +6111,14 @@ static uint8_t terrain_at(int32_t y, int32_t x)
  * the chart matches and all 38400 outside it are 1.
  *
  * Then the four planes, a flip, and a blocking getch: the game stands still
- * until a key is pressed, which is the only sense in which it pauses. The image
- * is freed on the way out, so the chart is gone when play resumes and the caller
- * does not have to redraw anything.
+ * until a key is pressed, which is the only sense in which it pauses.
+ *
+ * **The HUD does not come back, and that is the original.** One flip means the
+ * chart lands on one page only, and the panel is drawn twice at level start and
+ * never again - so from here to the end of the level one page has a HUD and the
+ * other a flat band of colour 1, alternating every frame. Reported as a port bug
+ * and it is not one; the two guest probes that settle it are in
+ * [run-level](../docs/notes/run-level.md). Do not "fix" it here.
  */
 void far pause_screen(void)
 {
