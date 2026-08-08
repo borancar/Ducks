@@ -20,7 +20,7 @@ import re
 import sys
 
 SOURCES = ["reconstruct/game.c", "reconstruct/dos_io.c", "reconstruct/sdl_io.c",
-           "reconstruct/sound.c", "reconstruct/egg.c", "reconstruct/stubs.c"]
+           "reconstruct/sound.c", "reconstruct/egg.c"]
 
 # What a type occupies in the original, which is the only size that matters here:
 # a far pointer is four bytes there and eight here, and the structures are packed.

@@ -5044,7 +5044,7 @@ def native_collide_scenes(m, args):
     """0x0993b: scene 0 against scene 2, and the switch is the game's rules.
 
     Two nested loops over all but 96 of its 2,668 bytes. The gate is |dx|
-    against anim_a[object type] - the per-type table at d+0x25a that dos.h has
+    against anim_a[object type] - the per-type table at d+0x25a that game.h has
     carried "read nowhere yet" against since it was written - and |dy| against a
     constant 3. Wide flat boxes, which is what a duck walking into something on
     the same row needs.

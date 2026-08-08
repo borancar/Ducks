@@ -806,7 +806,7 @@ flag bought are then placed by a retry loop: `rand() & 0xff + 0x20` by
 `rand() & 0x3f + 2`, rejected unless the backdrop pixel there is 0 - so they
 land in open space, and the level's own seed decides where.
 
-**Two `scene_t` fields are not what `dos.h` calls them.** `+4` ("flag", set to
+**Two `scene_t` fields are not what `game.h` calls them.** `+4` ("flag", set to
 `0xff` by `scene_alloc`) holds the hero duck's index for scene 0, which is what
 `[0xd67]` is; and `+6` ("unread6") is written 1 for scene 2 at `0x08af5`.
 
@@ -1089,7 +1089,7 @@ for si in scene 0:                            /* d+0x0d6b */
 ```
 
 **`anim_a` is the collision half-width.** The table at `d+0x25a` is one of the
-six `load_animations` fills, and `dos.h` has carried "read nowhere yet" against
+six `load_animations` fills, and `game.h` has carried "read nowhere yet" against
 it since it was written. This is where it is read: the horizontal reach of an
 object, per type. The vertical test is a constant 3, so the boxes are wide and
 flat - which is what a duck walking into something on the same row needs.

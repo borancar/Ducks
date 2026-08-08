@@ -18,7 +18,7 @@ SRCS = game.c sdl_io.c egg.c sound.c
 ducks: $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) $(LDLIBS) -o $@
 
-%.o: %.c dos.h
+%.o: %.c game.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 run: ducks
@@ -41,7 +41,7 @@ lib: libducks.so
 # long way from whatever did it. ASan reports it where it happens.
 #
 #   make asan && ./ducks-asan
-ducks-asan: $(SRCS) dos.h
+ducks-asan: $(SRCS) game.h
 	$(CC) -std=c99 -Wall -Wextra -O1 -ggdb -fsanitize=address,undefined \
 	      -fno-omit-frame-pointer $(shell pkg-config --cflags sdl3) \
 	      $(SRCS) $(shell pkg-config --libs sdl3) -o $@

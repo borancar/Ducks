@@ -30,7 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "dos.h"
+#include "game.h"
 
 /* ------------------------------------------------------------------ state
  *
