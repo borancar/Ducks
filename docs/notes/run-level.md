@@ -1925,3 +1925,56 @@ The general shape is worth keeping: **a routine that is only reached one way
 will hide a defect in everything that reaches it another way.** Two separate
 backends had the same wrong answer for years because no caller had ever asked
 the question this one asks.
+
+## D really does double the playback rate (0x149e:0x346)
+
+**2026-08-08.** The last stub, and the question was whether it needed to do
+anything at all - native.py showed no change of pitch when D was pressed. It does
+need to, and native.py is why it looked otherwise.
+
+`0x149e:0x346` (image 0x14d26) is the whole routine:
+
+```
+[0x2b34] = rate
+if (![0x3d14]) return                    ; no transfer running, nothing to do
+if ([0x3d16])  { set_rate(); dsp_write(0xd6); }         ; the 16-bit path
+else { dsp_write(0xd0); set_rate(); dsp_write(0xd4); }  ; pause, program, resume
+```
+
+Three callers, found by searching the image for `lcall 149e:0346` - there are
+exactly three:
+
+```
+0x1448a   init                    11000
+0x09340   level_free              11000        <- puts it back when a level ends
+0x0d04b   played_tool_events, D   11000 << fast
+```
+
+The samples are untouched; the DAC is told to eat them faster. So D plays
+everything at double speed and an octave up, and leaving the level undoes it.
+
+**Measured, not inferred.** Driving the guest's own routine against the emulated
+Sound Blaster in `sb.py`:
+
+```
+sound_set_rate(22000) -> [0x2b34]=22000  sb.sample_rate=22222  tc=0xd3
+sound_set_rate(11000) -> [0x2b34]=11000  sb.sample_rate=11111  tc=0xa6
+```
+
+The time constant is `256 - 1000000/rate`, and the card then runs at
+`1000000/(256 - tc)` - which is why 11000 is really 11111 and 22000 is 22222. The
+port rounds the same way before handing a rate to the backend.
+
+**Why native.py does not show it.** `sb.py` honours DSP 0x40 and 0x41 and would,
+but the default `--native-sound` path plays through `nsound.py`, which calls
+`pygame.mixer.init(frequency=11111)` once and has no path for a rate change.
+So the emulator's *emulated* card changes rate and its *native* one does not.
+Left alone for now - pygame's mixer cannot be reopened without dropping the
+voices - but it is the reason the behaviour looked absent.
+
+### And one more DGROUP initialiser
+
+`[0x2b34]` is `22 56` in the image - 22050, a rate nothing ever plays at, and
+overwritten by init's own call before anything reads it. Carried in `sound.c`
+anyway, because it is real initialised data and the port had no variable there
+at all. See [open-dgroup-initialisers](open-dgroup-initialisers.md).

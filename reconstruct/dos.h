@@ -527,6 +527,9 @@ extern uint8_t sound_state;
 /* the backend's, like set_plane and page_flip: what is left of the DSP */
 int16_t far audio_open(int16_t rate);
 void far audio_close(void);
+/* What the DSP time constant did: change the rate the samples are consumed at,
+ * without touching the samples. See sound_set_rate. */
+void far audio_set_rate(int16_t rate);
 void far install_int23(void far *h);
 int16_t far ctrl_break_handler(void);      /* 0x144cd - returns 1, "carry on" */
 void far crt_exit(void);       /* 0:0x1e6b - Borland's exit; the backend's */

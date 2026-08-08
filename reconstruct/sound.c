@@ -261,12 +261,76 @@ void far release_sounds(void)
         sound_slot[i] = 0xff;
 }
 
+/* ------------------------------------------------------------- the rate
+ *
+ * d+0x2b34, and 0x5622 in the image - 22050, which nothing ever plays at. It is
+ * overwritten before it is used, by init's own call to sound_set_rate, so the
+ * initialiser is a leftover rather than a default. Carried anyway: it is real
+ * initialised data and the port had no variable at all. */
+int16_t   sample_rate = 22050;      /* 0x2b34 */
+
+/* The card cannot play an arbitrary rate and the original does not ask it to: it
+ * programs a DSP time constant of 256 - 1000000/rate (0x14cbc) and the hardware
+ * then runs at 1000000/(256 - tc). So 11000 actually plays at 11111 and 22000 at
+ * 22222 - feeding a device the number the game asked for is a 1% error in
+ * everything. Rounded here the same way, so the port plays at the rate the
+ * samples were recorded for. Confirmed against the emulated card: the guest's
+ * own routine drives it to tc 0xa6 -> 11111 Hz and tc 0xd3 -> 22222 Hz. */
+static int16_t dsp_rate(int16_t rate)
+{
+    int16_t tc;
+
+    if (rate <= 0)
+        return rate;
+    tc = (int16_t) (256 - 1000000L / rate);
+    if (tc >= 0 && tc < 256)
+        return (int16_t) (1000000L / (256 - tc));
+    return rate;
+}
+
+/* ------------------------------------------------- 0x149e:0x346, image 0x14d26
+ *
+ * Store the rate, then reprogram the card if a transfer is running:
+ *
+ *     [0x2b34] = rate
+ *     if (![0x3d14]) return               ; nothing playing, nothing to program
+ *     if ([0x3d16])  { set_rate(); dsp_write(0xd6); }        ; the 16-bit path
+ *     else { dsp_write(0xd0); set_rate(); dsp_write(0xd4); } ; pause, program,
+ *                                                            ; continue 8-bit
+ *
+ * Three callers, all with 11000 except one: init (0x1448a), level_free (0x09340)
+ * and the D key in played_tool_events (0x0d04b), which passes 11000 << fast.
+ *
+ * **So D really does double the playback rate** - the samples are untouched and
+ * the DAC eats them twice as fast, so everything plays at double speed and an
+ * octave up. That is not inferred: driving this routine in the guest against the
+ * emulated Sound Blaster walks the card between 11111 Hz (tc 0xa6) and 22222 Hz
+ * (tc 0xd3), and level_free's call is what puts it back when the level ends.
+ *
+ * sound_state stands in for [0x3d14]. The gate is not identical - the original's
+ * is "a DMA transfer is running", this one is "a device opened" - but the effect
+ * is: with no card there is nothing to reprogram either way.
+ */
+void far sound_set_rate(int16_t rate)
+{
+    sample_rate = rate;                            /* 0x14d2c */
+    if (!sound_state)                              /* 0x14d2f - [0x3d14] */
+        return;
+    audio_set_rate(dsp_rate(rate));
+}
+
 /* --------------------------------------------------------------- sound_init
  *
- * The original's is the card: reset the DSP, find the IRQ and the DMA channel
- * out of BLASTER, install a handler and start the transfer. All that is left of
- * it is opening a device at the same rate and saying whether it opened, because
- * sound_state is what every entry point above is gated on.
+ * **Not an image routine.** The original brings the card up inside the DSP reset
+ * that detect_hardware runs, and the call at 0x1448a that looks like an init is
+ * sound_set_rate above. The port needs somewhere to open its device, and init's
+ * call is the point in the sequence where the original's card is first told a
+ * rate, so it hangs off here.
+ *
+ * What the original's card setup did - reset the DSP, find the IRQ and the DMA
+ * channel out of BLASTER, install a handler, start the transfer - reduces to
+ * opening one device and saying whether it opened, because sound_state is what
+ * every entry point above is gated on.
  */
 void far sound_init(int16_t rate)
 {
@@ -280,20 +344,8 @@ void far sound_init(int16_t rate)
     }
     active_voices = 0;
 
-    /* The card cannot play an arbitrary rate, and the original does not ask it
-     * to: it programs a DSP time constant of 256 - 1000000/rate and the hardware
-     * then runs at 1000000/(256 - tc). So the game asking for 11000 actually
-     * plays at 11111, and feeding SDL the 11000 it asked for is a 1% error in
-     * everything. Rounded here the same way, so the port plays at the rate the
-     * samples were recorded for. */
-    if (rate > 0) {
-        int16_t tc = (int16_t) (256 - 1000000L / rate);
-
-        if (tc >= 0 && tc < 256)
-            rate = (int16_t) (1000000L / (256 - tc));
-    }
-
-    sound_state = audio_open(rate) ? 1 : 0;
+    sample_rate  = rate;
+    sound_state  = audio_open(dsp_rate(rate)) ? 1 : 0;
 }
 
 /* ------------------------------------------------------------ 0x156cc: the mixer
