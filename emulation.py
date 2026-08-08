@@ -506,6 +506,24 @@ class VgaDos(DosMachine):
             return
         if ah in (0x01, 0x06, 0x07, 0x08):
             self.dos_counts[ah] += 1
+            # AH=01, 07 and 08 BLOCK on real DOS - they do not return until a
+            # key is there. Returning AL=0 instead is invisible while every
+            # caller is Borland's getch behind a kbhit, and wrong for the one
+            # that is not: pause_screen calls getch with nothing pending to hold
+            # the COLOURMAP chart on screen, and a non-blocking read dismissed it
+            # in the frame that drew it.
+            #
+            # Waiting here would deadlock - the event pump that delivers keys is
+            # in the outer loop - so wind IP back over the two-byte INT and stop
+            # the slice. main() pumps pygame, paces on clock.tick(60) and comes
+            # back to the same instruction. AH=06 is left alone: with DL=0xFF it
+            # is a status poll and must answer 0 rather than wait.
+            if (ah != 0x06 and self.pending_scan is None
+                    and not self.key_buf):
+                self._set(UC_X86_REG_IP,
+                          (self._reg(UC_X86_REG_IP) - 2) & 0xFFFF)
+                self.uc.emu_stop()
+                return
             # DOS delivers extended keys (arrows, function keys) as TWO reads:
             # a 0x00 prefix, then the scancode. Returning only the prefix and
             # dropping the key makes every extended key look like a null

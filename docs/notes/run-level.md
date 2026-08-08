@@ -1895,3 +1895,33 @@ after the chart would be an improvement on the game rather than a correction to
 the port. If that decision is ever revisited, the fix is the `0x0d9a2` block
 again - both pages, with a flip between - and it belongs behind a note saying it
 is a departure.
+
+### getch does not return until a key, and BOTH I/O layers had it wrong
+
+The chart is held on screen by a blocking `getch` - `0:0x2814`, which is
+`mov ax, 0x700 / int 21h`, DOS's direct console input without echo. It is the
+only caller in the game that reads a key without asking `kbhit` first, and that
+is the whole mechanism: everything else polls, this one waits.
+
+Both of the repo's I/O layers returned immediately instead, independently, and
+for the same reason - every *other* caller is guarded by `kbhit`, so a
+non-blocking read is invisible until this routine exists:
+
+- **`sdl_io.c`** returned 0 on an empty queue. It now waits, pumping SDL every
+  10 ms so a key can arrive and the window keeps answering the compositor.
+- **`emulation.py`** answered AH=07 with AL=0. It cannot sleep in the hook - the
+  event pump is in the outer loop, so nothing would ever deliver a key - so it
+  winds IP back over the two-byte INT and stops the slice. `main()` pumps
+  pygame, paces on `clock.tick(60)` and comes back to the same instruction.
+  `_record_intr` already documents that IP points just past the INT, which is
+  what makes the rewind exact. AH=06 is deliberately left non-blocking: with
+  DL=0xFF it is a status poll and must answer 0 rather than wait.
+
+Measured in the emulator on `snap012` with `cheat_state[5]` set, counting page
+flips per slice: 843 before P, **one** flip for the chart itself, then 0 across
+twenty more slices, then play resumes the moment a key is queued.
+
+The general shape is worth keeping: **a routine that is only reached one way
+will hide a defect in everything that reaches it another way.** Two separate
+backends had the same wrong answer for years because no caller had ever asked
+the question this one asks.
