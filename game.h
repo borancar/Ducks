@@ -237,7 +237,6 @@ extern int16_t    wrap_x, wrap_y;               /* 0x1729, 0x172b */
 extern uint8_t    bg_scroll_x, bg_scroll_y;     /* 0x177e, 0x177f */
 extern uint8_t    bg_step_x, bg_step_y;         /* 0x1780, 0x1781 */
 extern uint8_t    warp_phase, warp_step;        /* 0x17bf, 0x17c0 */
-extern uint16_t   page_front, page_back;
 extern int16_t    flip_phase;
 
 /* game.c's, which the video reads */
