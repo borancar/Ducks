@@ -61,6 +61,19 @@ static size_t   data_base;      /* where the directory ends */
 static size_t   cursor;         /* the open "stream" every read advances */
 int             block_open;     /* 0x20b6 - egg_find_block's lock, and
                                  * what egg_table_alloc clears */
+/* 0x20c6 - the FILE * the three readers read through, and it belongs to
+ * egg_find_block: the whole image writes it in exactly one place, at 0x0528b,
+ * where it copies the first four bytes of the matching 23-byte egg table record
+ * out of [0x20a9]. That is the multi-egg selection - which of the open files
+ * holds this resource - and it is the part the port collapses, because there is
+ * one mapped egg here and the cursor above is its stream.
+ *
+ * So nothing assigns it and it stays NULL, which is what makes NULL mean "the
+ * egg" to egg_read_byte. Kept as a definition rather than deleted because every
+ * caller in game.c and sound.c passes it by name, exactly as the original does,
+ * and reading `egg_read_byte(egg_stream)` against the listing is the point.
+ * Zero in the image and no relocation on it, so bare is right. */
+void far       *egg_stream;     /* 0x20c6 */
 
 /* the decoder's state, which is [0x20ce], [0x20d2], [0x20d3] and [0x20d4] */
 static uint8_t  table[16];
