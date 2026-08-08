@@ -740,6 +740,13 @@ Working notes — the current state of the drawing port, the one open bug, the
 conventions, and a condensed log of each working session — live in
 [`docs/`](docs/).
 
+The analysis behind that port — how much of it is verified rather than merely
+written, the conventions the code follows, and where it knowingly differs from the
+original — is in
+[`docs/notes/reconstruction.md`](docs/notes/reconstruction.md). It used to be in
+`reconstruct/README.md`, and moved here when that became the landing page of the
+distribution branch.
+
 [`reconstruct/`](reconstruct/) holds C reconstructed from the disassembly of the
 **game's own code segment** — `0x04ca0`-`0x14620`, a full 64 KB holding `main`,
 the menus, the cutscenes and the gameplay. It compiles, links and plays: `make`

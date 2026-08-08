@@ -45,6 +45,11 @@ Current, and kept current. Where these disagree with
 - [editing-conventions](editing-conventions.md) — the three layers, why behaviour
   goes in `native.py`, and the anchored one-shot edit scripts
 
+- [reconstruction](reconstruction.md) — the analysis behind `reconstruct/`: what
+  the segment split can and cannot tell us, how much is verified rather than
+  written, the conventions, and the type pass. Moved out of the port's own README
+  when that became the distribution branch's landing page
+
 **On the coverage figure.** Counting a function as written because some `.c`
 mentions its offset counts *comments* too. `0x10c06`, the cheat's level picker, was
 counted as done for months because `0x507`'s comment said "picks 0x10c06's level
