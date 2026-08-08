@@ -268,16 +268,25 @@ uint8_t    cheat_text_count;     /* 0x0504 */
  * Five more had been declared as variables of their own, and none of them was
  * ever written either. All ten, and what each does:
  *
- *     [0]  0x0505  BUSHKANGAROO      '#' finishes the level outright
+ *     [0]  0x0505  BUSHKANGAROO      '#' finishes the level outright   (0x0d012)
  *     [1]  0x0507  THECROWDSAYBO     the level picker, and the level-select key
  *     [2]  0x0509  NOSCHOOLCUSTARD   ducks do not die; cleared for a demo
- *     [3]  0x050b  ONLYFOREVER       a lost attempt costs no life
- *     [4]  0x050d  KEYCODE
- *     [5]  0x050f  COLOURMAP         P pauses
+ *     [3]  0x050b  ONLYFOREVER       a lost attempt costs no life      (0x139b8)
+ *     [4]  0x050d  KEYCODE           written and read NOWHERE - see below
+ *     [5]  0x050f  COLOURMAP         P draws the 256-colour chart      (0x0cfef)
  *     [6]  0x0511  NODNOL            LEFT HANDED: which side the tool is drawn
- *     [7]  0x0513  INGLESHFELDOR
- *     [8]  0x0515  PLAYBACKTIME      the demo picker
- *     [9]  0x0517  YOUINTSEENME
+ *     [7]  0x0513  INGLESHFELDOR     the play log - see level_screens  (0x1148e)
+ *     [8]  0x0515  PLAYBACKTIME      the demo picker                   (0x0cadf)
+ *     [9]  0x0517  YOUINTSEENME      places the 0x4d objects level_load
+ *                                    would otherwise skip              (0x08bdb)
+ *
+ * They are typed in CAPITALS: the compare is strcmp, not stricmp. See typed_push.
+ *
+ * [4] is dead in the shipped build. Every direct encoding that could reference
+ * d+0x050d was searched for across the whole image and there is none, and the
+ * only indexed accesses to `[bx + 0x505]` are the four inside typed_push itself.
+ * So KEYCODE toggles a flag, flashes the border, and nothing else in the game
+ * ever looks at it.
  *
  * The offset is on the declaration so test_dgroup can see the array; without it
  * every one of these overlaps was invisible to the one test that exists to
@@ -6281,8 +6290,9 @@ void far level_event(int16_t x, int16_t y)
 
     if (y == 0)                                    /* 0x0d0d8 */
         y = 1;
-    /* 0x0d0db writes the clock and the point to the play log here. [0x51d] gates
-     * it and nothing sets it, and the FILE * at [0x51f] is not kept on this side. */
+    /* TODO: 0x0d0db, the play log's other end - it writes the clock and the
+     * point here, gated on play_log ([0x51d]) through the FILE * at [0x51f].
+     * play_log is cheat_state[7], INGLESHFELDOR; see level_screens. */
     clear = terrain_at(y, x) == 0;                 /* 0x0d0fc */
     y++;                                           /* 0x0d11a */
 
@@ -8188,10 +8198,18 @@ int16_t far level_screens(int16_t fresh)
 
     /* 0x11488. A fresh seed for the level, which run_level srand()s - so this is
      * what makes two goes at the same level differ. The original reads it out of
-     * the runtime's clock at 0:0x17df. The play log below it is gated on [0x513],
-     * which nothing has been seen to set, and is not written. */
+     * the runtime's clock at 0:0x17df. */
     level_seed = (int16_t) time(NULL);
-    play_log   = 0;
+
+    /* 0x1148e. play_log is a copy of cheat_state[7] - INGLESHFELDOR - which is
+     * what sets it; the old comment here said nothing was known to.
+     *
+     * TODO: 0x1149e-0x1153e, the block it gates. It sprintf()s the level number
+     * through the format at ds:0x24f5 and opens a file, whose FILE * lives at
+     * [0x51f]; the other end is the fprintf at 0x0d0db, which writes the clock
+     * and the point on every tool use. Neither is transcribed, so turning the
+     * cheat on here sets the flag and produces no log. */
+    play_log = cheat_state[7];
 
     return leave;
 }
