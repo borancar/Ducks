@@ -151,7 +151,7 @@ int16_t    button_map[3] = { 1, 2, 0 };   /* 0x20e4, 0x20e6, 0x20e8 - and the
                                   * zero is the one state DONE! refuses */
 int16_t    button_a_down;        /* 0x18df */
 int16_t    button_b_down;        /* 0x18e7 */
-int16_t    g_18e5;               /* 0x18e5 - any button; escapes the fades */
+int16_t    any_click;               /* 0x18e5 - any button; escapes the fades */
 int16_t    last_key;             /* 0x18f6 - a word holding the ASCII of the
                                   * last key; often read as just the low byte */
 
@@ -229,9 +229,21 @@ int16_t    attract_choice;       /* 0x21ae - 0 demos, non-zero shows a screen */
 int16_t    game_in_progress;   /* 0x2177 - a game is under way, so no idle demo */
 /* The rest of the flags that block declared. [0x509] and [0x50b] left it when
  * they turned out to be cheat_state[2] and [3]. */
-int16_t    g_1ffa, g_1ffc, g_1ffe, g_18e1, g_18e3;
-uint8_t    g_2038;               /* 0x2038 - how many demos to choose from;
-                                  * byte, high half zeroed */
+int16_t    g_1ffa, g_1ffc, g_1ffe;
+/* 0x18e1 - the presses of whatever MOUSE BUTTONS has bound to slot 2, which
+ * is USE TOOL. Written by input_poll from p.n[button_map[2]], beside the
+ * cycle button below, and read in one place: the frame applies the tool at
+ * the cursor on it, where a demo takes its events from the table instead. */
+int16_t    tool_apply_button;
+/* 0x18e3 - the presses of whatever MOUSE BUTTONS has bound to slot 1, which
+ * is the tool-cycle button. Written by input_poll from p.n[button_map[1]] and
+ * read in exactly one place, the cycle at 0x0cf0d. */
+int16_t    tool_cycle_button;
+uint8_t    num_demos;            /* 0x2038 - how many demos across every open
+                                  * egg: summed as each is read, and then the
+                                  * size of demo_index, the bound on the random
+                                  * pick and the length of the DEMOS menu. A
+                                  * byte, read with the high half zeroed */
 
 /* strings and buffers */
 /* 0x21a5. Not five constants: one template, with the digit patched into offset
@@ -354,7 +366,15 @@ int16_t  bar_type_on  = 18;     /* 0x217b - and of a lit one */
 int16_t  next_life;             /* 0x201c - the score the next extra
                                  * life is due at. Compared with jle,
                                  * so signed */
-int16_t  g_21a3;
+/* 0x21a3 - 1 for a new game and after a level is completed, 0 after one is
+ * abandoned. Two readers, and the name has to cover both: level_screens takes it
+ * as its argument and plays the episode intro on it, and the PLAY menu's first
+ * item reads "PLAY NEXT LEVEL" on it and "RETRY LEVEL" without.
+ *
+ * level_screens' parameter has the same name, so inside that function the
+ * parameter SHADOWS this - which is what makes the assignment at 0x112a9 write
+ * the copy and not this one. */
+int16_t  level_completed;
 
 /* ---------------------------------------------------- the second, larger font
  *
@@ -735,13 +755,13 @@ void far input_poll(int16_t w, int16_t h)
 
     if (p.n[button_map[0]]) button_a_down = 1;   /* 0x18df */
     if (r.n[button_map[0]]) button_a_down = 0;
-    g_18e3 = p.n[button_map[1]];            /* 0x18e3 - unnamed */
-    g_18e1 = p.n[button_map[2]];            /* 0x18e1 - unnamed */
-    g_18e5 = (p.n[0] || p.n[1] || p.n[2]); /* 0x18e5 - any button at all, which
-                                            * is what the fades test to cut a
-                                            * splash short */
-    if (g_18e5)                              button_b_down = 1;   /* 0x18e7 */
-    if (r.n[0] || r.n[1] || r.n[2])          button_b_down = 0;
+    tool_cycle_button = p.n[button_map[1]];  /* 0x18e3 */
+    tool_apply_button = p.n[button_map[2]];  /* 0x18e1 */
+    /* 0x18e5 - any button at all, which is what the fades test to cut a splash
+     * short. Not bound to a MOUSE BUTTONS slot, unlike the two above. */
+    any_click = (p.n[0] || p.n[1] || p.n[2]);
+    if (any_click)                  button_b_down = 1;   /* 0x18e7 */
+    if (r.n[0] || r.n[1] || r.n[2]) button_b_down = 0;
 
     /* The position, accumulated from the deltas and clamped. 32-bit, and the
      * comparisons are signed: high word with jg/jl, low word with ja/jae. */
@@ -1490,8 +1510,11 @@ void far show_attract_screen(int16_t frames)
 
     text_colour[0] = 3;
     text_colour[1] = 0;
+    /* 0x0ba6f is `sar dx, 1`, not a divide - and the two part company on an odd
+     * negative, which is what this is for a caption wider than the screen. This
+     * said `/ 2` until 2026-08-08; every other centring here already shifted. */
     draw_string(&page, menu_text[1],               /* "- DUCKS HALL OF FAME -" */
-                (0x140 - text_width(menu_text[1])) / 2, 0x1e);
+                (SCREEN_SIZE_X - text_width(menu_text[1])) >> 1, 0x1e);
 
     text_colour[0] = 1;
     for (i = 0; i < 10; i++) {
@@ -1526,8 +1549,8 @@ void far show_resource_loop(desc_t far *desc, int16_t frames)
     fade_direction = 1;  fade_start_colour = 0;
     palette_build();                                   /* 0x0b0c5 */
     do {
-        input_poll(320, 200);
-        if (si == 0 || last_key || g_18e5)
+        input_poll(SCREEN_SIZE_X, SCREEN_SIZE_Y);
+        if (si == 0 || last_key || any_click)
             fade_direction = -1;                       /* fade out */
         si -= step;
         for (plane = 0; plane < 4; plane++) {
@@ -1797,7 +1820,7 @@ void far picker_cell(int16_t slot, int16_t number, desc_t far *page,
  * place the outer loop is for.
  *
  * The mouse maps to a cell by plain division: 32 pixels a square, ten across, y
- * offset by 0x14 for the captions. All of it is done in longs through the
+ * offset by 20 for the captions. All of it is done in longs through the
  * runtime's __ldiv, because mouse_x and mouse_y are 32-bit.
  */
 void far level_picker(void)
@@ -1823,14 +1846,16 @@ void far level_picker(void)
 
         /* 0x10cc0. Four captions, each centred by its own width. */
         draw_string(&page, heading,
-                    (int16_t) ((0x140 - text_width(heading)) >> 1), 0x0a);
+                    (int16_t) ((SCREEN_SIZE_X - text_width(heading)) >> 1),
+                    0x0a);
         draw_string(&page, hint1,
-                    (int16_t) ((0x140 - text_width(hint1)) >> 1), 0xa8);
+                    (int16_t) ((SCREEN_SIZE_X - text_width(hint1)) >> 1), 0xa8);
         draw_string(&page, episode_index[ep].name,
-                    (int16_t) ((0x140 - text_width(episode_index[ep].name)) >> 1),
+                    (int16_t) ((SCREEN_SIZE_X
+                                - text_width(episode_index[ep].name)) >> 1),
                     0xb2);
         draw_string(&page, hint2,
-                    (int16_t) ((0x140 - text_width(hint2)) >> 1), 0xbc);
+                    (int16_t) ((SCREEN_SIZE_X - text_width(hint2)) >> 1), 0xbc);
 
         for (level = episode_index[ep].first;          /* 0x10dd8 */
              level <= episode_index[ep].last; level++)
@@ -1855,10 +1880,10 @@ void far level_picker(void)
 
             /* 0x10e48. Which square the pointer is in. Everything is 32-bit
              * because the mouse is; the original divides through __ldiv. */
-            if (mouse_y > 0x14) {
+            if (mouse_y > 20) {
                 level_attempted = (int16_t)
                     (episode_index[ep].first
-                     + ((mouse_y - 0x14) / 32) * 10 + mouse_x / 32);
+                     + ((mouse_y - 20) / 32) * 10 + mouse_x / 32);
                 if (episode_index[ep].last < level_attempted)   /* 0x10eb6 */
                     level_attempted = -1;
             }
@@ -1869,7 +1894,7 @@ void far level_picker(void)
                                        - episode_index[ep].first),
                             level_attempted, &page, was, 1);
 
-            if (g_18e5 && level_attempted != -1)   /* 0x10ef7 - clicked on one */
+            if (any_click && level_attempted != -1)  /* 0x10ef7 - on a cell */
                 chosen = 1;
 
             cursor_scene.entities[0].x = mouse_x;  /* 0x10f0a */
@@ -2306,7 +2331,7 @@ void far slider_screen(item_t far *it, int16_t y)
         if (held)
             running = button_b_down;
         else
-            running = !(last_key == 0x20 || last_key == 0x0d || g_18e5);
+            running = !(last_key == 0x20 || last_key == 0x0d || any_click);
 
         /* GAMMA CORRECT is the one that shows while it is being moved: the
          * palette is rebuilt and then handed straight over, which is what
@@ -2347,7 +2372,7 @@ item_t far *far run_screen(menu_t far *menu, void far *chosen, int16_t owns)
 
     colour_cycle = 6;
     do {                                           /* 0x0c73f: drain the key */
-        input_poll(0x140, 0xc8);
+        input_poll(SCREEN_SIZE_X, SCREEN_SIZE_Y);
     } while (last_key);
     typed_clear(typed);
 
@@ -2440,7 +2465,7 @@ item_t far *far run_screen(menu_t far *menu, void far *chosen, int16_t owns)
                 /* FALL THROUGH */
             case 0x0d:                             /* ENTER */
             case 0x20:                             /* SPACE */
-                g_18e5 = 1;                        /* stand in for a click */
+                any_click = 1;                        /* stand in for a click */
                 idle = 0;
                 break;
 
@@ -2487,7 +2512,7 @@ item_t far *far run_screen(menu_t far *menu, void far *chosen, int16_t owns)
             if (sel < menu->count) {
                 if (*menu->item[sel].visible == 0) {
                     sel = 0xff;                    /* a title: nothing to choose */
-                } else if (g_18e5) {               /* something was pressed */
+                } else if (any_click) {           /* something was pressed */
                     item_t far *it = &menu->item[sel];
 
                     switch (it->action) {
@@ -2585,7 +2610,7 @@ item_t far *far run_screen(menu_t far *menu, void far *chosen, int16_t owns)
  *
  * Two things in it are not memory at all and are easy to miss:
  *
- *   level_flags[0] and [3] are cleared, which is what stops the blink and the
+ *   LEVEL_LIGHTNING and LEVEL_SPARKLE are cleared, which is what stops the
  *   0x0e673 branch carrying into whatever comes next;
  *   the sample rate goes back to 11000, undoing the D key, which doubles it for
  *   the level it is pressed on and would otherwise leave every later sound fast.
@@ -2597,8 +2622,8 @@ void far level_free(void)
 {
     int16_t i;
 
-    level_flags[0] = 0;                            /* 0x0932d, [0x201e] */
-    level_flags[3] = 0;                            /* [0x2024] */
+    level_flags[LEVEL_LIGHTNING] = 0;              /* 0x0932d, [0x201e] */
+    level_flags[LEVEL_SPARKLE]   = 0;              /* [0x2024] */
     if (sound_available)                           /* 0x09339 */
         sound_set_rate(0x2af8);                    /* 11000 */
 
@@ -2858,7 +2883,7 @@ void far build_menus(void)
                   menu_text[31], &menu_play);         /* SELECT AN EPISODE: */
     menu_add_list(&menu_readme, readme_count, readme_index, 7,
                   menu_text[9], &main_menu);          /* READ ME! */
-    menu_add_list(&menu_demos, g_2038, demo_index, 0x15,
+    menu_add_list(&menu_demos, num_demos, demo_index, 0x15,
                   extra_text[13], &main_menu);        /* PICK A DEMO */
 
     /* 0x0edde. Never drawn. run_screen returns item 0 when it gives up waiting
@@ -3139,7 +3164,8 @@ void far cutscene_night_monster(void)
     stamp_sprite_into(0xfa, 0x82,
                       &sprite_table.base[anim_script[5][0]], &pic);
 
-    image_fill_rect(0, 0x80, 0x140, 0xc8, &pic, 0);   /* 0x101b4 - the ground */
+    image_fill_rect(0, 0x80, SCREEN_SIZE_X, SCREEN_SIZE_Y, &pic, 0);
+                                              /* 0x101b4 - the ground */
     image_fill_rect(0, 0x50, 0x32,  0x80, &pic, 0);   /* 0x101cb */
     image_fill_rect(0, 0x4b, 0x35,  0x50, &pic, 0);   /* 0x101e1 */
 
@@ -3190,8 +3216,8 @@ void far cutscene_doorstep(void)
     uint8_t    curtain = 0xc6;                     /* [bp-2] */
     uint8_t    page, plane;
 
-    desc.w = 0x140;                                /* 0x0fa08 */
-    desc.h = 0xc8;
+    desc.w = SCREEN_SIZE_X;                        /* 0x0fa08 */
+    desc.h = SCREEN_SIZE_Y;
     alloc_image(&desc, 0, 0, 0, 1);                /* 0x0fa20 */
     clear_vram();
 
@@ -3215,7 +3241,8 @@ void far cutscene_doorstep(void)
         palette_upload();
         sound_play_guarded(0x67, 4);               /* 0x0facd */
         while (curtain > 0xa) {                    /* 0x0fb3f */
-            make_rect(&strip, o + curtain, o + curtain + 2, o, o + 0x140);
+            make_rect(&strip, o + curtain, o + curtain + 2,
+                      o, o + SCREEN_SIZE_X);
             for (plane = 0; plane < 4; plane++) {
                 set_plane(plane);
                 blit_rows(&desc, strip, curtain);  /* source row == height */
@@ -3311,8 +3338,8 @@ void far cutscene_rocket_landing(void)
     uint8_t     frame = 0;                         /* [bp-8] */
     uint8_t     plane;                             /* [bp-7] */
 
-    make_rect(&sky_band, o, o + 0x95, o, o + 0x140);       /* 0x0fcd2 */
-    make_rect(&sea_band, o + 0x95, o + 0xab, o, o + 0x140);/* 0x0fcf1 */
+    make_rect(&sky_band, o, o + 0x95, o, o + SCREEN_SIZE_X);       /* 0x0fcd2 */
+    make_rect(&sea_band, o + 0x95, o + 0xab, o, o + SCREEN_SIZE_X);/* 0x0fcf1 */
 
     if (!resource_load(&sky, 0x4d, 0x33, 0, 1, 0xff, 1))   /* 0x0fd0a */
         return;
@@ -3496,8 +3523,8 @@ void far show_splash(const char far *text, int16_t frames)
     clear_vram();
     fade_direction = 1;  fade_start_colour = 0;
     do {
-        input_poll(320, 200);
-        if (si == di || last_key || g_18e5)      /* timeout, key or button */
+        input_poll(SCREEN_SIZE_X, SCREEN_SIZE_Y);
+        if (si == di || last_key || any_click)      /* timeout, key or button */
             fade_direction = -1;
         si++;
         for (plane = 0; plane < 4; plane++) {
@@ -3670,10 +3697,10 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
              * missing, which is why the HUD's lives counter read 00 - a byte
              * scan of the whole image for a store to [0x2034] is what found
              * them, after a scan of the recognised function extents did not. */
-            g_21a3 = 1;
+            level_completed = 1;
             lives  = 5;                            /* 0x137e0 */
             score  = 0;                            /* 0x137e6 */
-            next_life = 0x1388;                    /* 0x137ec - 5000 */
+            next_life = NEXT_LIFE_AT_INC;          /* 0x137ec */
             menus_resume();                        /* 0x128a5 */
             /* FALL THROUGH into the play loop */
 
@@ -3687,7 +3714,8 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                  * screens, because the only thing that returns non-zero is the
                  * level-select key, and the screens have to be built again for
                  * whatever level was just picked. */
-                while (level_screens(g_21a3))    /* 0x1102a, 0x13835 jne back */
+                /* 0x1102a; 0x13835's jne comes back here */
+                while (level_screens(level_completed))
                     ;
                 scroll_shift = 2;
 
@@ -3701,7 +3729,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                 }
 
                 if (!run_level(0)) {           /* 0x1387e: the run ended badly */
-                    g_21a3 = 0;                        /* 0x139b2 */
+                    level_completed = 0;                        /* 0x139b2 */
                     /* 0x139b8. Only the decrement is guarded - the splash, and
                      * the game-over that follows it, are outside. [0x50b] is
                      * therefore "this attempt was free", not "say nothing". */
@@ -3726,7 +3754,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                 if (g_1ffc || g_1ffe)          /* 0x1388b, 0x13895 */
                     goto play_tail;            /* 0x13892, 0x1389c */
 
-                g_21a3 = 1;                      /* the level was completed */
+                level_completed = 1;        /* the level was completed */
                 sound_play_guarded(2, 1);
                 show_resource(0x4d, 2, 50, 0xff);  /* the BONUS SCREEN */
                 bonus_screen();      /* 0x0becb - the bonus tally */
@@ -3746,7 +3774,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                     lives++;
                     sound_play_guarded(0x20, 1);
                     show_splash(menu_text[46], 100);   /* "EXTRA LIFE!" */
-                    next_life += 0x1388;
+                    next_life += NEXT_LIFE_AT_INC;
                 }
                 release_sounds();                      /* 0x138ff */
 
@@ -3767,7 +3795,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                         cutscene_night_monster();               /* the animation */
                         release_sounds();
                         dac_set_black(0, 0);
-                        input_poll(320, 200);
+                        input_poll(SCREEN_SIZE_X, SCREEN_SIZE_Y);
                         set_buffer(&buf[0]);                    /* 0x13993 */
                     }
                     menu = &main_menu;                          /* 0x13999 */
@@ -4022,17 +4050,17 @@ void far build_episode_index(void)
 
         egg_files[i].demos = egg_read_byte(egg_stream);
         if (egg_files[i].contributes)
-            g_2038 = (uint8_t) (g_2038 + egg_files[i].demos);
-        egg_files[i].demo_base = g_2038;
+            num_demos = (uint8_t) (num_demos + egg_files[i].demos);
+        egg_files[i].demo_base = num_demos;
         egg_block_end();
     }
 
     /* And the demo index, which is not read out of the eggs at all: one record
      * per demo per contributing egg, its name made up from the egg's. */
-    if (g_2038 == 0)
+    if (num_demos == 0)
         fatal("No valid rolling demos found", 0);
 
-    demo_index = malloc((size_t) g_2038 * sizeof *demo_index);
+    demo_index = malloc((size_t) num_demos * sizeof *demo_index);
     if (!demo_index)
         fatal(out_of_memory, 0);
 
@@ -4118,11 +4146,11 @@ void far show_readme_section(uint8_t n)
 
         do {
             if (fade_direction == 0) {             /* 0x12107 - no input mid-fade */
-                input_poll(0x140, 0xc8);
+                input_poll(SCREEN_SIZE_X, SCREEN_SIZE_Y);
 
                 /* A mouse button, or SPACE, means the obvious thing: turn the
                  * page if there is one, and otherwise leave. */
-                if (g_18e5 || last_key == 0x20)
+                if (any_click || last_key == 0x20)
                     last_key = has_next ? 0x151 : 0x1b;
 
                 switch (last_key) {
@@ -4183,7 +4211,7 @@ void far show_readme_section(uint8_t n)
     } while (running);
 
     set_buffer(default_buffer);
-    input_poll(0x140, 0xc8);
+    input_poll(SCREEN_SIZE_X, SCREEN_SIZE_Y);
 }
 
 /* ============================================ save and load, 0x12281 on
@@ -4283,8 +4311,8 @@ void far menus_resume(void)
     menu_set_text(&main_menu.item[0], menu_text[3]);       /* "BACK TO IT_" */
     menu_play.item[0].action = 2;
     menu_set_text(&menu_play.item[0],
-                  g_21a3 ? menu_text[6]            /* "PLAY NEXT LEVEL" */
-                         : menu_text[5]);          /* "RETRY LEVEL" */
+                  level_completed ? menu_text[6]   /* "PLAY NEXT LEVEL" */
+                                     : menu_text[5]); /* "RETRY LEVEL" */
 }
 
 /* 0x12916. d+0x205d is not an array of its own: it is the serial field of the
@@ -4326,7 +4354,7 @@ int16_t far name_entry(char far *buf, int16_t row, int16_t escape)
         outp(0x3c9, 0);
         outp(0x3c9, 0);
         colour_cycle = (colour_cycle + 1) & 0xf;
-        input_poll(0x140, 0xc8);
+        input_poll(SCREEN_SIZE_X, SCREEN_SIZE_Y);
 
         if (fade_direction != -1 && last_key > 0 && last_key < 0x100) {
             uint8_t n = (uint8_t) strlen(buf);
@@ -4674,7 +4702,7 @@ int16_t far load_game_screen(void)
     next_life       = egg_read_word(fp);
     level_attempted = fgetc(fp);
     lives           = fgetc(fp);
-    g_21a3          = fgetc(fp);
+    level_completed = fgetc(fp);
     if (v12)
         g_1ffa      = fgetc(fp);
 
@@ -4741,7 +4769,7 @@ void far save_game_screen(void)
     write_word(next_life, fp);
     fputc(level_attempted, fp);
     fputc(lives, fp);
-    fputc(g_21a3, fp);
+    fputc(level_completed, fp);
     fputc(g_1ffa, fp);
     fclose(fp);
 
@@ -5015,7 +5043,7 @@ void far init(void)
     //puts("Press a key to begin...");               /* DGROUP+0x28e7 */
     //print_newline();
     //do {
-    //    input_poll(320, 200);
+    //    input_poll(SCREEN_SIZE_X, SCREEN_SIZE_Y);
     //} while (!last_key);                           /* [0x18f6] */
 }
 
@@ -5034,7 +5062,7 @@ void far main(void)
     init();                                  /* 0x144e9 */
     set_mode_x(video_mode);                  /* 0x144f1 - [0x4fe], not a literal */
     dac_set_black(0, 0);                     /* 0x14502 - black from here on */
-    input_poll(320, 200);                    /* 0x1450f */
+    input_poll(SCREEN_SIZE_X, SCREEN_SIZE_Y);                    /* 0x1450f */
     scan_save_slots();                       /* 0x14516 - GAME1.SG..GAME5.SG */
 
     /* The intro: two screen players, interleaved with sounds. Screen (1) draws
@@ -5997,7 +6025,7 @@ int16_t far pick_random_demo(void)
     game_srand((unsigned) clock_seed());                /* 0x126e2 */
     score = 0;
     lives = 5;
-    return load_demo((uint8_t) (game_rand() % g_2038));  /* 0x12711 */
+    return load_demo((uint8_t) (game_rand() % num_demos));  /* 0x12711 */
 }
 
 /* ---------------------------------------------------- 0x0e088: tool_selected
@@ -6005,8 +6033,9 @@ int16_t far pick_random_demo(void)
  * The selection and the tool are two different things, and this is the only place
  * one becomes the other. tool_events and the played input move `tool_at`; nothing
  * looks at that except here, which turns it into `tool_type` - and `tool_type` is
- * what level_event dispatches on. Without this a demo's recorded tool changes are
- * invisible: the selection moves and every click still uses the first tool.
+ * what tool_click_at dispatches on. Without this a demo's recorded tool
+ * changes are invisible: the selection moves and every click still uses the
+ * first tool.
  *
  * A selection past the end of the list is refused and put back, which is how the
  * played input can walk off the end harmlessly.
@@ -6051,8 +6080,8 @@ void far tool_selected(int16_t slot)
 /* ------------------------------------------------------ 0x0d471: demo_events
  *
  * The demo's own input, and it is three words a record: when the first matches the
- * level clock, the other two are a point and level_event is called on it. So a
- * recorded game is a list of "at frame N, click here" - which is why a demo needs
+ * level clock, the other two are a point and tool_click_at is called on it.
+ * So a recorded game is a list of "at frame N, click here" - which is why a demo needs
  * the level's seed and nothing else.
  *
  * Every record is looked at every frame and the clock is compared for equality, so
@@ -6066,7 +6095,7 @@ void far demo_events(void)
         uint8_t far *r = event_table + i * 6;
 
         if (*(uint16_t far *) r == (uint16_t) level_clock)
-            level_event(*(int16_t far *) (r + 2), *(int16_t far *) (r + 4));
+            tool_click_at(*(int16_t far *) (r + 2), *(int16_t far *) (r + 4));
     }
 }
 
@@ -6140,8 +6169,8 @@ void far pause_screen(void)
     desc_t  page;                                  /* [bp-0x1a] */
     int16_t i, row, plane;                         /* [bp-2], si, di */
 
-    page.w = 0x140;                                /* 0x0ce36 */
-    page.h = 0xc8;                                 /* 0x0ce3b */
+    page.w = SCREEN_SIZE_X;                        /* 0x0ce36 */
+    page.h = SCREEN_SIZE_Y;                                 /* 0x0ce3b */
     alloc_image(&page, 0, 0, 0, 1);                /* 0x0ce4e */
 
     for (i = 0; i < 0x100; i++) {                  /* 0x0ceb1 */
@@ -6187,7 +6216,7 @@ void far played_tool_events(int16_t far *fast)
 {
     /* 0x0cf0d. The cycle button - button_map[1], whatever it is bound to -
      * steps to the next tool and wraps. */
-    if (g_18e3 && tool_count) {
+    if (tool_cycle_button && tool_count) {
         tool_at++;
         if (tool_at == tool_count)
             tool_at = 0;
@@ -6200,21 +6229,21 @@ void far played_tool_events(int16_t far *fast)
     case 0x14b:  tool_at--;  break;                /* 0x0d004 - left arrow */
     case 0x14d:  tool_at++;  break;                /* 0x0d00b - right arrow */
 
-    case 0x1b: case 0x51: case 0x71:               /* ESC, Q, q */
-        kill_all_ducks();                          /* 0x0cffd */
+    case 0x1b: case 'Q': case 'q':                 /* 0x0cffd - ESC quits too */
+        kill_all_ducks();
         break;
 
-    case 0x50: case 0x70:                          /* P, p - pause, if allowed */
+    case 'P': case 'p':                            /* the COLOURMAP chart */
         if (cheat_state[5])                        /* 0x0cfef - [0x50f] */
             pause_screen();                        /* 0x0ce2e */
         break;
 
-    case 0x23:                                     /* 0x0d012 - '#' */
+    case '#':                                      /* 0x0d012 */
         if (cheat_state[0])                        /* [0x505] */
             level_outcome = 1;                     /* finish the level outright */
         break;
 
-    case 0x44: case 0x64: {                        /* 0x0d022 - D, d */
+    case 'D': case 'd': {                          /* 0x0d022 */
         int16_t rate;
 
         *fast = !*fast;
@@ -6224,11 +6253,11 @@ void far played_tool_events(int16_t far *fast)
         break;
     }
 
-    case 0x63:                                     /* 0x0d057 - c */
+    case 'c':                                      /* 0x0d057 */
         scroll_smooth = !scroll_smooth;
         break;
 
-    case 0x2e: case 0x3e:                          /* 0x0d064 - . and > */
+    case '.': case '>':                            /* 0x0d064 */
         if (gamma_level < 0x1f) {
             gamma_level++;
             palette_apply_gamma();
@@ -6237,7 +6266,7 @@ void far played_tool_events(int16_t far *fast)
         }
         break;
 
-    case 0x2c: case 0x3c:                          /* 0x0d07d - , and < */
+    case ',': case '<':                            /* 0x0d07d */
         if (gamma_level) {
             gamma_level--;
             palette_apply_gamma();
@@ -6246,27 +6275,31 @@ void far played_tool_events(int16_t far *fast)
         }
         break;
 
-    case 0x5d: case 0x7d:                          /* 0x0d096 - ] and } */
+    case ']': case '}':                            /* 0x0d096 */
         if (game_speed < 0x1f)
             game_speed++;
         break;
 
-    case 0x5b: case 0x7b:                          /* 0x0d0a3 - [ and { */
+    case '[': case '{':                            /* 0x0d0a3 */
         if (game_speed)
             game_speed--;
         break;
 
     default:                                       /* 0x0d0b0 */
-        if (last_key >= 0x31 && last_key <= 0x39)  /* 1..9 pick a tool */
-            tool_at = (uint8_t) (last_key - 0x31);
+        if (last_key >= '1' && last_key <= '9')    /* 1..9 pick a tool */
+            tool_at = (uint8_t) (last_key - '1');
         break;
     }
 }
 
-/* --------------------------------------------------------- 0x0d0c8: level_event
+/* ------------------------------------------------------ 0x0d0c8: tool_click_at
  *
  * What a tool does at a point - the click handler, and on the demo path what the
- * six-byte event table fires. Six tools have their own behaviour and everything
+ * six-byte event table fires, which is a recording of the same clicks. Not to be
+ * confused with tool_use (0x07a36), which is what a tool does where it LANDS,
+ * called by entity_update when an entity carrying one comes to rest.
+ *
+ * Six tools have their own behaviour and everything
  * else falls to a default that puts the tool's own entity down.
  *
  * The first thing it does is ask whether the target is empty: a zero byte in the
@@ -6276,7 +6309,7 @@ void far played_tool_events(int16_t far *fast)
  * `y == 0` is turned into 1 before any of that, which is why an event at the very
  * top of a level behaves as though it were one row down.
  */
-void far level_event(int16_t x, int16_t y)
+void far tool_click_at(int16_t x, int16_t y)
 {
     int16_t clear;
 
@@ -6822,7 +6855,7 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         break;
     }
     case 4:                                        /* 0x07f11 - an ordinary duck */
-        if (!level_flags[1]) {
+        if (!level_flags[LEVEL_SLIPPERY]) {
             active = 0;
             break;
         }
@@ -7322,8 +7355,8 @@ static void tally_row(int16_t moving, int16_t dst, int16_t src,
         }
         page_flip();
         frames--;
-        input_poll(0x140, 0xc8);
-        if (g_18e5 || last_key) {                     /* 0x0bcbd */
+        input_poll(SCREEN_SIZE_X, SCREEN_SIZE_Y);
+        if (any_click || last_key) {                     /* 0x0bcbd */
             *skipped = 1;
             frames   = 0;
         }
@@ -7397,9 +7430,9 @@ static void bonus_tally(void)
 
     bonus_numbers();
     do {                                          /* 0x0bea2 */
-        input_poll(0x140, 0xc8);
+        input_poll(SCREEN_SIZE_X, SCREEN_SIZE_Y);
         page_flip();
-        if (g_18e5 || last_key)
+        if (any_click || last_key)
             break;
     } while (hold--);
 }
@@ -7504,7 +7537,7 @@ int16_t far run_level(int16_t demo)
 
 
     sparkle_x     = game_rand() & 0x3ff;                /* 0x0d837 */
-    blink_enable  = level_flags[0];                /* 0x0d850 - [0x201e] */
+    blink_enable  = level_flags[LEVEL_LIGHTNING];  /* 0x0d850 - [0x201e] */
     button_a_down = 0;
 
     sprite_set_load(sprite_set_id, 0x43, &level_sprites, episode_egg_index);
@@ -7567,7 +7600,7 @@ int16_t far run_level(int16_t demo)
     resource_release(&panel);                      /* 0x0db42 */
 
     bg_scroll_reset();
-    warp_step       = level_flags[6] ? 7 : 1;      /* 0x0db4c - [0x202a] */
+    warp_step       = level_flags[LEVEL_FAST_WARP] ? 7 : 1;   /* 0x0db4c */
     g_2016          = 0;
     blink_toggle    = 0;
     blink_countdown = 0x28;
@@ -7581,9 +7614,9 @@ int16_t far run_level(int16_t demo)
      * about [0xda1]: whether the level can be finished at all without the tool
      * that would be needed. */
     can_finish     = (!tool_list_any_flagged() && !tool_list_has(0x12)
-                      && !level_flags[1] && !scenes[5].count);
+                      && !level_flags[LEVEL_SLIPPERY] && !scenes[5].count);
     can_finish_alt = (scenes[5].count && !tool_list_any_flagged() && !tool_list_has(0x12)
-                      && !level_flags[1]);
+                      && !level_flags[LEVEL_SLIPPERY]);
     if (!tool_list_has(0x12) && scenes[0].flag != 0xff)
         quota_left++;                              /* 0x0dbf5 */
 
@@ -7704,7 +7737,7 @@ int16_t far run_level(int16_t demo)
             /* 0x0de7f. A demo ends the moment anything is touched - that is
              * attract mode's whole exit. */
             if (demo) {
-                if (g_18e5 || last_key)
+                if (any_click || last_key)
                     fade_direction = -1;
                 tool_events();                     /* 0x0d4c2 */
             } else {
@@ -7720,8 +7753,8 @@ int16_t far run_level(int16_t demo)
                                 (type_flags[tool_type] & 2) ? g_dab + 0x2a : 0x14);
                 if (demo)
                     demo_events();                 /* 0x0def3 */
-                else if (g_18e1)
-                    level_event((int16_t) mouse_x, (int16_t) mouse_y);
+                else if (tool_apply_button)
+                    tool_click_at((int16_t) mouse_x, (int16_t) mouse_y);
             } else {
                 entity_set_type(cursor_scene.entities, 0x16);
                 tool_at = tool_prev;               /* 0x0df24 - put it back */
@@ -7950,11 +7983,11 @@ int16_t far run_level(int16_t demo)
 
             /* 0x0e673. One sparkle pixel down a column, which then walks by one
              * either way - or is thrown somewhere new every 32nd frame. */
-            /* level_flags[3], and the sparkle's column starts at screen row 0
+            /* LEVEL_SPARKLE, and the sparkle's column starts at screen row 0
              * rather than at the top of the play area: the address is the page
              * base plus (x >> 2) with no row term, and only the COUNT comes from
              * the viewport. Reproduced rather than tidied. */
-            if (level_flags[3]) {                   /* 0x0e673 - [0x2024] */
+            if (level_flags[LEVEL_SPARKLE]) {       /* 0x0e673 - [0x2024] */
                 if (sparkle_x >= viewport_game.left
                         && sparkle_x < viewport_game.right) {
                     set_plane((uint8_t) (sparkle_x & 3));
@@ -8054,7 +8087,7 @@ int16_t far run_level(int16_t demo)
  * written; the branch that draws the level's name over the picture when [0x507]
  * is set is here, because it is two calls.
  */
-int16_t far level_screens(int16_t fresh)
+int16_t far level_screens(int16_t level_completed)
 {
     desc_t  name, pic;
     scene_t scene;
@@ -8065,14 +8098,14 @@ int16_t far level_screens(int16_t fresh)
 
     /* 0x1104b. Three ways past here and only the middle one is ordinary play:
      * cheat_state[1] set takes the cheat's level picker at 0x10c06 instead;
-     * otherwise the episode intro runs, but only when `fresh` is
+     * otherwise the episode intro runs, but only when `level_completed` is
      * non-zero. That argument is game_main's [0x21a3] - 1 for a new game or
      * after a level was completed, 0 after an attempt was abandoned - so
      * retrying a level plays its own intro and not the episode's. It was called
      * unconditionally here, which replayed the episode intro on every retry. */
     if (cheat_state[1])                            /* 0x1104b - THECROWDSAYBO */
         level_picker();                            /* 0x10c06 */
-    else if (fresh)                                /* 0x11058 */
+    else if (level_completed)                     /* 0x11058 */
         episode_intro();                           /* 0x1105f -> 0x1089b */
 
     i       = episode_for_level();                 /* 0x11063 */
@@ -8136,16 +8169,16 @@ int16_t far level_screens(int16_t fresh)
     do {                                           /* 0x11280 */
         int16_t plane;
 
-        input_poll(0x140, 0xc8);
+        input_poll(SCREEN_SIZE_X, SCREEN_SIZE_Y);
         if (fade_direction == 0) {
             if (cheat_state[1] && last_key == 0x20) {       /* 0x1129b - level select */
                 leave    = 1;
                 has_page = 0;
-                fresh    = 0;                      /* 0x112a9, and dead: the
+                level_completed = 0;              /* 0x112a9, and dead: the
                                                     * intro decision is already
                                                     * made. The original's. */
             }
-            if (last_key || g_18e5) {
+            if (last_key || any_click) {
                 fade_direction = -1;
                 if (!has_page)
                     fade_start_colour = 0;
@@ -8175,8 +8208,8 @@ int16_t far level_screens(int16_t fresh)
         do {                                       /* 0x113b6 */
             int16_t plane;
 
-            input_poll(0x140, 0xc8);
-            if ((last_key || g_18e5) && fade_direction == 0) {
+            input_poll(SCREEN_SIZE_X, SCREEN_SIZE_Y);
+            if ((last_key || any_click) && fade_direction == 0) {
                 fade_direction    = -1;
                 fade_start_colour = 0;
             }
@@ -8273,8 +8306,8 @@ void far episode_intro(void)
         do {                                       /* 0x10a09 */
             int16_t plane;
 
-            input_poll(0x140, 0xc8);
-            if (fade_direction == 0 && (last_key || g_18e5)) {
+            input_poll(SCREEN_SIZE_X, SCREEN_SIZE_Y);
+            if (fade_direction == 0 && (last_key || any_click)) {
                 fade_direction    = -1;
                 fade_start_colour = 0;
             }
@@ -8334,8 +8367,8 @@ void far banner_build(desc_t far *dest, const char far *text, uint8_t colour,
 
     if (top && video_mode)                         /* 0x103fa */
         top += 0x28;
-    make_rect(&rect, top, top + 0x2d, screen_x0, screen_x0 + 0x140);
-    image_alloc(dest, 0x140, 0x2d);                /* 0x10432 */
+    make_rect(&rect, top, top + 0x2d, screen_x0, screen_x0 + SCREEN_SIZE_X);
+    image_alloc(dest, SCREEN_SIZE_X, 0x2d);                /* 0x10432 */
     sprite_set_load(1, 0x53, &set, 0xff);          /* the large font */
 
     if (colour) {                                  /* 0x1044b */
@@ -8433,7 +8466,7 @@ void far image_overlay(desc_t far *src, desc_t far *dst, int16_t row)
         else       sy += 0x14;
     }
     for (; sy < end; sy++, row++)
-        for (x = 0; x < 0x140; x++) {
+        for (x = 0; x < SCREEN_SIZE_X; x++) {
             uint8_t px = src->rows[sy][x];
 
             if (px)
@@ -8493,7 +8526,7 @@ int16_t far episode_for_level(void)
  */
 void far level_map_draw(desc_t far *dest)
 {
-    int16_t x0 = (0x140 - level_w / 4) / 2;        /* 0x0b28c */
+    int16_t x0 = (SCREEN_SIZE_X - level_w / 4) / 2;        /* 0x0b28c */
     int16_t y0 = (0x0c8 - level_h / 4) / 2;
     int16_t dx = x0, dy = y0;
     int16_t sx, sy, i;
@@ -8586,11 +8619,11 @@ void far level_palette_build(void)
         }
     }
 
-    if (level_flags[4])                            /* 0x0d661 - [0x2026] */
+    if (level_flags[LEVEL_RAMP_FROM_BG])           /* 0x0d661 - [0x2026] */
         for (i = 0xc0; i < 0xf0; i++)
             level_palette[i] = default_buffer[i];
 
-    if (level_flags[5]) {                          /* 0x0d67c - [0x2028] */
+    if (level_flags[LEVEL_PALETTE_FROM_BG]) {      /* 0x0d67c - [0x2028] */
         for (i = 0; i < 0x30; i++)
             level_palette[i] = default_buffer[i];
         for (i = 0xf0; i < 0x150; i++)
@@ -8815,8 +8848,8 @@ void far level_load(void)
         solids[i].bottom = solids[i].y + solids[i].img.h;
     }
 
-    level_w = map.w * 0x14;                           /* 0x090d4 - 20x20 tiles */
-    level_h = map.h * 0x14;
+    level_w = map.w * TILE_SIZE;                      /* 0x090d4 */
+    level_h = map.h * TILE_SIZE;
     /* 0x090f7: alloc_image(&backdrop, 1, 1, 0xa, 1). What those four arguments
      * mean is not read out - 0x05388 is 745 bytes and manages a buffer of its
      * own - but the size is not in doubt: the tile paint below writes every one
@@ -8834,9 +8867,9 @@ void far level_load(void)
             int16_t tile = map.rows[i][j];
             int16_t row;
 
-            for (row = 0; row < 0x14; row++)
-                memcpy(backdrop.rows[i * 0x14 + row] + j * 0x14,
-                       tiles.rows[tile * 0x14 + row], 0x14);
+            for (row = 0; row < TILE_SIZE; row++)
+                memcpy(backdrop.rows[i * TILE_SIZE + row] + j * TILE_SIZE,
+                       tiles.rows[tile * TILE_SIZE + row], TILE_SIZE);
         }
 
     resource_release(&tiles);                         /* 0x091fb */

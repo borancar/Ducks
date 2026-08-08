@@ -242,10 +242,11 @@ extern int16_t    flip_phase;
 /* game.c's, which the video reads */
 extern uint8_t    game_speed;
 extern int16_t    last_key;      /* 0x18f6 - what init spins on */
-extern int16_t    g_18e5;        /* 0x18e5 - any button; escapes the fades */
+extern int16_t    any_click;        /* 0x18e5 - any button; escapes the fades */
 extern int16_t    button_a_down; /* 0x18df */
 extern int16_t    button_b_down; /* 0x18e7 */
-extern int16_t    g_18e1, g_18e3;
+extern int16_t    tool_apply_button;  /* 0x18e1 */
+extern int16_t    tool_cycle_button;  /* 0x18e3 */
 extern int16_t    fade_level;
 extern int8_t     fade_direction;
 extern int16_t    fade_start_colour;
@@ -610,7 +611,7 @@ void far duck_dies(entity_t far *e, int16_t force, int16_t noisy);
 void far tool_use(int16_t x, int16_t y, int16_t type);   /* 0x07a36 */
 void far entity_update(entity_t far *e, int16_t applying, int16_t scripted);
 void far scene_update_all(scene_t far *s);           /* 0x0d715 */
-void far level_event(int16_t x, int16_t y);          /* 0x0d0c8 */
+void far tool_click_at(int16_t x, int16_t y);           /* 0x0d0c8 */
 void far demo_events(void);                          /* 0x0d471 */
 void far tool_selected(int16_t slot);                /* 0x0e088 */
 extern uint8_t tool_prev, tool_announce;             /* 0x1789, 0x178a */
@@ -635,8 +636,60 @@ extern uint8_t     sprite_set_id;        /* 0x2103 */
 extern table_t     level_sprites;        /* 0x1fec */
 extern uint8_t     solid_count;          /* 0x2031 */
 extern solid_t far *solids;              /* 0x202d */
-extern int16_t     level_flags[7];       /* 0x201e - one per word. The third,
-                                          * [0x2022], is the background warp */
+/* 0x201e - seven words, one per flag, read from the level's own block. They are
+ * indices into one array and not seven variables: naming DGROUP bytes twice is
+ * what left seven cheats reading words nothing ever wrote.
+ *
+ * What each one does, and how many of the eighty levels set it - counted by
+ * loading every level and reading the array, not by guessing:
+ *
+ *   [0] LIGHTNING          3   blink_enable: the terrain ramp flashes to a washed
+ *                              copy of itself and claps (sound 0x15). 16, 41, 55
+ *   [1] SLIPPERY          15   an ordinary duck samples the ground two pixels
+ *                              either side of its feet and gains momentum
+ *                              downhill - 0x07f11, and `param` is the momentum
+ *   [2] WARP               1   the background warp at 0x05df4. Level 80 only
+ *   [3] SPARKLE            1   the sparkle column at 0x0e673. Level 71 only
+ *   [4] RAMP_FROM_BG       1   copies palette entries 64-79 - the terrain ramp -
+ *                              from default_buffer into the level palette. 55
+ *   [5] PALETTE_FROM_BG   77   the same for entries 0-15 and 240-335. The normal
+ *                              arrangement; 1, 55 and 80 are the exceptions
+ *   [6] FAST_WARP          0   warp_step 7 instead of 1. No level in this egg
+ *                              sets it, so that branch has never run
+ *
+ * [0] to [3] are named from the code that reads them. [4] and [5] are named for
+ * what they copy rather than for what the author meant by them, and [6] for the
+ * one line it changes. */
+/* Tiles are 20x20 pixels, which is what turns the map's width and height into the
+ * backdrop's: level_load reads the map in tiles and paints it a tile at a time.
+ *
+ * Only the loader's uses are this. The value 20 also appears in the image as a
+ * sound id, an entity type, a score, several stack slots, screen_x0 and the twenty
+ * spare rows the 360x240 mode has - all 0x14 and none of them a tile, so they stay
+ * as they are. */
+#define TILE_SIZE 20
+
+/* The logical screen the game draws for, and it does NOT change with the
+ * resolution: at 360x240 the play area is still 320x200, centred by screen_x0
+ * with the spare rows given to the status panel. So these are the picture's size,
+ * where screen_width and screen_height are the mode's.
+ *
+ * input_poll takes them as the clamp for the mouse position, which is why nearly
+ * every call passes this pair - the exceptions pass a viewport's own size, or
+ * 0x80 x 1 for a slider, and mean something else by it. */
+/* One extra life per 5000 points, however the score arrives. next_life starts
+ * here and steps up by the same amount each time it is passed, so the two uses at
+ * 0x137ec and 0x138f5 are the same number for the same reason. */
+#define NEXT_LIFE_AT_INC 5000
+
+#define SCREEN_SIZE_X 320
+#define SCREEN_SIZE_Y 200
+
+enum {
+    LEVEL_LIGHTNING = 0, LEVEL_SLIPPERY = 1, LEVEL_WARP = 2, LEVEL_SPARKLE = 3,
+    LEVEL_RAMP_FROM_BG = 4, LEVEL_PALETTE_FROM_BG = 5, LEVEL_FAST_WARP = 6
+};
+extern int16_t     level_flags[7];       /* 0x201e */
 extern uint8_t     scenery_count;        /* 0x2000 - a byte */
 extern int16_t     level_outcome;        /* 0x200d - 1 = won, and run_level
                                           * turns that into the 2 it returns */
@@ -656,7 +709,7 @@ void far level_palette_build(void);   /* 0x0d5c5 */
 int16_t far episode_for_level(void);  /* 0x10ba4 */
 void far level_map_draw(desc_t far *dest);  /* 0x0b284 */
 void far episode_intro(void);   /* 0x1089b */
-int16_t far level_screens(int16_t demo);   /* 0x1102a */
+int16_t far level_screens(int16_t level_completed);  /* 0x1102a */
 void far banner_build(desc_t far *dest, const char far *text, uint8_t colour,
                       int16_t top);   /* 0x103e2 */
 void far image_overlay(desc_t far *src, desc_t far *dst, int16_t row);  /* 0x1081c */

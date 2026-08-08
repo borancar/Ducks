@@ -512,7 +512,7 @@ static void fade_frame(int16_t arg)
  * is on the bright pass only (0x0b1ea), which is why the sound and the flash are
  * one event.
  *
- * Gated on blink_enable, which run_level sets from level_flags[0] - level 55 is a
+ * Gated on blink_enable, which run_level sets from LEVEL_LIGHTNING - level 55
  * level that has it. Both of dos_io.c's notes on this were wrong: that no
  * play-through reaches it, and that the interval is 2-to-260 when the code there
  * uses the short countdown for both halves.
@@ -978,7 +978,7 @@ void far compose_scroll(int16_t sx, int16_t sy)
         uint8_t far   *bg;
         uint8_t       *dst;
 
-        if (level_flags[2]) {                      /* [0x2022] - the warp */
+        if (level_flags[LEVEL_WARP]) {             /* [0x2022] */
             phase &= 0x1f;                         /* re-masked every row, so
                                                     * this is not a progression */
             dx     = base_x + warp_table[phase];
@@ -1414,10 +1414,10 @@ int16_t far mouse_init(void)
     mouse_motion(&dx, &dy);                /* 0x06810 - drop queued movement */
 
     button_a_down = 0;                     /* 0x18df */
-    g_18e1 = 0;
-    g_18e3 = 0;
+    tool_apply_button = 0;
+    tool_cycle_button = 0;
     button_b_down = 0;                     /* 0x18e7 */
-    g_18e5 = 0;
+    any_click = 0;
 
     mouse_presses(0);                      /* 0x06837 - drained, not read */
     mouse_presses(1);
