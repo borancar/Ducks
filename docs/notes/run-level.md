@@ -2067,8 +2067,10 @@ stops it, which is the balloon's symptom exactly. Fixed. No snapshot in
 had: none of the captured states has an entity in the air on a step that reaches
 this arm.
 
-**Whether it is the whole of the balloon's one row is not established** - that
-needs demo 5 driven under both again.
+**Confirmed on 2026-08-08**: demo 5 plays correctly after this - the balloon cuts
+its holes where the original does, the terrain matches, and the bridge that
+stopped short at (183, 87) runs its full length. One missing probe accounted for
+all of it.
 
 ### And a second fault in the same routine, still open
 
