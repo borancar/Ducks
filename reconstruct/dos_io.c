@@ -422,13 +422,10 @@ static void fade_frame(int16_t arg)
         return;
     }
 
-    /* Then the blink, which no play-through has ever reached: it is gated on
-     * blink_enable ([0x2157]), and the only write to the flag it is assigned from
-     * stores zero. When it does run it counts blink_countdown down and, at zero,
-     * flips blink_toggle and uploads sixteen colours at DAC index 0x40 from one of
-     * two palettes - the level's own ramp, and a washed copy of it built once at
-     * 0x0876a. Verified all the same, by forcing the gate open: 4,656 comparisons,
-     * 0 mismatched. */
+    /* Then the lightning. It is gated on blink_enable ([0x2157]), which run_level
+     * sets from level_flags[0] - and level 55 is a level that has it, so this DOES
+     * run in play. The note here used to say no play-through had ever reached it,
+     * on the strength of the flag being zero everywhere anyone had looked. */
     if (!blink_enable || fade_level == 0)
         return;
     if (blink_countdown) {
@@ -437,24 +434,31 @@ static void fade_frame(int16_t arg)
     }
     blink_toggle = !blink_toggle;
 
-    /* Sixteen colours at DAC index 0x40, from one of two ramps depending on the
-     * toggle: palette_washed, built once at 0x0876a as v*0.75 + 64, or the
-     * level's own colours out of palette_stored. 0x30 bytes is 16 entries of
-     * three. Then a fresh countdown, rand() & 1 plus 2 - which with the outer
-     * loop is the 2-to-260-frame interval the notes describe. */
+    /* Sixteen colours at DAC index 0x40 - the terrain ramp - from one of two
+     * palettes depending on the toggle: palette_washed, built once at 0x0876a as
+     * v*0.75 + 64, or the level's own out of palette_stored. 0x30 bytes is 16
+     * entries of three.
+     *
+     * The two halves are not symmetrical, and that asymmetry is the whole effect:
+     * the bright pass lasts 2-3 calls and claps, the normal one waits 5-260. This
+     * used to reseed with (rand & 1) + 2 on both, which is a strobe, while the
+     * comment beside it described the 2-to-260 interval the code did not produce.
+     */
     outp(0x3c8, 0x40);
-    if (blink_toggle)
+    if (blink_toggle) {
         for (i = 0; i < 0x30; i++)
             outp(0x3c9, palette_washed[i] >> 2);        /* 0x0b1c9 */
-    else
+        blink_countdown = (game_rand() & 1) + 2;        /* 0x0b1e7 */
+        sound_play_guarded(0x15, 1);                    /* 0x0b1ef - the thunder */
+    } else {
         for (i = 0; i < 0x30; i++)
             outp(0x3c9, palette_stored[0xc0 + i] >> 2); /* 0x0b202 */
-    blink_countdown = (game_rand() & 1) + 2;
+        blink_countdown = (game_rand() & 0xff) + 5;     /* 0x0b221 */
+    }
 
-    /* Not a blink at all, on a closer look: 0x0b202 writes the level's normal
-     * terrain ramp and 0x0b1c9 a washed copy of it, so the whole scene lifts to a
-     * grey floor and back rather than one thing flashing. Nothing in this build
-     * reaches it either way. */
+    /* So the scene lifts to a pale floor and drops back rather than one thing
+     * flashing - which with the thunderclap on the bright pass is lightning, and
+     * is what level 55 looks like. */
 }
 
 /* 0x0b10b. The fade, and then - always - the frame tick. One function in the

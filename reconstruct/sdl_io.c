@@ -223,6 +223,7 @@ void far set_text_colour(int16_t c)
 
 static SDL_Window  *window;
 static void         capture_refresh(void);   /* the mouse capture, below */
+static void         blink_step(int16_t arg);  /* the lightning, below */
 static void         capture_reassert(void);  /* ... and after a resize */
 /* The window's own surface, and NOT a thing to hold on to: SDL frees and remakes
  * it whenever the window is resized, so a pointer cached across a resize points
@@ -467,10 +468,8 @@ static void fade_frame(int16_t arg)
 {
     int i;
 
-    if (!fade_direction) {
-        if (arg)                           /* 0x0b226 - not fading, so hand the
-                                            * built palette straight over */
-            palette_upload();
+    if (!fade_direction) {                 /* 0x0b10f */
+        blink_step(arg);                   /* 0x0b114 jumps straight to it */
         return;
     }
     if (fade_level == 0 && fade_direction == -1) {
@@ -495,6 +494,62 @@ static void fade_frame(int16_t arg)
         palette[i] = dac_to_rgb((palette_stored[i * 3 + 0] * fade_level) >> 6,
                                 (palette_stored[i * 3 + 1] * fade_level) >> 6,
                                 (palette_stored[i * 3 + 2] * fade_level) >> 6);
+}
+
+/* 0x0b18c-0x0b223. The lightning, and it really is lightning rather than the
+ * "blink" the variables are named for: sixteen entries at palette index 0x40 -
+ * the terrain ramp - swap between the level's own colours and a washed copy of
+ * them built once by build_washed_ramp (0x0876a) as v*0.75 + 64. The whole scene
+ * lifts to a pale floor and drops back.
+ *
+ * What makes it weather rather than a strobe is that the two halves are NOT
+ * symmetrical, and the countdowns say so:
+ *
+ *     bright:  blink_countdown = (rand & 1)    + 2   ->  2-3 calls, and sound 0x15
+ *     normal:  blink_countdown = (rand & 0xff) + 5   ->  5-260 calls
+ *
+ * so it flashes for a moment and then waits a long random while. The thunderclap
+ * is on the bright pass only (0x0b1ea), which is why the sound and the flash are
+ * one event.
+ *
+ * Gated on blink_enable, which run_level sets from level_flags[0] - level 55 is a
+ * level that has it. Both of dos_io.c's notes on this were wrong: that no
+ * play-through reaches it, and that the interval is 2-to-260 when the code there
+ * uses the short countdown for both halves.
+ */
+static void blink_step(int16_t arg)
+{
+    int i;
+
+    /* 0x0b18c and 0x0b196, and both jump to 0x0b226 - which is the `if (arg)
+     * palette_upload()` this used to sit in front of as an early return in
+     * fade_frame. It is not a separate path: it is what the blink falls through
+     * to when there is no blink to do. */
+    if (!blink_enable || fade_level == 0) {
+        if (arg)
+            palette_upload();                      /* 0x0b22c */
+        return;
+    }
+    if (blink_countdown) {                         /* 0x0b1a4 */
+        blink_countdown--;
+        return;
+    }
+    blink_toggle = !blink_toggle;                  /* 0x0b1b2 */
+
+    if (blink_toggle) {
+        for (i = 0; i < 16; i++)                   /* 0x0b1c9 - the washed ramp */
+            palette[0x40 + i] = dac_to_rgb(palette_washed[i * 3 + 0] >> 2,
+                                           palette_washed[i * 3 + 1] >> 2,
+                                           palette_washed[i * 3 + 2] >> 2);
+        blink_countdown = (int16_t) ((game_rand() & 1) + 2);      /* 0x0b1e7 */
+        sound_play_guarded(0x15, 1);               /* 0x0b1ef - the thunder */
+    } else {
+        for (i = 0; i < 16; i++)                   /* 0x0b202 - the level's own */
+            palette[0x40 + i] = dac_to_rgb(palette_stored[0xc0 + i * 3 + 0] >> 2,
+                                           palette_stored[0xc0 + i * 3 + 1] >> 2,
+                                           palette_stored[0xc0 + i * 3 + 2] >> 2);
+        blink_countdown = (int16_t) ((game_rand() & 0xff) + 5);   /* 0x0b221 */
+    }
 }
 
 /* -------------------------------------------------- 0x0b10b: palette_fade_step
