@@ -101,14 +101,30 @@ def main():
             decls.append((int(m.group("off"), 16), size, m.group("name"), path))
 
     decls.sort()
-    bad = []
+    # The two backends are alternatives - the Makefile links one or the other,
+    # never both - so they define the same video state at the same offsets on
+    # purpose. That is not an overlap, but it is worth checking rather than just
+    # excusing: the same name must mean the same offset and the same size in
+    # both, or one of them is describing a different object.
+    BACKENDS = {"reconstruct/dos_io.c", "reconstruct/sdl_io.c"}
+
+    bad, agreed = [], 0
     for i, (off, size, name, path) in enumerate(decls):
         for off2, size2, name2, path2 in decls[i + 1:]:
             if off2 >= off + size:
                 break
+            if {path, path2} == BACKENDS:
+                if name == name2 and off == off2 and size == size2:
+                    agreed += 1          # one object, declared by both backends
+                    continue
+                bad.append((off, size, name, path, off2, size2, name2, path2))
+                continue
             bad.append((off, size, name, path, off2, size2, name2, path2))
 
     print(f"{len(decls)} declarations carry a DGROUP offset")
+    if agreed:
+        print(f"{agreed} of them are the video state the two backends both "
+              f"define, and they agree on offset and size")
     for off, size, name, path, off2, size2, name2, path2 in bad:
         print(f"  OVERLAP {name} at {off:#06x}+{size:#x} ({path}) covers "
               f"{name2} at {off2:#06x}+{size2:#x} ({path2})"
