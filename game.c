@@ -6976,10 +6976,23 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
                     continue;
                 }
                 {
+                    /* 0x0824a, and it is a DO-while: the body runs, then `si`
+                     * is decremented and tested at 0x08281-0x08284. A `for`
+                     * here tests first, and the two differ on every d <= 0 -
+                     * every rising or level step - where d - 1 is negative and
+                     * a for-loop probes nothing at all.
+                     *
+                     * The row it must probe is y + d - 1, one past where the
+                     * entity is going. Without it a balloon rises one row too
+                     * far before anything stops it, and since each balloon
+                     * starts where the last one's hole left off, the error
+                     * compounds: 1, then 2, then 3 rows. See run-level.md. */
                     int16_t clear = 1;
 
-                    for (i = d - 1; i >= 0; i--)   /* 0x0824a */
+                    i = (int16_t) (d - 1);
+                    do {
                         clear &= terrain_at(e->y + i, e->x + facing) == 0;
+                    } while (--i >= 0);
                     if (!clear)
                         continue;
                 }
