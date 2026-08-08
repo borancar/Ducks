@@ -113,6 +113,14 @@ uint8_t    default_buffer[768];
  * before anything had published one. There was never a gap to fill - only an
  * initialiser that had been dropped. See open-dgroup-initialisers. */
 void far  *current_buffer = default_buffer;
+/* The palette the DAC loops actually upload, and the washed copy the menu blink
+ * alternates with. palette_build (0x0b0c5) and photo_fade_step fill the first
+ * out of current_buffer; build_washed_ramp (0x0876a) fills the second out of
+ * default_buffer's entry 64. Both are zero in the image, so bare is right here -
+ * unlike current_buffer above. Read from dos_io.c and sdl_io.c, which is why
+ * they were left in stubs.c long after they stopped being stubs. */
+uint8_t    palette_stored[768];  /* 0x10e1 */
+uint8_t    palette_washed[48];   /* 0x0dad - 16 entries, the terrain ramp */
 /* Written by set_mode_x, set_plane and page_flip, all of which are in dos_io.c,
  * so that is where these are defined. Declared here because game.c reads them:
  * show_splash centres its rect with screen_x0, particles plots through `plot`. */
