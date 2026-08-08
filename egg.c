@@ -260,7 +260,28 @@ uint8_t egg_next_pixel(void)
 /* ------------------------------------------------------------ allocation */
 
 /* 0x05388. The original hands back a row table into a buffer it manages; this
- * allocates one image's worth and hangs it off the descriptor. */
+ * allocates one image's worth and hangs it off the descriptor.
+ *
+ * **The fill is 1, not 0**, and that is read off the listing rather than
+ * inferred: the inner loop at 0x054e5 is `mov byte es:[bx+di], 1` over
+ * desc->w for each of desc->h rows. It matters wherever an image is not painted
+ * over completely - the colour chart at 0x0ce2e paints 160x160 of a 320x200
+ * page, and the original shows colour 1 around it where the port used to show
+ * colour 0. Confirmed against a live guest: all 38400 pixels outside the chart
+ * come back as 1, and all 25600 inside it match the swatches.
+ *
+ * TODO: the four arguments are read now but only `e` is honoured. From 0x053b4:
+ *
+ *     desc[+0x10] = a,  desc[+0x12] = b,  desc[+0x14] = c
+ *     desc->w += a * 2                    ; a margin on each side
+ *     desc->h += b                        ; and one below
+ *     e        -> fatal(out_of_memory) rather than returning 0
+ *
+ * Every caller here passes (0, 0, 0, 1) so the margins are all zero and this is
+ * exact for them - except the backdrop, which the original allocates with
+ * (1, 1, 0xa, 1) and so gets a two-column, one-row margin the port does not.
+ * See open-image-margins.md; changing it moves every terrain index, so it wants
+ * its own verification rather than a quiet edit here. */
 int16_t far alloc_image(void far *d, int16_t a, int16_t b, int16_t c, int16_t e)
 {
     desc_t  *desc = (desc_t *) d;
@@ -274,9 +295,10 @@ int16_t far alloc_image(void far *d, int16_t a, int16_t b, int16_t c, int16_t e)
     if (!desc->rows)
         return 0;
     for (y = 0; y < desc->h; y++) {
-        desc->rows[y] = calloc((size_t) desc->w, 1);
+        desc->rows[y] = malloc((size_t) desc->w);
         if (!desc->rows[y])
             return 0;
+        memset(desc->rows[y], 1, (size_t) desc->w);    /* 0x054f6 */
     }
     return 1;
 }
