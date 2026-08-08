@@ -198,15 +198,16 @@ void far set_text_colour(int16_t c)
     (void) c;
 #else
     static const char ansi[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };   /* the bit swap */
-    static int registered;
+    static int reset_hooked;   /* has atexit(text_colour_reset) been done yet */
     int fg = c & 0x0f;
 
     /* STDOUT_FILENO rather than fileno(stdout): the build is -std=c99, which
      * hides the POSIX half of stdio.h but not unistd.h's own constants. */
     if (!isatty(STDOUT_FILENO))
         return;
-    if (!registered) {
-        registered = 1;
+    if (!reset_hooked) {       /* atexit does not de-duplicate, and this is
+                                * called six times */
+        reset_hooked = 1;
         atexit(text_colour_reset);
     }
     printf("\033[0%s;%dm", (c & 0x80) ? ";5" : "",
