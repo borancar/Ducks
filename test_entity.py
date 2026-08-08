@@ -476,9 +476,16 @@ def main():
                     if (ours[nm] & ((1 << (8 * n)) - 1)) != (got & ((1 << (8 * n)) - 1)):
                         walk_differ += 1
                         if walk_differ <= 8:
+                            # What it started from, too: a difference in a field
+                            # nothing can see the input of is a difference nobody
+                            # can act on. `before` is the state both sides were
+                            # given, so this is the whole of the case.
+                            was = int.from_bytes(before[off:off + n], "little",
+                                                 signed=nm not in ("f15", "f16",
+                                                                   "f19", "f1a"))
                             print(f"  walk: button {down} at ({mx},{my}) entity {i}"
                                   f" type {ours['type']:#04x} {nm}: "
-                                  f"port {ours[nm]} guest {got}")
+                                  f"was {was} -> port {ours[nm]} guest {got}")
 
         for si, (base, cnt) in bases.items():        # the guest, as it was
             m.uc.mem_write(base, saved[si])

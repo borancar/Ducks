@@ -19,7 +19,8 @@ names over one span are deliberate.
 import re
 import sys
 
-SOURCES = ["reconstruct/game.c", "reconstruct/dos_io.c", "reconstruct/sdl_io.c",
+SOURCES = ["reconstruct/game.h",
+           "reconstruct/game.c", "reconstruct/dos_io.c", "reconstruct/sdl_io.c",
            "reconstruct/sound.c", "reconstruct/egg.c"]
 
 # What a type occupies in the original, which is the only size that matters here:
@@ -36,7 +37,8 @@ SIZES = {
 POINTER = 4                                   # any `*` in the original
 
 DECL = re.compile(
-    r"^(?!extern|static|typedef)"             # definitions, not declarations
+    r"^(?!static|typedef)"                    # definitions AND extern declarations
+    r"(?:extern\s+)?"                          # - see the note below on why both
     r"(?P<type>[A-Za-z_][A-Za-z0-9_]*)\s+"
     r"(?P<stars>\**)\s*"
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
@@ -46,6 +48,17 @@ DECL = re.compile(
 # `0x1894:0000` is a segment, not a DGROUP offset - menu_text and its neighbours
 # are far pointers whose *target* lives there - so an offset followed by a colon is
 # not one of these at all. That is what the negative lookahead above is for.
+#
+# **`extern` counts here, and did not until 2026-08-08.** A declaration claims the
+# same DGROUP bytes as the definition it names, so for the overlap check it is
+# evidence like any other - and skipping it left a blind spot with a real bug in
+# it: `extern int16_t cheat_flag; /* 0x0515 */` sat in game.h claiming
+# cheat_state[8]'s two bytes, defined nowhere, used nowhere, one of the shadow
+# variables the cheat array replaced. Invisible to this test purely because of the
+# word it starts with.
+#
+# Two declarations of the SAME name are one object, however many files declare it,
+# and that is not an overlap. Different names over the same bytes is the bug.
 
 
 def size_of(type_name, stars, count):
@@ -77,7 +90,7 @@ def main():
             continue
         for line in text.split("\n"):
             stripped = line.replace("far ", "").strip()
-            if stripped.startswith(("extern", "static", "typedef", "*", "/")):
+            if stripped.startswith(("static", "typedef", "*", "/")):
                 continue
             m = DECL.match(stripped)
             if not m:
@@ -113,6 +126,8 @@ def main():
         for off2, size2, name2, path2 in decls[i + 1:]:
             if off2 >= off + size:
                 break
+            if name == name2:
+                continue                     # one object, declared more than once
             if {path, path2} == BACKENDS:
                 if name == name2 and off == off2 and size == size2:
                     agreed += 1          # one object, declared by both backends
