@@ -896,6 +896,29 @@ void far audio_close(void)
     audio = NULL;
 }
 
+/* What the DSP time constant did, and it is a change to the *source* rate only:
+ * the samples are 8-bit at 11111 Hz whatever happens, and reprogramming the card
+ * made it consume them faster. Telling SDL the stream's input is now 22222 Hz
+ * has exactly that effect - the resampler stretches less, so everything plays at
+ * double speed and an octave up, which is what D does in the original.
+ *
+ * The device end is left alone: SDL_SetAudioStreamFormat with a NULL dst keeps
+ * whatever the device negotiated, and only the input spec moves. */
+void far audio_set_rate(int16_t rate)
+{
+    SDL_AudioSpec src, dst;
+
+    if (!audio || rate <= 0)
+        return;
+    if (!SDL_GetAudioStreamFormat(audio, &src, &dst))
+        return;
+    if (src.freq == rate)
+        return;
+    src.freq = rate;
+    if (!SDL_SetAudioStreamFormat(audio, &src, NULL))
+        SDL_Log("audio_set_rate(%d): %s", rate, SDL_GetError());
+}
+
 /* ------------------------------------------------------------------- mouse
  *
  * The original asks INT 33h for motion since the last call and for per-button

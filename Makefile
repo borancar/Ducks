@@ -1,6 +1,6 @@
-# The reconstruction, built against SDL3. Not the game yet - most of the segment
-# is still unread and stubs.c says which parts - but it compiles, links and runs,
-# which is the difference between a description and a port.
+# The reconstruction, built against SDL3. Every routine in the game's own module
+# is transcribed - stubs.c is gone, and its last entry, sound_set_rate, went to
+# sound.c on 2026-08-08.
 #
 #   make          build ./ducks
 #   make run      build and run it
@@ -12,8 +12,8 @@ CC      ?= cc
 CFLAGS  ?= -std=c99 -Wall -Wextra -O1 -ggdb $(shell pkg-config --cflags sdl3)
 LDLIBS  ?= $(shell pkg-config --libs sdl3)
 
-OBJS = game.o sdl_io.o stubs.o egg.o sound.o
-SRCS = game.c sdl_io.c stubs.c egg.c sound.c
+OBJS = game.o sdl_io.o egg.o sound.o
+SRCS = game.c sdl_io.c egg.c sound.c
 
 ducks: $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) $(LDLIBS) -o $@
