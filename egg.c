@@ -212,8 +212,22 @@ int16_t far egg_find_block(uint8_t type, uint8_t index, int16_t arg)
     int i;
 
     (void) arg;
-    if (block_open)                              /* 0x0524a, and it only warns */
-        printf("File slice already in use\n");   /* ds:0x22ae */
+    /* 0x0524a, and it is FATAL, not a warning - an earlier comment here said
+     * otherwise and was wrong. The listing is
+     *
+     *     cmp word [0x20b6], 0 / je ...
+     *     push 0 / push 0                  ; the NULL second argument
+     *     push ds / push 0x22ae            ; "File slice already in use"
+     *     push cs / call 0x4de6            ; fatal
+     *     add sp, 8
+     *
+     * and 0x4de6 is fatal - eight bytes of arguments, two far pointers, the
+     * same call alloc_image makes with out_of_memory. Caught by a probe that
+     * left the lock set: the guest restored the text mode and exited on it,
+     * where the port would have printed a line and carried on from a state the
+     * original refuses to continue from. */
+    if (block_open)
+        fatal("File slice already in use", NULL);  /* ds:0x22ae */
     for (i = 0; i < dir_count; i++)
         if (dir[i].type == type && dir[i].index == index) {
             cursor = data_base + dir[i].offset;
