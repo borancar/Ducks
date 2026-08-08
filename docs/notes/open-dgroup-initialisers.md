@@ -80,6 +80,34 @@ bug, not a description of the original.
 anything compares it, so this is tidiness rather than a fix. The other four are
 written at runtime and their image bytes are irrelevant.
 
+## A third one, and it was outside the sweep entirely (2026-08-08)
+
+`current_buffer` (`d+0x1721`) is a **relocated far pointer initialiser**:
+
+```
+d+0x1721   f1 13 95 18      ->  1895:13f1, which is default_buffer
+```
+
+and the relocation table has an entry sitting on the segment half, so the linker
+emitted it. `set_buffer` at `0x0b9ea` is the *only* store to `0x1721` in the
+whole image - every other reference is `c4 1e 21 17`, `les bx, [0x1721]`. So the
+original never publishes the fallback buffer; it starts published.
+
+The port had it bare in `stubs.c`, which made `show_splash` write its sprite
+set's palette through a null pointer before anything had called `set_buffer`.
+The bring-up patch for that was a `buffer_init()` called from `main` - a routine
+that does not exist in the game, invented to fill a gap that was never there.
+Both it and `set_buffer` are now in `game.c`, the latter as the eighteen bytes it
+actually is, and the pointer carries its initialiser.
+
+**Why the sweep missed it.** `test_dgroup.py`'s parser keys on the DGROUP offset
+comment, and this declaration had none - it sat under a `/* the eggs */` banner
+in `stubs.c` with `egg_stream`. So the seven found above are seven out of the
+*annotated* declarations only, and anything the port declared without pinning it
+to an offset was never a candidate. That is a second blind spot beside the one
+below, and a worse one, because it hides the variable from the offset-collision
+check as well.
+
 ## To do
 
 Turn the sweep into a test next to `test_dgroup.py`: read each bare
@@ -89,3 +117,8 @@ list of known-written ones (`text_colour`, `g_dab`, `page_back`,
 the next run instead of being found by its symptoms months later. The four-guest
 comparison above is what the known-written list is derived from, so a future
 addition to it needs the same evidence rather than an assertion.
+
+And close the blind spot the third one came through: every global the port
+defines should carry its DGROUP offset, so the test can see it at all. A count of
+definitions in `game.c`/`sdl_io.c`/`sound.c`/`egg.c` against the 164 the parser
+currently finds says how many are still invisible to it.

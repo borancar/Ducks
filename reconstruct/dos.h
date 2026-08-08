@@ -505,8 +505,7 @@ void far str_copy(const char far *s, char far **dest);
 void far fatal(const char far *msg, const char far *arg);
 extern char far *out_of_memory;
 void far resource_release(void far *d);
-void far set_buffer(void far *p);
-void far buffer_init(void);
+void far set_buffer(void far *p);              /* 0x0b9ea, in game.c */
 extern uint8_t default_buffer[768];
 /* sound.c - the game's own sound module */
 void far sound_play_guarded(int16_t id, int16_t voice);
