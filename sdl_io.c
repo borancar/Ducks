@@ -222,7 +222,18 @@ void far set_text_colour(int16_t c)
 
 static SDL_Window  *window;
 static void         capture_refresh(void);   /* the mouse capture, below */
-static SDL_Surface *surface;     /* the window's own surface; no renderer */
+static void         capture_reassert(void);  /* ... and after a resize */
+/* The window's own surface, and NOT a thing to hold on to: SDL frees and remakes
+ * it whenever the window is resized, so a pointer cached across a resize points
+ * into freed memory. It is kept here only so dac_to_rgb has a pixel format to map
+ * against; everything that draws goes through window_surface() below, which
+ * re-asks SDL every time. SDL_GetWindowSurface is cheap - it hands back the one it
+ * already has unless it has had to make a new one.
+ *
+ * This is what made VIDEO SETTINGS > RESOLUTION end in a black window: set_mode_x
+ * called SDL_SetWindowSize and then cached whatever surface existed at that
+ * instant, and the resize is not necessarily finished by then. */
+static SDL_Surface *surface;
 static int          scale = SCALE_DEFAULT;
 
 static uint8_t  page_a[360 * 240];      /* the two video pages, linear */
@@ -246,6 +257,16 @@ static uint64_t next_frame_ns;
 void far set_bios_mode(uint8_t mode)
 {
     (void) mode;
+}
+
+/* The one place the window's surface is obtained. Every caller asks again rather
+ * than remembering the answer. */
+static SDL_Surface *window_surface(void)
+{
+    if (!window)
+        return NULL;
+    surface = SDL_GetWindowSurface(window);
+    return surface;
 }
 
 /* 0x13519. Opens the window, or resizes it when the game changes resolution -
@@ -282,8 +303,17 @@ void far set_mode_x(int16_t wide)
         capture_refresh();
     } else {
         SDL_SetWindowSize(window, screen_width * scale, screen_height * scale);
+        /* SDL drops relative mouse mode over a resize, and capture_set believes
+         * its own bookkeeping - so without this the port thinks it still holds
+         * the mouse, the game gets no motion and no buttons, and the only way
+         * back is Ctrl+Alt twice, which works only because toggling
+         * capture_wanted forces a real SDL call. */
+        capture_reassert();
     }
-    surface = SDL_GetWindowSurface(window);
+    /* Asked for so the palette has a format to map against before the first
+     * flip - not kept, because after a resize this may not be the surface the
+     * window settles on. See window_surface(). */
+    window_surface();
 
     memset(page_a, 0, sizeof page_a);
     memset(page_b, 0, sizeof page_b);
@@ -494,18 +524,31 @@ void far page_flip(void)
     if (game_speed < 0x1f)                      /* the game's own throttle */
         SDL_DelayNS((uint64_t) (0x1f - game_speed) * 1000000ull);
 
-    if (surface) {
-        SDL_LockSurface(surface);
-        for (y = 0; y < screen_height * scale; y++) {
-            uint32_t      *dst = (uint32_t *) ((uint8_t *) surface->pixels
-                                               + (size_t) y * surface->pitch);
-            const uint8_t *src = fb_back + (size_t) (y / scale) * screen_width;
+    {
+        SDL_Surface *dst_surface = window_surface();
 
-            for (x = 0; x < screen_width * scale; x++)
-                dst[x] = palette[src[x / scale]];
+        /* Clipped to the surface rather than trusting the mode: for a frame or
+         * two after a resize the window can still be the old size, and writing
+         * past the end of it is what the stale pointer used to do silently. */
+        if (dst_surface) {
+            int rows = screen_height * scale;
+            int cols = screen_width * scale;
+
+            if (rows > dst_surface->h) rows = dst_surface->h;
+            if (cols > dst_surface->w) cols = dst_surface->w;
+
+            SDL_LockSurface(dst_surface);
+            for (y = 0; y < rows; y++) {
+                uint32_t      *dst = (uint32_t *) ((uint8_t *) dst_surface->pixels
+                                                   + (size_t) y * dst_surface->pitch);
+                const uint8_t *src = fb_back + (size_t) (y / scale) * screen_width;
+
+                for (x = 0; x < cols; x++)
+                    dst[x] = palette[src[x / scale]];
+            }
+            SDL_UnlockSurface(dst_surface);
+            SDL_UpdateWindowSurface(window);
         }
-        SDL_UnlockSurface(surface);
-        SDL_UpdateWindowSurface(window);
     }
 
     {   /* swap the pages, as the CRTC start address swap did */
@@ -671,13 +714,33 @@ void far draw_sprite(int16_t far *index, int16_t x, int32_t y,
                      table_t far *table, viewport_t far *clip, uint8_t colour)
 {
     sprite_t far *desc;
-    int16_t  w, h, src = 0, row_extra = 0, row, col;
+    int16_t  w, h, src = 0, row_extra = 0, row, col, x0;
     int16_t  x_end, y_end, yy = (int16_t) y;
 
     if (!table || !table->base)
         return;
     desc = &table->base[*index];
     w = desc->w;  h = desc->h;
+
+    /* 0x063e8, and the first thing the original does with the clip: it takes the
+     * viewport's LEFT, shifts it right by two and keeps it in a byte at [bp-0xa]
+     * until the write. `left >> 2` is the planar byte offset into the row, and
+     * every value it ever holds is 0 or 20 - screen_x0 - so nothing is lost to
+     * either the shift or the byte.
+     *
+     * Here the framebuffer is linear, so what has to be added is `left` itself:
+     * `left >> 2` bytes across four interleaved planes is `left` pixels. That is
+     * the only difference, and it is the same one the whole file is built on.
+     *
+     * It goes on the DESTINATION at the write (0x06536), not on the clip bounds,
+     * which is what keeps clip->right meaning what it says.
+     *
+     * It was missing entirely until 2026-08-08, and could not be seen: at 320
+     * wide screen_x0 is 0, so `+ x0` is `+ 0`. At 360 it is 20, and everything
+     * draw_sprite put on the HUD stayed where 320 would have put it while
+     * outline_sprite - which never lost it - moved. The play area goes through
+     * this routine too, so it was unshifted with it. */
+    x0 = clip->left;
 
     x  -= desc->ox;
     yy += clip->top - desc->oy;
@@ -699,7 +762,7 @@ void far draw_sprite(int16_t far *index, int16_t x, int32_t y,
             if ((col & 3) == current_plane) {
                 uint8_t px = desc->pixels[src + (col - x)];
                 if (px)
-                    fb_back[(size_t) row * screen_width + col] =
+                    fb_back[(size_t) row * screen_width + col + x0] =
                         (uint8_t) (px + colour);
             }
         src += (x_end - x) + row_extra;
@@ -731,7 +794,7 @@ void far outline_sprite(int16_t far *index, int16_t x, int16_t y,
 {
     sprite_t far *desc;
     int16_t  w, h, src = 0, row_extra = 0;
-    int16_t  top, right, bottom, ncols, nrows, stride, row, col, xbase;
+    int16_t  top, right, bottom, ncols, nrows, stride, row, col, x0;
 
     if (!table || !table->base)
         return;
@@ -740,7 +803,7 @@ void far outline_sprite(int16_t far *index, int16_t x, int16_t y,
     if (!w || !h)
         return;
 
-    xbase = (uint8_t) clip->left;
+    x0 = (uint8_t) clip->left;
     x    -= desc->ox;
     top   = clip->top;
     y    += top - desc->oy;
@@ -751,8 +814,8 @@ void far outline_sprite(int16_t far *index, int16_t x, int16_t y,
     else if (right > 0x13F)     { row_extra += right - 0x13F; right = 0x13F; }
     if (top >= y)               { src -= (y - top - 1) * w; y = top + 1; }
     else if (clip->bottom <= bottom) { bottom = clip->bottom - 1; }
-    x     += xbase;
-    right += xbase;
+    x     += x0;
+    right += x0;
 
     ncols  = right - x;
     nrows  = bottom - y;
@@ -1017,6 +1080,14 @@ static void capture_set(int on)
     capture_now = on;
     SDL_SetWindowTitle(window, on ? "Ducks!  -  Ctrl+Alt frees the mouse"
                                   : "Ducks!  -  click, or Ctrl+Alt, to capture");
+}
+
+/* Forget what SDL was last told, then tell it again. For after a resize, where
+ * SDL has changed the state underneath capture_now without anyone asking. */
+static void capture_reassert(void)
+{
+    capture_now = -1;
+    capture_refresh();
 }
 
 /* Both conditions, every time: the user's answer, and this window having focus. */
