@@ -24,7 +24,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <strings.h>       /* strcasecmp, which is Borland's stricmp */
+/* No <strings.h>: both compares here were strcasecmp until 2026-08-08 and both
+ * were wrong. 0:0x4215 and 0:0x4c28 are the same routine emitted twice - a bare
+ * `repe cmpsb` with no case folding anywhere in it - so the original is strcmp,
+ * and the cheats and the EGGS.INI section header are both case-SENSITIVE. */
 #include <ctype.h>         /* toupper, at 0:0x184f */
 
 #include "dos.h"
@@ -451,7 +454,10 @@ void far load_eggs_ini(const char far *path)
         }
 
         if (line[0] == '[') {                  /* 0x13d59 - a section header */
-            in_eggs = (strcasecmp("[EGGS]", line) == 0);   /* 0x13d6a */
+            in_eggs = (strcmp("[EGGS]", line) == 0);       /* 0x13d6a - 0:0x4215,
+                                                            * repe cmpsb, so the
+                                                            * header must be in
+                                                            * capitals */
             continue;
         }
         if (!in_eggs || line[0] == 0)          /* 0x13d7c, 0x13d8f */
@@ -2185,6 +2191,14 @@ void far typed_clear(char far *buf)
  * red when it just went off. That used to go nowhere, because `outp` was a no-op
  * in sdl_io.c; it decodes the two DAC ports now, so the flash is the only
  * feedback a cheat gives and it works.
+ *
+ * **The compare is case-sensitive, so the words have to be typed in CAPITALS.**
+ * 0:0x4c28 is `repe cmpsb` and nothing else - no case folding - so it is strcmp
+ * and not stricmp. This said strcasecmp until 2026-08-08, which made the port
+ * accept lowercase where the original does not. Proved both ways in the guest:
+ * feeding "colourmap" reaches this routine nine times, reaches the compare with
+ * ('COLOURMAP', 'colourmap'), and toggles nothing; feeding "COLOURMAP" sets
+ * cheat_state[5].
  */
 int16_t far typed_push(char far *buf, uint8_t ch)
 {
@@ -2197,7 +2211,7 @@ int16_t far typed_push(char far *buf, uint8_t ch)
     for (i = 0; i < cheat_text_count; i++) {
         int16_t n = (int16_t) strlen(cheat_text[i]);
 
-        if (strcasecmp(cheat_text[i], buf + 0x20 - n) == 0) {   /* 0:0x4c28 */
+        if (strcmp(cheat_text[i], buf + 0x20 - n) == 0) {   /* 0:0x4c28 */
             cheat_state[i] = !cheat_state[i];      /* 0x0505 + i*2 */
             sound_play_guarded(0xd, 1);
 

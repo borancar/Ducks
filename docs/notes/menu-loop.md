@@ -345,3 +345,56 @@ reading the disassembly the captures pointed at:
 - The ending gate at 0x1390d is two nested tests, not one `&&`. Episode 0 gets
   the cutscenes; **every** episode that passes the gate gets `menu = &main_menu`
   (0x13999), `high_score_screen` and `menus_after_game`.
+
+## The cheat words are CAPITALS, and the emulator could not type one
+
+**2026-08-08.** Reported as "I tried entering the cheatcode in native.py but it
+doesn't do anything". Three separate things, found in that order.
+
+**The words, out of a live guest.** `cheat_text` is a 0xfe string table, ten
+entries, read through `[0x519]`:
+
+```
+cheat_state[0] BUSHKANGAROO      [5] COLOURMAP
+           [1] THECROWDSAYBO     [6] NODNOL
+           [2] NOSCHOOLCUSTARD   [7] INGLESHFELDOR
+           [3] ONLYFOREVER       [8] PLAYBACKTIME
+           [4] KEYCODE           [9] YOUINTSEENME
+```
+
+They are typed at a **menu**, not during play: `typed_push` has exactly one
+caller, the `default:` arm of `run_screen`'s key switch.
+
+**The compare is case-sensitive.** `0:0x4c28` is `repe cmpsb` and nothing else -
+no case folding - and `0:0x4215`, which `load_eggs_ini` uses for `[EGGS]`, is the
+same routine emitted twice. Both are `strcmp`. The port had `strcasecmp` in both
+places, so it accepted lowercase where the original does not.
+
+Shown rather than argued. Feeding "colourmap" into the guest at the main menu:
+
+```
+typed_push called 9 time(s), with: colourmap
+strcasecmp('COLOURMAP', 'colourmap')     <- reached, and returns non-zero
+cheat_state: [0,0,0,0,0,0,0,0,0,0]
+```
+
+and the same run with capitals ends `[0,0,0,0,0,1,0,0,0,0]`.
+
+**The emulator could not type a capital at all.** `emulation.KEYMAP` holds one
+ASCII per key and it is `ord(k)` with `k` lowercase, and the KEYDOWN handler read
+modifiers only for its own Ctrl+Alt ungrab. So no shifted character had ever
+reached the guest, and the only two things the game reads ASCII for - the cheat
+words and the name on the high-score table - were both unreachable in capitals.
+
+Fixed by preferring pygame's `ev.unicode`, which already has shift, caps lock and
+the layout applied, and keeping the table's scancode because that is what
+`last_scancode` and the button map read. `emulation.shift_ascii` falls back to
+the table for anything that is not a single printable ASCII character, so dead
+keys and non-ASCII layouts push nothing new. The control socket takes a single
+capital as a shifted press for the same reason - `press C` used to fail, since
+pygame has no key named "C".
+
+**Why nothing caught this.** Cheats are the only case-sensitive compare in the
+game, and no test types anything: `test_leaves` and `test_entity` call routines
+directly, and the demos drive themselves from the recorded tables rather than
+from the keyboard.

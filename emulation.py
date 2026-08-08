@@ -69,6 +69,22 @@ KEYMAP[pygame.K_0] = (0x0B, ord("0"))
 for i in range(1, 11):
     KEYMAP[getattr(pygame, f"K_F{i}")] = (0x3A + i - 1, 0x00)
 
+def shift_ascii(mapped, text):
+    """(scancode, ascii) with the ASCII replaced by what was actually typed.
+
+    KEYMAP holds one ASCII per key and it is the unshifted one, so on its own the
+    machine can only ever type lowercase. `text` is pygame's ev.unicode - the
+    character the layout produced, with shift and caps lock already applied - and
+    it wins whenever it is a single printable ASCII character. Anything else
+    (dead keys, an empty string for the arrows, a non-ASCII layout) leaves the
+    table's value alone rather than pushing something the guest cannot represent.
+    """
+    sc, asc = mapped
+    if text and len(text) == 1 and 0x20 <= ord(text) < 0x7F:
+        return (sc, ord(text))
+    return mapped
+
+
 TRACE_TEXT = False          # set by --text-trace
 WATCH_DGROUP = []           # set by --watch-dgroup
 

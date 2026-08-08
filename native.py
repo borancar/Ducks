@@ -5833,7 +5833,9 @@ class Control:
     Key names are pygame's - `down`, `escape`, `return`, `a` - which avoids a
     second name-to-scancode table: the name resolves to a pygame key and
     emulation.KEYMAP, the same table the window's own event loop uses, turns
-    that into the scancode and ASCII pair the guest reads.
+    that into the scancode and ASCII pair the guest reads. A single capital
+    letter means a shifted press of that key, which is the only way to type the
+    cheat words - their compare at 0:0x4c28 is case-sensitive.
 
     The listener thread never touches the machine. It queues the command and
     waits for the answer, and `service()` applies it from the emulator thread at
@@ -6359,11 +6361,16 @@ class Control:
         return "\n".join(out)
 
     def _press(self, m, name, hold):
-        code = pygame.key.key_code(name)
+        # A single capital letter is a shifted press, not a key name: pygame has
+        # no key called "C". Everything else resolves as a pygame key name.
+        shifted = len(name) == 1 and name.isupper()
+        code = pygame.key.key_code(name.lower() if shifted else name)
         mapped = emulation.KEYMAP.get(code)
         if mapped is None:
             raise ValueError(f"{name!r} is not a key this machine reads")
         sc, _asc = mapped
+        if shifted:
+            mapped = emulation.shift_ascii(mapped, name)
         m.key_buf.append(mapped)
         m.last_scancode = sc
         self.releases.append((sc, getattr(m, "frames", 0) + max(1, hold)))
@@ -6594,7 +6601,12 @@ def main():
                 else:
                     mapped = emulation.KEYMAP.get(ev.key)
                     if mapped:
-                        m.key_buf.append(mapped)
+                        # ev.unicode already has shift, caps lock and the layout
+                        # applied; the scancode still comes from the table,
+                        # because that is what last_scancode and the button map
+                        # read. Without this no capital could ever be typed, and
+                        # the cheat words are compared case-sensitively.
+                        m.key_buf.append(emulation.shift_ascii(mapped, ev.unicode))
                         m.last_scancode = mapped[0]
             elif ev.type == pygame.KEYUP:
                 mapped = emulation.KEYMAP.get(ev.key)
