@@ -412,3 +412,36 @@ pygame has no key named "C".
 game, and no test types anything: `test_leaves` and `test_entity` call routines
 directly, and the demos drive themselves from the recorded tables rather than
 from the keyboard.
+
+### And the SDL port could not type one either (same day, my regression)
+
+Correcting the compare to `strcmp` broke every cheat in the port, because
+`sdl_io.c` had the same limit `emulation.py` did and I only fixed the emulator:
+
+```c
+else if (e.key.key < 0x80)   key_push((int16_t) e.key.key);
+```
+
+`e.key.key` is the **unshifted** keycode - `SDLK_a` is `'a'` whatever shift is
+doing - so the port could only ever produce lowercase. Case-insensitive matching
+had been hiding it.
+
+It was hiding more than the cheats. The high-score name entry accepts only
+`ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ,.!'-?/:` - every letter uppercase - so a
+name could never be typed at all, and `#`, which finishes a level under
+BUSHKANGAROO, is shift+3 and was unreachable.
+
+The fix is `SDL_GetKeyFromScancode(e.key.scancode, e.key.mod, false)`, and the
+`false` is the whole point: that parameter is `key_event`, and **true** means
+"the keycode a key event carries", which for a letter is the unshifted one. The
+first attempt passed `true` because it reads as the right thing, and it changed
+nothing:
+
+```
+key_event=True  mod=shift  -> colourmap3
+key_event=False mod=shift  -> COLOURMAP#      <- shift+3 is '#'
+key_event=False mod=caps   -> COLOURMAP3      <- caps leaves digits alone
+```
+
+That table is why this is worth a note: the wrong flag compiles, runs, and looks
+correct in the source. Only running it says which one applies the modifiers.
