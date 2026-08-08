@@ -2044,19 +2044,50 @@ is 1, then 2, then 3 rather than staying at 1.
   `d+0x16f5` in the image was listed, and the two arms of `tool_use` left after
   the bomb and the bridges both *build* terrain.
 
-### What to look at next
+### One fault found in that loop: a do-while read as a for
 
-The fall-and-climb probe at `0x081f2` that decides where a carrier comes to rest.
-Read against the port it matches line for line - the probe row is
-`d + e->y` as a 16-bit add, the column `e->x + facing`, largest fall first then a
-climb of up to five, first clear column wins - so whatever is wrong is not in the
-shape of that loop. The candidates left are what it is given: `speed`
-(`(int8_t) e->f15 >> 1` at `0x0810f`), `depth`, and `terrain_at` standing in for
-the original's unchecked `backdrop.rows[y][x]`, which answers differently out of
-range - see [open-image-margins](open-image-margins.md).
+`entity_update`'s clear-column check at `0x0824a` is a **do-while**, and the port
+had it as a `for`:
 
-A one-entity, many-frame comparison is what would settle it: put one carrier on
-one level in both, step it, and diff its x, y, f15 and f21 every frame until they
-part. That is the frame runner
-[open-frame-comparison](open-frame-comparison.md) has wanted all along, on the
-smallest state that shows the effect.
+```
+0824a: probe rows[y + si][x + facing], AND the answer into `clear`
+08281  dec si
+08282  or  si, si
+08284  jge 0x824a          <- the test is AFTER the body
+```
+
+The body always runs once, with `si = d - 1`. A `for (i = d - 1; i >= 0; i--)`
+tests first, so for every **d <= 0** - every rising or level step - it probes
+nothing at all, where the original always probes the row at `y + d - 1`, one past
+where the entity is going.
+
+That is a rising entity going one row further than it should before anything
+stops it, which is the balloon's symptom exactly. Fixed. No snapshot in
+`test_entity` changed as a result, which is the same blind spot the `sar` bug
+had: none of the captured states has an entity in the air on a step that reaches
+this arm.
+
+**Whether it is the whole of the balloon's one row is not established** - that
+needs demo 5 driven under both again.
+
+### And a second fault in the same routine, still open
+
+`test_entity snapshots/snap003.snap` fails, and did before the fix as well as
+after - 13 fields over 176, all in the walk, all the same shape:
+
+```
+walk: button 1 at (320,96) entity 1 type 0x01  y:   port 106  guest 104
+walk: button 1 at (320,96) entity 1 type 0x01  f15: port 1    guest 252
+walk: button 1 at (320,96) entity 1 type 0x01  f21: port 1    guest 0
+```
+
+The guest leaves the entity two rows higher with `f15 = -4` and `f21` untouched;
+the port moves it two rows DOWN, increments `f21` and leaves `f15` at its
+starting value - so the port took a positive `d` where the original took a
+negative one, or took one where the original took none.
+
+**This is the case to work on next, and it is a much better one than a demo**: it
+is one call deep, reproducible in seconds, and `test_entity` already does the
+marshalling that every hand-rolled probe in this repo has got wrong. Two other
+snapshots - `snap012` and `level80-late` - are clean on the same test, so
+whatever it is needs the state `snap003` has and they do not.
