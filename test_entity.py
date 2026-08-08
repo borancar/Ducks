@@ -254,7 +254,7 @@ def main():
 
     # ---------------------------------------------------------------- events
     #
-    # level_event is the click handler, and what a demo's table fires. Its effects
+    # tool_click_at is the click handler, and what a demo's table fires. Its effects
     # are all over DGROUP - a scene gains an entity, a type changes, the score
     # moves - so the comparison watches the three scenes it touches and the
     # scalars, rather than one entity.
@@ -264,10 +264,10 @@ def main():
     tools = ctypes.POINTER(ctypes.c_int16).in_dll(lib, "tool_list")
     n_tools = ctypes.c_uint8.in_dll(lib, "tool_count").value
     # Same guard as above, for the same reason: on a between-levels snapshot the
-    # scenes hold freed memory, and level_event walking it reported three
+    # scenes hold freed memory, and tool_click_at walking it reported three
     # differences on level2-bonus that were the state's, not the port's.
     if not state_live:
-        print("  the guest is not in a level - level_event skipped")
+        print("  the guest is not in a level - tool_click_at skipped")
     for t in range(max(1, n_tools) if state_live else 0):
         tool = tools[t] if n_tools else 0
         for (px, py) in ((40, 60), (80, 100), (160, 120), (200, 40)):
@@ -276,7 +276,7 @@ def main():
             m.uc.mem_write(g + 0x1786, struct.pack("<h", tool))
             ctypes.c_int16.in_dll(lib, "tool_type").value = tool
             # The port has a freshly loaded level and the guest a played one, so
-            # anything level_event only *adds to* has to start equal - comparing a
+            # anything tool_click_at only *adds to* has to start equal - comparing a
             # score of 0 against one with 2368 banked says nothing about the code.
             for off, nm in ((0x2036, "score"), (0x2007, "duck_count"),
                             (0x2005, "eaten_countdown"), (0x1FDA, "g_1fda"),
@@ -291,7 +291,7 @@ def main():
                         cap, cnt, flag, k6 = struct.unpack("<4h", b[si*12:si*12+8])
                         scenes[si].capacity, scenes[si].count = cap, cnt
                         scenes[si].flag, scenes[si].keep_order = flag, k6
-            lib.level_event(ctypes.c_int16(px), ctypes.c_int16(py))
+            lib.tool_click_at(ctypes.c_int16(px), ctypes.c_int16(py))
             ours = [(scenes[si].count, scenes[si].flag) for si in range(6)]
             ours_score = ctypes.c_int16.in_dll(lib, "score").value
 
@@ -320,7 +320,7 @@ def main():
                     print(f"  tool {tool:#04x} at ({px},{py}) score: "
                           f"port {ours_score} guest {theirs_score}")
 
-    print(f"level_event: {ev_checked} checks over {max(1, n_tools) * 4} cases, "
+    print(f"tool_click_at: {ev_checked} checks over {max(1, n_tools) * 4} cases, "
           f"{ev_differ} differ, {ev_changed} changed something")
 
     # ----------------------------------------------------- the chain and the walk

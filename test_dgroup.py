@@ -76,7 +76,7 @@ NAMED = re.compile(r"\b(?:g|buf|f)_([0-9a-f]{3,4})\b")
 
 
 # A whole definition line and nothing else: a type, some names, a semicolon. Only
-# these are searched for name-carried offsets, so a *use* of g_21a3 in an
+# these are searched for name-carried offsets, so a *use* of level_completed in an
 # expression is not mistaken for a declaration of it.
 MULTI = re.compile(r"^(?P<type>[A-Za-z_][A-Za-z0-9_]*)\s+(?P<rest>[^;{}()=]*);")
 

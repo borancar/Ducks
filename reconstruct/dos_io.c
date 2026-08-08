@@ -423,7 +423,7 @@ static void fade_frame(int16_t arg)
     }
 
     /* Then the lightning. It is gated on blink_enable ([0x2157]), which run_level
-     * sets from level_flags[0] - and level 55 is a level that has it, so this DOES
+     * sets from LEVEL_LIGHTNING - level 55 is such a level, so this DOES
      * run in play. The note here used to say no play-through had ever reached it,
      * on the strength of the flag being zero everywhere anyone had looked. */
     if (!blink_enable || fade_level == 0)
@@ -660,7 +660,7 @@ void far compose_layer(void)
  * had never executed until level 80: the background warp the v1.2 changelog
  * mentions.
  *
- * When level_flags[2] is set, each row's x displacement comes from the 32-entry
+ * When LEVEL_WARP is set, each row's x displacement comes from the 32-entry
  * table at warp_table, starting at warp_phase and stepped by warp_step per row -
  * and the phase is re-masked to 0x1f **every row**, so it is not an arithmetic
  * progression and cannot be flattened to `table[(phase + row * step) & 0x1f]`.
@@ -672,7 +672,7 @@ void far compose_scroll(int16_t sx, int16_t sy)
     for (row = 0; row < screen_height; row++) {
         int16_t dx = sx;
 
-        if (level_flags[2]) {                 /* [0x2022] */
+        if (level_flags[LEVEL_WARP]) {                 /* [0x2022] */
             dx += warp_table[phase & 0x1f];
             phase = (phase + warp_step) & 0x1f;   /* re-masked every row */
         }
@@ -826,10 +826,10 @@ int16_t far mouse_init(void)
     mouse_motion(&dx, &dy);                /* 0x06810 - drop queued movement */
 
     button_a_down = 0;                     /* 0x18df */
-    g_18e1 = 0;
-    g_18e3 = 0;
+    tool_apply_button = 0;
+    tool_cycle_button = 0;
     button_b_down = 0;                     /* 0x18e7 */
-    g_18e5 = 0;
+    any_click = 0;
 
     mouse_presses(0);                      /* 0x06837 - drained, not read */
     mouse_presses(1);
