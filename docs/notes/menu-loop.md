@@ -355,12 +355,26 @@ doesn't do anything". Three separate things, found in that order.
 entries, read through `[0x519]`:
 
 ```
-cheat_state[0] BUSHKANGAROO      [5] COLOURMAP
-           [1] THECROWDSAYBO     [6] NODNOL
-           [2] NOSCHOOLCUSTARD   [7] INGLESHFELDOR
-           [3] ONLYFOREVER       [8] PLAYBACKTIME
-           [4] KEYCODE           [9] YOUINTSEENME
+[0] BUSHKANGAROO     '#' finishes the level outright                    0x0d012
+[1] THECROWDSAYBO    the level picker, and the level-select key         0x1104b
+[2] NOSCHOOLCUSTARD  ducks do not die; cleared for a demo               0x07900
+[3] ONLYFOREVER      a lost attempt costs no life                       0x139b8
+[4] KEYCODE          nothing - written by typed_push and read NOWHERE
+[5] COLOURMAP        P draws the 256-colour chart                       0x0cfef
+[6] NODNOL           LEFT HANDED: which side the tool is drawn          0x0acb7
+[7] INGLESHFELDOR    the play log, which the port does not write        0x1148e
+[8] PLAYBACKTIME     the demo picker                                    0x0cadf
+[9] YOUINTSEENME     places the 0x4d objects level_load would skip      0x08bdb
 ```
+
+`[4]` is dead in the shipped build: every direct encoding that could reference
+`d+0x050d` was searched for across the image and there is none, and the only
+indexed accesses to `[bx + 0x505]` are the four inside `typed_push` itself. So
+KEYCODE toggles a flag, flashes the border, and nothing looks at it again.
+
+`[7]` copies itself into `play_log` (`[0x51d]`), which gates a per-level file at
+0x1149e and an fprintf on every tool use at 0x0d0db. Both are TODOs in `game.c`,
+so the cheat sets the flag here and produces no log.
 
 They are typed at a **menu**, not during play: `typed_push` has exactly one
 caller, the `default:` arm of `run_screen`'s key switch.
