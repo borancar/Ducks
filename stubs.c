@@ -30,15 +30,6 @@
 /* ------------------------------------------------------------- the eggs */
 
 void far *egg_stream;
-void far *current_buffer;
-
-/* 0x0b9ea. Eighteen bytes in the original: it stores the far pointer at [0x1721]
- * and returns. Real, because resource_load writes the palette through it. */
-void far set_buffer(void far *p)          { current_buffer = p; }
-
-/* main runs before anything publishes a buffer, and show_splash writes its
- * sprite set's palette through whatever is current, so start on the fallback. */
-void far buffer_init(void)                { current_buffer = default_buffer; }
 
 /* ------------------------------------------------------------- the sound */
 

@@ -101,6 +101,18 @@ viewport_t viewport_screen;      /* ds:0x1769 - the centred 320x200 window */
  * falls back to when nobody has published a buffer of their own. 768 bytes,
  * which is what palette_build reads out of it. */
 uint8_t    default_buffer[768];
+/* ds:0x1721, and it starts out pointing at the buffer above. That is not a
+ * convenience of the port: the image holds `f1 13 95 18` at d+0x1721 with a
+ * relocation entry on the segment half, so the linker emitted a far pointer to
+ * DGROUP:0x13f1 and no code ever has to publish the fallback. set_buffer at
+ * 0x0b9ea is the only store to it in the whole image; every other reference is
+ * `les bx, [0x1721]`.
+ *
+ * The port used to zero it and call a made-up buffer_init from main, because a
+ * bare declaration made show_splash write a palette through a null pointer
+ * before anything had published one. There was never a gap to fill - only an
+ * initialiser that had been dropped. See open-dgroup-initialisers. */
+void far  *current_buffer = default_buffer;
 /* Written by set_mode_x, set_plane and page_flip, all of which are in dos_io.c,
  * so that is where these are defined. Declared here because game.c reads them:
  * show_splash centres its rect with screen_x0, particles plots through `plot`. */
@@ -1424,6 +1436,19 @@ void far palette_build(void)
 
         palette_stored[i] = (uint8_t) (v > 255 ? 255 : v);
     }
+}
+
+/* ------------------------------------------------------- 0x0b9ea: set_buffer
+ *
+ * Eighteen bytes, and the whole of it: store the far argument at [0x1721] and
+ * return. Real code rather than an accessor invented here - resource_load and
+ * sprite_set_load write the palettes they read straight through it, and the
+ * screens publish a stack buffer of their own so that those writes land there
+ * instead of in default_buffer.
+ */
+void far set_buffer(void far *p)
+{
+    current_buffer = p;                            /* 0x0b9f3, 0x0b9f6 */
 }
 
 /* ------------------------------------------- 0x0b9fc: show_attract_screen
@@ -4909,7 +4934,6 @@ void far init(void)
          * through them, so the first level with a tool crashed. */
         alloc_image(message_image[i], 0, 0, 0, 1);
     }
-    buffer_init();                                 /* bring-up: see stubs.c */
     /* 0x142bb. The board starts full: ten rows of TIM FURNISH, 10000 down to
      * 1000. This runs before the file is read, so a settings.dat replaces it and
      * a machine without one still has a hall of fame to show. */
