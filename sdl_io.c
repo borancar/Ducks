@@ -151,6 +151,70 @@ void far install_int23(void far *h)
     signal(SIGINT, on_sigint);
 }
 
+/* 0:0x1e94 - the runtime's textcolor(), and read rather than guessed at:
+ *
+ *     mov al, [0x307a]     ; the current attribute byte
+ *     and al, 0x70         ; keep the background
+ *     mov dl, [bp+6]
+ *     and dl, 0x8f         ; foreground in the low nibble, BLINK in bit 7
+ *     or  al, dl
+ *     mov [0x307a], al
+ *
+ * so the argument is a foreground plus a blink bit, not a whole attribute - the
+ * companion at 0:0x1ea9 is textbackground() and shifts its argument up by four.
+ * The game passes 7, 14 and 15, and one site passes 0x8f: at 0x14351, an
+ * unregistered copy prints its banner in blinking white where a registered one
+ * uses plain white. Bit 7 is handled here for that site's sake even though the
+ * banner block it belongs to is not transcribed yet.
+ *
+ * The mapping to ANSI is a bit swap and nothing more. DOS packs the foreground
+ * as intensity-red-green-blue, ANSI as blue-green-red, so 1 (blue) becomes 4 and
+ * 4 (red) becomes 1 while 2, 3, 5 and 6 stay put; intensity picks 90..97 over
+ * 30..37 rather than turning on bold, which would also brighten a blink.
+ *
+ * Each call starts from a reset so that dropping the blink bit actually drops
+ * it, and the first call arranges for a reset at exit - the original leaves the
+ * DOS console in whatever colour it finished on, which is a fair thing to do to
+ * a 25x80 text screen and not a fair thing to do to somebody's terminal.
+ *
+ * Only when stdout is a terminal: the startup banners are ordinary output and
+ * `ducks > log` should get the text, not the escapes. Windows does nothing at
+ * all - a console there needs ENABLE_VIRTUAL_TERMINAL_PROCESSING turned on
+ * first, and that is a real piece of work rather than a one-liner.
+ */
+#ifndef _WIN32
+#include <unistd.h>
+
+static void text_colour_reset(void)
+{
+    fputs("\033[0m", stdout);
+    fflush(stdout);
+}
+#endif
+
+void far set_text_colour(int16_t c)
+{
+#ifdef _WIN32
+    (void) c;
+#else
+    static const char ansi[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };   /* the bit swap */
+    static int registered;
+    int fg = c & 0x0f;
+
+    /* STDOUT_FILENO rather than fileno(stdout): the build is -std=c99, which
+     * hides the POSIX half of stdio.h but not unistd.h's own constants. */
+    if (!isatty(STDOUT_FILENO))
+        return;
+    if (!registered) {
+        registered = 1;
+        atexit(text_colour_reset);
+    }
+    printf("\033[0%s;%dm", (c & 0x80) ? ";5" : "",
+           (fg & 8 ? 90 : 30) + ansi[fg & 7]);
+    fflush(stdout);
+#endif
+}
+
 /* ------------------------------------------------------------ private state */
 
 #define SCALE_DEFAULT 3          /* the window is this many times the mode */

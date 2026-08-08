@@ -755,6 +755,26 @@ void far install_int23(void far *h)
     break_handler = (int16_t (far *)(void)) h;   /* d+0x3da2 */
 }
 
+/* 0:0x1e94 - the runtime's textcolor(): keep the background out of the current
+ * attribute byte at 0:0x307a, and OR in the argument masked with 0x8f, which is
+ * a foreground in the low nibble and BLINK in bit 7.
+ *
+ *     mov al, [0x307a] / and al, 0x70 / mov dl, [bp+6] / and dl, 0x8f
+ *     or  al, dl       / mov [0x307a], al
+ *
+ * TODO: on real DOS the attribute has to reach the writes as well - the runtime
+ * keeps it at 0:0x307a and its own cprintf reads it there, and neither that nor
+ * the console write it feeds has been read out. Holding it here means the colour
+ * is remembered and not yet used, which is at least the same amount of nothing
+ * the port did before, and visibly so. */
+uint8_t text_attribute;   /* 0x307a - the runtime's own byte, but in DGROUP with
+                           * everything else, and zero in the image */
+
+void far set_text_colour(int16_t c)
+{
+    text_attribute = (uint8_t) ((text_attribute & 0x70) | (c & 0x8f));
+}
+
 /* ------------------------------------------------------ 0x067e6: mouse_init
  *
  * INT 33h AX=0 - reset the driver - and its answer is the game's only hardware

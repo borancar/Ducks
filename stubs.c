@@ -7,9 +7,8 @@
  * to-do list.
  *
  * Every routine in the game's own module is now written, so what is left here is
- * three things and no more: two routines behind a cheat or a settings toggle
- * that a demo cannot reach, and one runtime call the port has nothing to do
- * with. Nothing below is on the gameplay path.
+ * two routines and no more, each behind a cheat or a settings toggle that a demo
+ * cannot reach. Nothing below is on the gameplay path.
  *
  * The file also used to hold real data - the two palette arrays, current_buffer,
  * egg_stream - left over from bring-up. Data that belongs to a module belongs in
@@ -20,13 +19,6 @@
 #include <stdio.h>
 
 #include "dos.h"
-
-/* 0:0x1e94, and outside the game's own segment: the runtime's text attribute,
- * set before the startup banners and the episode index. The port prints those to
- * a host terminal that colours itself, so there is no attribute to set - this is
- * a stub in the sense that it will stay one, not one waiting to be read. */
-void far set_text_colour(int16_t c)       { (void) c; }
-
 
 /* ------------------------------------------ stubbed because nothing reaches them
  *
