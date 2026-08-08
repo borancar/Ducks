@@ -61,7 +61,11 @@ checked against the binary, and where a name or a type is a guess it says so.
 it; `dos_io.c` is the original reconstructed - VGA ports, Mode X planes, INT 33h -
 and `sdl_io.c` is the same interface on SDL3. The game cannot tell which one it is
 linked against, which is the test of whether the split was drawn in the right
-place. Link `dos_io.c` instead of `sdl_io.c` and the same game talks to a VGA.
+place.
+
+`dos_io.c` is a record rather than a second build: reimplementing the DOS side is
+not the aim, so it holds what we know about the original's hardware layer - the
+Mode X planes, the DAC, the CRTC, INT 33h - and the Makefile does not compile it.
 
 **Written as C99, not as period C.** The aim is a port that builds and runs, so a
 construct is written the clearest modern way that matches the instructions. It is

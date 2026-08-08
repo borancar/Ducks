@@ -159,8 +159,12 @@ because until level 80 it had never run.
 - **`extern` is a claim about where something is defined, so make it only when it
   is true.** The globals are defined in `game.c`, which the write-scan settled -
   nothing outside the game's own segment assigns to any of them - so `game.c`
-  declares them plainly and `dos_io.c` declares them `extern`. They were `extern`
-  in `game.c` for one commit, purely because that made a fragment look compilable.
+  declares them plainly and everything else takes them from `game.h`. They were
+  `extern` in `game.c` for one commit, purely because that made a fragment look
+  compilable. `dos_io.c` kept its own hand-written copy of those declarations until
+  2026-08-08, which is how five of them drifted into aliases for offsets the rest
+  of the port already had names for - `fg_rows` for `backdrop`, `layer_width` for
+  `screen_width`, `dest_row` for `page_back`. One header, one name per offset.
 - **A type invented to make two of our own signatures agree is the same mistake.**
   `blit_rows` was given a `rect_t` and the screen players a `viewport_t`, so a
   `screen_rect()` converter appeared between them - a function the original does
