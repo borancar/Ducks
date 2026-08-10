@@ -501,8 +501,8 @@ def main():
     # It is worth having now rather than later: the frame calls it, so a duck
     # walking into anything at all goes through this code.
     SCALARS = [(0x2036, "score"), (0x2007, "duck_count"), (0x2013, "quota_left"),
-               (0x1FF6, "combo_hi"), (0x1FF8, "combo_lo"), (0x1FF2, "g_1ff2"),
-               (0x1FF4, "g_1ff4"), (0x2005, "eaten_countdown")]
+               (0x1FF6, "combo_hi"), (0x1FF8, "combo_lo"), (0x1FF2, "teleport_to_x"),
+               (0x1FF4, "teleport_to_y"), (0x2005, "eaten_countdown")]
     co_checked = co_differ = co_changed = 0
     if mirrored and scene_live(2) and scenes[2].count == \
             struct.unpack("<h", m.read(g + 0x0D63 + 2 * 12 + 2, 2))[0]:
