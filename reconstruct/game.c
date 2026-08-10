@@ -167,7 +167,11 @@ episode_t  far *readme_index;    /* 0x20be */
 int16_t         readme_count;    /* 0x20c4 */
 episode_t  far *demo_index;      /* 0x20ca */
 uint8_t         current_egg;     /* 0x20b8 - which egg the episodes come from */
-uint8_t         g_210b;          /* 0x210b - the chosen egg's format version */
+uint8_t         current_egg_version;
+                                 /* 0x210b - the chosen egg's format version,
+                                  * written once at 0x13be9 and read nowhere in
+                                  * the image; see the store for how that was
+                                  * established */
 
 /* progress and the shareware gate */
 int16_t    level_attempted;      /* 0x2032 - the level about to be played. A
@@ -3866,9 +3870,17 @@ void far load_animations(void)
     }
     egg_block_end();
 
-    /* 0x13bcf. The chosen egg's format version, kept where the register screen
-     * can find it. */
-    g_210b = egg_files[current_egg].version;
+    /* 0x13bcf. The chosen egg's format version - and NOTHING READS IT. An
+     * earlier note here said the register screen did, which was a guess that
+     * read like a fact. The whole image touches 0x210b exactly once, at
+     * 0x13be9, and that is this store: `mov byte [0x210b], al`. Its address is
+     * never taken either - the two bytes 0b 21 appear nowhere else in the code
+     * - so it cannot be reached through a pointer, and no indexed base is close
+     * enough below it to cover it. Dead the same way the KEYCODE cheat is.
+     *
+     * Kept because the store is real and the write is what the original does;
+     * a variable is not deleted here for having no readers. */
+    current_egg_version = egg_files[current_egg].version;
 
     /* Each egg's kind, out of its 'Z' block. An egg without one is kind 1. */
     for (i = 0; i < egg_file_count; i++) {
