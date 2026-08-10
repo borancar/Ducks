@@ -627,7 +627,7 @@ void far kill_all_ducks(void);
 extern int16_t score, quota_left, combo_hi, combo_lo;
 extern int16_t lives;                    /* 0x2034 */
 extern int32_t mouse_x, mouse_y;         /* 0x18d3, 0x18d7 */
-extern int16_t g_1ff2, g_1ff4, eaten_countdown;
+extern int16_t teleport_to_x, teleport_to_y, eaten_countdown;
 extern uint8_t anim_a[111];
 void far collide_scenes(void);
 
@@ -685,6 +685,52 @@ extern solid_t far *solids;              /* 0x202d */
 #define SCREEN_SIZE_X 320
 #define SCREEN_SIZE_Y 200
 
+/* Two entity types that are a duck's state rather than an object, so they carry
+ * no tool name and no level ever lists them. They are the two halves of one
+ * move, and the animation records say so: 0x20 is sprites 103,104,105,106 with
+ * next_type 0x21, and 0x21 is 111,110,109,108,103 - the same sequence run
+ * backwards onto the ordinary duck sprite - with next_type 1, the leader.
+ *
+ * Only when the script runs out does entity_update's 0x20 arm move the duck to
+ * teleport_to_x/y and zero its momentum, which is why the jump lands on the
+ * frame the duck has finished vanishing and not on the frame it was clicked.
+ *
+ * Both are still ducks while in flight: they are in the list at 0x085f8 that
+ * costs a duck for leaving the level. 0x21 has no arm of its own - it falls to
+ * the default and becomes the leader again. */
+#define ENTITY_TELEPORT_OUT 0x20
+#define ENTITY_TELEPORT_IN  0x21
+
+/* The tools, and these names are not ours: they are the game's own strings, out
+ * of string table 0xff - block 0x48 index 0xff - which message_post prints as
+ * "You have selected the %s". The table is indexed by anim_c[type] rather than
+ * by the type, so the mapping below is what load_animations read out of block
+ * 0x47 paired with what load_string_tables read out of 0x48.
+ *
+ * These are ENTITY types, not a namespace of their own. A tool is an entity type
+ * that a level put in tool_list, and the same value means the same object
+ * wherever it appears - the saucer the detonator destroys is a 0x13 whether it
+ * arrived from the tool or from the level. So the TOOL_ prefix says how the
+ * value is usually read here, not that it is a different kind of number, and
+ * entity types with no tool are still bare: there are 91 animation types and
+ * only these fourteen have a name.
+ *
+ * The order is the type's, which is the order they are listed in above. */
+#define TOOL_DIAGONAL_BRIDGE   0x0c   /* "Diagonal bridge" */
+#define TOOL_TELEPORT          0x0d   /* "Teleport current leader" */
+#define TOOL_BRICK             0x0e   /* "Brick" */
+#define TOOL_PICK_LEADER       0x12   /* "Pick new leader" */
+#define TOOL_SAUCER            0x13   /* "Flying saucer" */
+#define TOOL_DETONATOR         0x15   /* "Detonator" */
+#define TOOL_BOMB              0x18   /* "Bomb" */
+#define TOOL_HORIZONTAL_BRIDGE 0x19   /* "Horizontal bridge" */
+#define TOOL_STOP_SIGN         0x1d   /* "Stop sign" */
+#define TOOL_TREE              0x27   /* "Tree" */
+#define TOOL_SEAGULL           0x28   /* "Seagull" */
+#define TOOL_BALLOON           0x36   /* "Balloon" */
+#define TOOL_BDG9000           0x50   /* "BDG9000" */
+#define TOOL_EXTRA_DUCK        0x52   /* "Extra spinning duck" */
+
 enum {
     LEVEL_LIGHTNING = 0, LEVEL_SLIPPERY = 1, LEVEL_WARP = 2, LEVEL_SPARKLE = 3,
     LEVEL_RAMP_FROM_BG = 4, LEVEL_PALETTE_FROM_BG = 5, LEVEL_FAST_WARP = 6
@@ -694,7 +740,7 @@ extern uint8_t     scenery_count;        /* 0x2000 - a byte */
 extern int16_t     level_outcome;        /* 0x200d - 1 = won, and run_level
                                           * turns that into the 2 it returns */
 extern int16_t     g_1ffa, g_1ffc;       /* what a 0x4e win hands to the menu */
-extern int16_t     g_1ff2, g_1ff4;       /* the teleporter's far end */
+extern int16_t     teleport_to_x, teleport_to_y;  /* 0x1ff2, 0x1ff4 */
 extern int16_t     timer_period;         /* 0x2001 */
 extern uint8_t     next_level;           /* 0x2102 */
 extern char far   *level_text;           /* 0x200f */

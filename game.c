@@ -1298,9 +1298,9 @@ void far animate_scene(scene_t far *scene)
 
         /* 0x0a651. The teleporter's far end, which the 0x37 arm of
          * collide_scenes stashed when the duck went in. */
-        case 0x20:
-            e->x   = (int16_t) g_1ff2;
-            e->y   = (int16_t) g_1ff4;
+        case ENTITY_TELEPORT_OUT:
+            e->x   = (int16_t) teleport_to_x;
+            e->y   = (int16_t) teleport_to_y;
             e->f15 = 0;
             e->f21 = 0;
             e->f16 = 0;
@@ -5619,7 +5619,14 @@ int16_t quota_left;              /* 0x2013 - the "not enough got home" counter *
 int16_t combo_hi, combo_lo;      /* 0x1ff6, 0x1ff8 - the score bonus decays out
                                   * of these two; both are also ticked down once
                                   * a frame by run_level */
-int16_t g_1ff2, g_1ff4;          /* what type 0x37 stashes */
+int16_t teleport_to_x, teleport_to_y;   /* 0x1ff2, 0x1ff4 - where a duck in
+                                         * transit is going. Written in two
+                                         * places, read in one: the 0x37 pad
+                                         * takes them from the NEXT entity
+                                         * record, TOOL_TELEPORT takes them
+                                         * from the click, and entity_update's
+                                         * ENTITY_TELEPORT_OUT arm puts the
+                                         * duck there */
 int16_t eaten_countdown;         /* 0x2005 */
 /* 0x0d7f is scenes[2].flag - which object of scene 2 did it. scene_alloc
  * clears it to 0xff, which is how a level starts with nothing being eaten. */
@@ -5756,9 +5763,9 @@ void far collide_scenes(void)
                     break;
                 d->x    = o->x;
                 /* the NEXT record's x and y, read straight past this one */
-                g_1ff2  = (int16_t) o[1].x;
-                g_1ff4  = (int16_t) o[1].y;
-                entity_set_type(d, 0x20);
+                teleport_to_x  = (int16_t) o[1].x;
+                teleport_to_y  = (int16_t) o[1].y;
+                entity_set_type(d, ENTITY_TELEPORT_OUT);
                 sound_play_guarded(0x0a, 1);
                 break;
 
@@ -6322,29 +6329,30 @@ void far tool_click_at(int16_t x, int16_t y)
     y++;                                           /* 0x0d11a */
 
     switch (tool_type) {
-    case 0x0d:                                     /* 0x0d14b - send the leader */
+    case TOOL_TELEPORT:                            /* 0x0d14b - send the leader */
         if (!clear)
             break;
         if (scenes[0].flag != 0xff
             && scenes[0].entities[scenes[0].flag].type == 1) {
             sound_play_guarded(0x0a, 1);
-            g_1ff2 = x;                            /* where it is being sent */
-            g_1ff4 = y;
-            entity_set_type(&scenes[0].entities[scenes[0].flag], 0x20);
+            teleport_to_x = x;             /* where it is being sent */
+            teleport_to_y = y;
+            entity_set_type(&scenes[0].entities[scenes[0].flag],
+                            ENTITY_TELEPORT_OUT);
         } else {
             message_post(menu_text[74], 0);        /* 0x0d19f - no leader */
             sound_play_guarded(0x17, 1);
         }
         break;
 
-    case 0x15:                                     /* 0x0d1cc - act on what is under */
+    case TOOL_DETONATOR:                           /* 0x0d1cc - act on what is under */
         if (picked) {
             switch (picked->type) {
-            case 0x13:                             /* 0x0d1ec */
-                tool_use((int16_t) picked->x, (int16_t) picked->y, 0x18);
+            case TOOL_SAUCER:                      /* 0x0d1ec */
+                tool_use((int16_t) picked->x, (int16_t) picked->y, TOOL_BOMB);
                 entity_set_type(picked, 0);
                 break;
-            case 0x28:                             /* 0x0d217 */
+            case TOOL_SEAGULL:                     /* 0x0d217 */
                 entity_set_type(picked, 0x31);
                 particles_spawn((int16_t) picked->x, (int16_t) picked->y, 0x28);
                 sound_play_guarded(6, 3);
@@ -6358,7 +6366,7 @@ void far tool_click_at(int16_t x, int16_t y)
         g_217d = 1;
         break;
 
-    case 0x12:                                     /* 0x0d267 - choose a leader */
+    case TOOL_PICK_LEADER:                         /* 0x0d267 - choose a leader */
         if (scenes[0].flag == picked_index)
             break;                                 /* already this one */
         if (scenes[0].flag != 0xff
@@ -6377,7 +6385,7 @@ void far tool_click_at(int16_t x, int16_t y)
         }
         break;
 
-    case 0x50:                                     /* 0x0d32c - cash something in */
+    case TOOL_BDG9000:                             /* 0x0d32c - cash something in */
         if (picked && picked->type != 0x17 && picked->type != 0) {
             eaten_countdown = 0;
             entity_set_type(picked, 0x17);
@@ -6386,7 +6394,7 @@ void far tool_click_at(int16_t x, int16_t y)
         }
         break;
 
-    case 0x52:                                     /* 0x0d37a - another duck */
+    case TOOL_EXTRA_DUCK:                          /* 0x0d37a - another duck */
         if (!g_2016) {
             if (scene_add(&scenes[0], (int16_t) scenes[2].entities[0].x,
                           0x64, 0x54, 0))
@@ -6402,7 +6410,8 @@ void far tool_click_at(int16_t x, int16_t y)
             if (!clear) {
                 sound_play_guarded(0x17, 1);
             } else if (scene_add(&scenes[5], x, y, tool_type, 5)) {
-                sound_play_guarded((int16_t) ((tool_type == 0x28) + 0x23), 1);
+                sound_play_guarded((int16_t)
+                                   ((tool_type == TOOL_SEAGULL) + 0x23), 1);
             } else {
                 message_post(menu_text[75], 0);    /* 0x0d3f6 - no room */
                 sound_play_guarded(0x17, 1);
@@ -7123,8 +7132,9 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         case 6: case 7: case 8: case 9: case 0x0a:
             g_2018 = 1;                            /* 0x085f8 */
             break;
-        case 1: case 2: case 4: case 0x1c: case 0x1e: case 0x20:
-        case 0x21: case 0x33: case 0x40: case 0x41: case 0x4a:
+        case 1: case 2: case 4: case 0x1c: case 0x1e:
+        case ENTITY_TELEPORT_OUT: case ENTITY_TELEPORT_IN:
+        case 0x33: case 0x40: case 0x41: case 0x4a:
             sound_play_guarded(7, 1);              /* 0x08601 */
             duck_count--;
             break;
@@ -7261,13 +7271,13 @@ void far scene_pick_nearest(scene_t far *s, int16_t mark)
 void far level_update(void)
 {
     switch (tool_type) {                           /* 0x0d4ff */
-    case 0x12:
+    case TOOL_PICK_LEADER:
         scene_pick_nearest(&scenes[0], 1);
         break;
-    case 0x50:
+    case TOOL_BDG9000:
         scene_pick_nearest(&scenes[2], 1);
         break;
-    case 0x15:
+    case TOOL_DETONATOR:
         if (!g_1fd8 && !g_1fda) {
             if (!g_217d)
                 scene_pick_nearest(&scenes[5], 1);
@@ -7613,11 +7623,12 @@ int16_t far run_level(int16_t demo)
     /* 0x0db86. Two flags the endings test, and they differ only in what they say
      * about [0xda1]: whether the level can be finished at all without the tool
      * that would be needed. */
-    can_finish     = (!tool_list_any_flagged() && !tool_list_has(0x12)
+    can_finish     = (!tool_list_any_flagged() && !tool_list_has(TOOL_PICK_LEADER)
                       && !level_flags[LEVEL_SLIPPERY] && !scenes[5].count);
-    can_finish_alt = (scenes[5].count && !tool_list_any_flagged() && !tool_list_has(0x12)
+    can_finish_alt = (scenes[5].count && !tool_list_any_flagged()
+                      && !tool_list_has(TOOL_PICK_LEADER)
                       && !level_flags[LEVEL_SLIPPERY]);
-    if (!tool_list_has(0x12) && scenes[0].flag != 0xff)
+    if (!tool_list_has(TOOL_PICK_LEADER) && scenes[0].flag != 0xff)
         quota_left++;                              /* 0x0dbf5 */
 
     /* 0x0dbf9. The particle pool, sized from what scene 0 was allocated plus two
