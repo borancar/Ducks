@@ -6763,7 +6763,8 @@ void far tool_step(void)
 {
     if (!tool_busy || tool_falling)                         /* 0x078a9 */
         return;
-    if (tool_in_use == 0x0c || tool_in_use == 0x19)
+    if (tool_in_use == TOOL_DIAGONAL_BRIDGE
+        || tool_in_use == TOOL_HORIZONTAL_BRIDGE)
         bridge_grow();                             /* 0x078c7 */
     else
         tool_busy = 0;                                /* 0x078cc */
@@ -6776,7 +6777,7 @@ void far tool_step(void)
  * argument, which the frame passes as 1 for exactly one scene.
  *
  * It first says what is happening: the tool at [0x1fd6] and a busy flag at
- * [0x1fd8], which the frame reads to draw the cursor as 0x16 while one is in
+ * tool_busy, which the frame reads to draw ENTITY_CURSOR_INACTIVE while one is in
  * progress. Then one of four arms.
  */
 void far tool_use(int16_t x, int16_t y, int16_t tool)
@@ -6786,13 +6787,13 @@ void far tool_use(int16_t x, int16_t y, int16_t tool)
 
     switch (tool) {
     /* 0x07a74. The bomb and the balloon: leave the thing itself in scene 1 as a
-     * type 0x17, and blow the hole. The sprite the hole is cut with is
+     * ENTITY_EXPLOSION, and blow the hole. The sprite the hole is cut with is
      * anim_script[ENTITY_EXPLOSION][0] - a fixed address in the original, so it is
      * bomb's own first frame whichever of the two placed it. */
-    case 0x18:
-    case 0x36:
+    case TOOL_BOMB:
+    case TOOL_BALLOON:
         sound_play_guarded(9, 1);
-        scene_add(&scenes[1], x, y, 0x17, 0);
+        scene_add(&scenes[1], x, y, ENTITY_EXPLOSION, 0);
         blast_terrain(x, y, anim_script[ENTITY_EXPLOSION][0]);
         tool_busy = 0;
         break;
@@ -6800,9 +6801,9 @@ void far tool_use(int16_t x, int16_t y, int16_t tool)
     /* 0x07aad. The two bridges, and the only arm that stays busy across frames:
      * it puts an anchor and a moving end at [0x1fe0] and [0x1fe6], both (x, y-1),
      * which is what makes it a rubber band. */
-    case 0x0c:
-    case 0x19: {
-        int16_t diagonal = (tool == 0x0c);
+    case TOOL_DIAGONAL_BRIDGE:
+    case TOOL_HORIZONTAL_BRIDGE: {
+        int16_t diagonal = (tool == TOOL_DIAGONAL_BRIDGE);
 
         ground_check(&x, y);                       /* 0x07ab4 */
         bridge_left.x  = x;                        /* 0x1fe0 */
@@ -6821,7 +6822,7 @@ void far tool_use(int16_t x, int16_t y, int16_t tool)
     /* 0x07b12 and 0x07b61. Both stamp the tool's own first sprite into the
      * backdrop through 0x0739c - the brick, and everything with no arm of its
      * own - and differ only in which sound they make. 0x0739c is not written. */
-    case 0x0e:
+    case TOOL_BRICK:
         sound_play_guarded(0x22, 1);
         tool_busy = 0;
         stamp_sprite_into(x, y, &sprite_table.base[anim_script[tool][0]],
@@ -8759,7 +8760,7 @@ void far level_map_draw(desc_t far *dest)
     for (i = 0; i < scenes[2].count; i++) {        /* 0x0b3c0 - the scenery */
         entity_t far *e = &scenes[2].entities[i];
 
-        if (e->type >= 6 && e->type <= 0x0a)
+        if (e->type >= ENTITY_ROCKET_1 && e->type <= ENTITY_ROCKET_5)
             sprite_to_image_plain((int16_t) (e->x / 4) + x0,
                                   (int16_t) (e->y / 4) + y0,
                                   &sprite_table.base[82], dest);
@@ -8878,7 +8879,8 @@ void far level_load(void)
     int16_t  spare_ducks = 0;                /* [bp-0xb] - 0x10 once a 0x4f
                                               * has been seen, and half of that
                                               * is how many ducks are scattered */
-    int16_t  tool_slots  = 0;                /* [bp-0xc] - 0x10 for tool 0x50 */
+    int16_t  tool_slots  = 0;                /* [bp-0xc] - 0x10 for the
+                                              * BDG9000 */
     int16_t  wide_scene1 = 0;                /* [bp-0x14] - set by a 0x42 */
     int16_t  background_id;                  /* [bp-6] */
     int16_t  ambience_n;                     /* [bp-0xa] */
@@ -8915,7 +8917,7 @@ void far level_load(void)
             fatal(out_of_memory, 0);                  /* d+0x500 */
         for (i = 0; i < tool_count; i++) {
             tool_list[i] = egg_read_byte(egg_stream);
-            if (tool_list[i] == 0x50)                 /* 0x08a97 */
+            if (tool_list[i] == TOOL_BDG9000)         /* 0x08a97 */
                 tool_slots = 0x10;
         }
     } else {
