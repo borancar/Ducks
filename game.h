@@ -201,7 +201,7 @@ typedef struct entity_s {
                                  *         the type changes */
     int16_t fall;               /* +0x21 - frames spent falling, ++ once a frame
                                  *         while airborne. Over 0x32 on landing
-                                 *         kills; over 8 starts the monster's
+                                 *         kills; over 8 starts the alien's
                                  *         one-shot and bounces a head, whose new
                                  *         vy is scaled by `fall >> 2`. A spring
                                  *         and a teleport both zero it, so the
@@ -406,7 +406,7 @@ void far load_string_tables(void);
 void far cutscene_rocket_space(void);
 void far cutscene_rocket_landing(void);
 void far cutscene_doorstep(void);
-void far cutscene_night_monster(void);
+void far cutscene_night_alien(void);
 void far cutscene_welcome_home(void);
 void far cutscene_photos(void);
 void far draw_number(int16_t value, int16_t x, int16_t y, viewport_t far *clip,
@@ -501,7 +501,7 @@ void far scene_pick_nearest(scene_t far *s, int16_t mark);  /* 0x0af95 */
 void far level_update(void);                        /* 0x0d4fc */
 extern int16_t       picked_index;                  /* 0x18f3 */
 extern entity_t far *picked;                        /* 0x18ef */
-extern int16_t       g_217d;                        /* 0x217d */
+extern int16_t       skip_pick_once;                        /* 0x217d */
 int16_t far scene_add(scene_t far *s, int16_t x, int16_t y, int16_t type,
                       int16_t param);
 #define cursor_scene scenes[4]   /* 0x0d93 is scenes[4] */
@@ -686,7 +686,7 @@ void far tool_click_at(int16_t x, int16_t y);           /* 0x0d0c8 */
 void far demo_events(void);                          /* 0x0d471 */
 void far tool_selected(int16_t slot);                /* 0x0e088 */
 extern uint8_t tool_prev, tool_announce;             /* 0x1789, 0x178a */
-extern int16_t g_2100, g_dab;
+extern int16_t script_heading, flock_is_right;
 
 /* stubs.c - stubbed until run_level(1) needs them; see the note there */
 void far played_tool_events(int16_t far *fast);   /* 0x0cf07 */
@@ -790,7 +790,7 @@ extern solid_t far *solids;              /* 0x202d */
 
 /* The cursor while a MIRRORED tool is held (type_flags bit 1) - the ones that
  * go into scene 5 as a pair. It shows an arrow, and the arrow points at the
- * flock: the type is g_dab + ENTITY_ARROW_LEFT, and g_dab is `avg_x > mouse_x`,
+ * flock: the type is flock_is_right + ENTITY_ARROW_LEFT, and flock_is_right is `avg_x > mouse_x`,
  * so the flock being left of the cursor gives the left arrow. Kept as an
  * addition rather than a ternary because that is what the original computes. */
 #define ENTITY_ARROW_LEFT      0x2a
@@ -840,26 +840,33 @@ extern solid_t far *solids;              /* 0x202d */
  * never place it: the one scene_add is inside `if (has_page)` at 0x1131f. */
 #define ENTITY_INFO_SIGN     0x34
 
-/* The monster prowling: sprites 181..184, next_type itself, so it loops until
- * something else moves it on. It is the state everything else about the monster
+/* The alien prowling: sprites 181..184, next_type itself, so it loops until
+ *
+ * ALIEN, not monster, and that is the game's word rather than ours:
+ * menu_text[45] is "Alien killed! 25 bonus points!", posted at 0x08665 next to
+ * the `score += 0x19` that is those 25 points. Everything here was named for a
+ * guess until 2026-08-13; docs/notes/the-alien.md keeps its filename, since
+ * that is where the frame trace lives and links point at it.
+ *
+ * something else moves it on. It is the state everything else about the alien
  * returns to - 0x46 and 0x47, the two facings of the eleven-frame eat, both
  * have next_type 0x39, as does 0x4b.
  *
  * type_flags bit 2 is set, so its RIGHT-facing artwork is the mirror slot 0x3a
  * (sprites 226..229) and no entity is ever set to that; 181..184, this type's
- * own, are the monster facing left. cutscene_night_monster
+ * own, are the alien facing left. cutscene_night_alien
  * places one directly - scene_add(..., 0x39, 5) at 0x1016a - which is the one
- * place the monster appears outside a level. See docs/notes/the-monster.md,
+ * place the alien appears outside a level. See docs/notes/the-alien.md,
  * where the frame trace showed it entering and leaving this state. */
-#define ENTITY_MONSTER_WALKING 0x39
+#define ENTITY_ALIEN_WALKING 0x39
 
 /* The two facings of the eleven-frame eat, both with next_type back to
- * ENTITY_MONSTER_WALKING. Which one is chosen is the object's own facing:
+ * ENTITY_ALIEN_WALKING. Which one is chosen is the object's own facing:
  * 0x46 + (o->vx == 1) at 0x09e64, so vx == 1 - travelling right - gives the
  * RIGHT one. The duck is set to type 0 outright; there is no dying animation,
  * which is what makes this different from every other way a duck is lost. */
-#define ENTITY_MONSTER_EATING_LEFT  0x46
-#define ENTITY_MONSTER_EATING_RIGHT 0x47
+#define ENTITY_ALIEN_EATING_LEFT  0x46
+#define ENTITY_ALIEN_EATING_RIGHT 0x47
 
 /* The springs, two of each because a spring throws one way only. The resting
  * one is a single frame; touching it swaps it for the four-frame launch, whose
@@ -1071,11 +1078,11 @@ extern solid_t far *solids;              /* 0x202d */
 #define ENTITY_SEAGULL_FALLING 0x31
 #define ENTITY_SEAGULL_SPLAT   0x32
 
-/* The monster's one-shot after a landing harder than 8 (sound 0x18 at 0x0845e).
- * Mouth wide open, three frames, and next_type is ENTITY_MONSTER_WALKING, so it
+/* The alien's one-shot after a landing harder than 8 (sound 0x18 at 0x0845e).
+ * Mouth wide open, three frames, and next_type is ENTITY_ALIEN_WALKING, so it
  * always returns to prowling. Its right-facing artwork is the mirror slot
  * 0x4c. */
-#define ENTITY_MONSTER_LANDING 0x4b
+#define ENTITY_ALIEN_LANDING 0x4b
 
 /* The secret, and it is INVISIBLE: its only frame is sprite 37, the same 0x0
  * empty one ENTITY_NONE uses. Only the LEADER can find it - `d->type == 1` at
@@ -1098,19 +1105,19 @@ extern solid_t far *solids;              /* 0x202d */
  * materialise - and next_type carries it to 0x53. */
 #define ENTITY_EXTRA_DUCK_ARRIVING 0x54
 
-/* A monster DANCING, and its hi-fi. The pair is the joke: level 203 places the
- * hi-fi at (375,199) and the monster at (386,199), eleven pixels apart on the
+/* An alien DANCING, and its hi-fi. The pair is the joke: level 203 places the
+ * hi-fi at (375,199) and the alien at (386,199), eleven pixels apart on the
  * same ground line, and it is the only place either appears.
  *
  * The dance is the walk with the walking taken away. 0x55's script is
- * byte-identical to ENTITY_MONSTER_WALKING's - the same sprites 181..184 - and
+ * byte-identical to ENTITY_ALIEN_WALKING's - the same sprites 181..184 - and
  * all that differs is the flags: no bit 0, so entity_update's default movement
  * never applies and it stays where it is putting one foot in front of the
  * other; and no bit 2, so it never reaches the right-facing mirror slot and
  * always faces left, towards the hi-fi.
  *
  * Neither has an arm anywhere in the image, and neither needs one. */
-#define ENTITY_MONSTER_DANCING 0x55
+#define ENTITY_ALIEN_DANCING 0x55
 #define ENTITY_HIFI            0x56
 
 /* The teleporter, which is a PAIR OF RECORDS and not one entity. The arm at
@@ -1140,7 +1147,7 @@ extern solid_t far *solids;              /* 0x202d */
  *   0x09d51  a moving duck that is not the leader touches an empty one (0x1f):
  *            the duck is retired and the balloon becomes this, inheriting the
  *            duck's facing and drifting
- *   0x07d64  it moves each frame, and g_2016 set kills the passenger
+ *   0x07d64  it moves each frame, and attempt_over set kills the passenger
  *   0x08160  when it comes to a stop it "lands and hatches" - sound 1, the
  *            balloon retires, and a fresh duck of type 2 is added where it sat
  * It is in the list at 0x085f8 that costs a duck for leaving the level, which
@@ -1254,8 +1261,8 @@ extern solid_t far *solids;              /* 0x202d */
  * anim_script[type + mirror] - so the slot holds a script but no entity is ever
  * set to it. The direction is worth getting right: mirror is `vx == 1`, and
  * vx == 1 is travelling right, so the type's OWN script is the left-facing one
- * and the extra slot is the right. cutscene_night_monster settles it - it sets
- * vx = -1 with the comment "walking left" and the monster draws from 0x39's
+ * and the extra slot is the right. cutscene_night_alien settles it - it sets
+ * vx = -1 with the comment "walking left" and the alien draws from 0x39's
  * own sprites. Exactly three types do this, and nothing in the image assigns any
  * of the three companions:
  *     0x28 TOOL_SEAGULL  -> 0x29
