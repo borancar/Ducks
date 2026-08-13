@@ -473,9 +473,9 @@ void far palette_fade_step(int16_t arg)
 {
     fade_frame(arg);
 
-    if (++cursor_divider == 2) {                       /* 0x0b230 */
-        cursor_phase = (uint8_t) ((cursor_phase + 1) & 3);
-        cursor_divider = 0;
+    if (++walk_divider == 2) {                       /* 0x0b230 */
+        walk_phase = (uint8_t) ((walk_phase + 1) & 3);
+        walk_divider = 0;
     }
     bg_scroll_y = (uint8_t) ((bg_scroll_y + bg_step_y) & wrap_y);
     bg_scroll_x = (uint8_t) ((bg_scroll_x + bg_step_x) & wrap_x);
