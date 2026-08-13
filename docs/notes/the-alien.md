@@ -14,11 +14,11 @@ gives this:
 | --- | --- | --- |
 | 460–476 | type `0x46` at (107, 88) | stationary |
 | 477 | becomes `0x39` | starts moving, 107,88 → 106,88 → … → 99,94 |
-| 486 | at (98, 95), one pixel from the duck at (97, 97) | **the duck's type is set to 0** and the monster reverts to `0x46` |
+| 486 | at (98, 95), one pixel from the duck at (97, 97) | **the duck's type is set to 0** and the alien reverts to `0x46` |
 | 487 | | scene 0's count drops 2 → 1; the record is gone |
 
 It happened twice in one run. The second kill, at clock 825, emptied scene 0 —
-which is one of `run_level()`'s four endings, so **the monster can finish the
+which is one of `run_level()`'s four endings, so **the alien can finish the
 level by itself**.
 
 ## The states are data, not code
@@ -36,7 +36,7 @@ out, and a type that points at itself loops*. Read out of the snapshot:
 
 That accounts for every transition observed, and for the durations: the eat ran
 22 frames against an 11-entry script, so a script step is two frames. There is no
-"monster" routine — the behaviour is a loop type, a few one-shots, and a table
+"alien" routine — the behaviour is a loop type, a few one-shots, and a table
 saying what follows what. Whatever decides to *enter* `0x46` is elsewhere and
 still unread.
 

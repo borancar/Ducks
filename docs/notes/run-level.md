@@ -477,8 +477,8 @@ So the physics is compared, the comparison bites, and one boundary inside it is
 still unexercised. The state that would reach it is an entity walking into a
 five-pixel step, which none of these captures contains.
 
-**Seen working, 2026-08-05**: the monster prowls, turns around when it hits a
-wall, and falls under gravity - which is the whole of `the-monster.md`'s claim
+**Seen working, 2026-08-05**: the alien prowls, turns around when it hits a
+wall, and falls under gravity - which is the whole of `the-alien.md`'s claim
 demonstrated from the other side. It has no code of its own: `next_type` walks its
 type through the four states while the shared core moves it and flips its facing on
 a block, and that is all "the thing that eats ducks" is.
@@ -1704,7 +1704,7 @@ anyway, because it is the original's.
 
 ## A demo has two tables, and the frame drives both (0x0dcc9, 0x0ddbc)
 
-The attract mode ran a level with gravity and monsters in it and no player. Three
+The attract mode ran a level with gravity and aliens in it and no player. Three
 things were missing, all at the top of `run_level`'s frame, and they come apart
 cleanly:
 

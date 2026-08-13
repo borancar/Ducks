@@ -364,7 +364,7 @@ uint8_t    bounce_table[16] = { 16, 16, 17, 19, 23, 27, 29, 30,
  * and then leaves to palette_fade_step's tail to advance. game.h declares them. */
 
 /* used but not identified */
-int16_t  g_2016;                 /* 0x2016 - the attempt is over; see 0x07955 */
+int16_t  attempt_over;                 /* 0x2016 - the attempt is over; see 0x07955 */
 /* 0x0da1 is scenes[5].count: whether the level has any mirrored entities,
  * which is what the setup's two ending flags and one of the four endings
  * actually test. */
@@ -1296,11 +1296,11 @@ void far animate_scene(scene_t far *scene)
             e->vx = (int8_t) ((game_rand() & 2) - 1);
             break;
         /* The eat ends facing the way it ate, which is the other half of
-         * `ENTITY_MONSTER_EATING_LEFT + (o->vx == 1)` choosing it. */
-        case ENTITY_MONSTER_EATING_RIGHT:      /* 0x0a602 */
+         * `ENTITY_ALIEN_EATING_LEFT + (o->vx == 1)` choosing it. */
+        case ENTITY_ALIEN_EATING_RIGHT:      /* 0x0a602 */
             e->vx = 1;
             break;
-        case ENTITY_MONSTER_EATING_LEFT:       /* 0x0a61a */
+        case ENTITY_ALIEN_EATING_LEFT:       /* 0x0a61a */
             e->vx = -1;
             break;
         case ENTITY_SPARK_SWITCH_FLIPPING:     /* 0x0a632 */
@@ -3126,7 +3126,7 @@ void far cutscene_welcome_home(void)
  *
  * Flood a rectangle of an image with one byte. Only the night scene uses it, to
  * black out the ground and the two steps of the doorway in the picture it
- * inherits, so the monster has something solid to walk in front of. Half-open
+ * inherits, so the alien has something solid to walk in front of. Half-open
  * on both axes, and it walks the row pointers rather than assuming the image is
  * one block - which is why the port and the original agree here.
  */
@@ -3143,14 +3143,14 @@ static void far image_fill_rect(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
     }
 }
 
-/* ============================================== 0x100f4: cutscene_night_monster
+/* ============================================== 0x100f4: cutscene_night_alien
  *
  * The last ending. The picture is loaded with its palette at 0xf0 and the whole
  * of 0 to 0xef is set to black first, so only the sixteen colours the picture
  * brought are lit - that is the night, and it costs one loop rather than a
  * second image.
  *
- * The monster is a one-entity scene walking left from x = 0xfa, one pixel a
+ * The alien is a one-entity scene walking left from x = 0xfa, one pixel a
  * frame, and the two things that happen to it are a switch on its position:
  *
  *   x == 0xdc   it is heard   (sound 0x18)
@@ -3160,7 +3160,7 @@ static void far image_fill_rect(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
  * halves of the 32-bit x. The loop ends when fade_level reaches 0, so nothing
  * counts frames - the fade is the clock.
  */
-void far cutscene_night_monster(void)
+void far cutscene_night_alien(void)
 {
     desc_t   pic;
     scene_t  scene;
@@ -3179,15 +3179,15 @@ void far cutscene_night_monster(void)
     palette_upload();
 
     scene_alloc(&scene, 1);                        /* 0x10154 */
-    scene_add(&scene, 0xfa, 0x80, ENTITY_MONSTER_WALKING, 5);  /* 0x1016a */
+    scene_add(&scene, 0xfa, 0x80, ENTITY_ALIEN_WALKING, 5);  /* 0x1016a */
     scene.entities[0].vx = (int8_t) 0xff;         /* 0x10173 - walking left */
 
     /* 0x1019b. The ROCKET, stamped into the picture rather than drawn every
      * frame - it never moves. An earlier note here called it a doorway and
-     * explained that the monster could then be clipped by it, which was a
+     * explained that the alien could then be clipped by it, which was a
      * guess dressed as a reason: anim_script[5][0] is sprite 27, and sprite 27
      * is the rocket with its exhaust lit. It goes down at x 0xfa, the same x
-     * the monster starts from and walks left away from. */
+     * the alien starts from and walks left away from. */
     stamp_sprite_into(0xfa, 0x82,
                       &sprite_table.base[anim_script[ENTITY_ROCKET_FLYING][0]],
                       &pic);
@@ -3820,7 +3820,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                         release_sounds();
                         cutscene_photos();                      /* ids 0x3a-0x3c */
                         sound_play_loop(0x4a, ambience_volume, 0xff);
-                        cutscene_night_monster();               /* the animation */
+                        cutscene_night_alien();               /* the animation */
                         release_sounds();
                         dac_set_black(0, 0);
                         input_poll(SCREEN_SIZE_X, SCREEN_SIZE_Y);
@@ -5573,8 +5573,8 @@ void far particles_spawn(int16_t x, int16_t y, int16_t n)
  * when they do. Getting it backwards made both sides of the comparison silent
  * for the two touch-and-die hazards, ENTITY_SPIKE and ENTITY_FLAME.
  *
- * ENTITY_DUCK_CRASHING is dead. Note that this is not how the monster kills - that sets the
- * type to 0 and lets the retire pass drop the record; see docs/notes/the-monster.md.
+ * ENTITY_DUCK_CRASHING is dead. Note that this is not how the alien kills - that sets the
+ * type to 0 and lets the retire pass drop the record; see docs/notes/the-alien.md.
  */
 void far duck_dies(entity_t far *e, int16_t force, int16_t noisy)
 {
@@ -5618,9 +5618,9 @@ void far kill_all_ducks(void)
     for (i = 0; i < scenes[0].count; i++)          /* 0x0797b, [0xd65] */
         duck_dies(&scenes[0].entities[i], 1, 0);   /* 0x07974 */
 
-    if (!g_2016)                                   /* 0x07981 */
+    if (!attempt_over)                                   /* 0x07981 */
         sound_play_guarded(5, 1);
-    g_2016 = 1;                                    /* 0x07993 */
+    attempt_over = 1;                                    /* 0x07993 */
 }
 
 /* ======================================================================
@@ -5635,7 +5635,7 @@ void far kill_all_ducks(void)
  * boxes are wide and flat, which is what a duck walking into something on the
  * same row needs. Only six duck types take part, and a duck whose type is
  * already 0 is skipped - that is the retire convention, the same one the
- * monster kill relies on.
+ * alien kill relies on.
  *
  * The dispatch is two jump tables in the code segment (cs:0x56bb for 0x39..0x59
  * and cs:0x56fd for 6..0x0a) plus a chain of compares. Twenty-one of the
@@ -5768,16 +5768,16 @@ void far collide_scenes(void)
                 }
                 break;
 
-            case ENTITY_MONSTER_WALKING:
-            case ENTITY_MONSTER_LANDING:                /* 0x09e64 - eaten */
+            case ENTITY_ALIEN_WALKING:
+            case ENTITY_ALIEN_LANDING:                /* 0x09e64 - eaten */
                 if (cheat_state[2])
                     break;
                 entity_set_type(d, ENTITY_NONE);
                 duck_count--;
                 /* The same eleven-frame swallow either way; which one is the
-                 * object's facing. See the-monster.md. */
+                 * object's facing. See the-alien.md. */
                 entity_set_type(o,
-                    (int16_t) (ENTITY_MONSTER_EATING_LEFT + (o->vx == 1)));
+                    (int16_t) (ENTITY_ALIEN_EATING_LEFT + (o->vx == 1)));
                 sound_play_guarded(0x1d, 1);
                 eaten_countdown = 0x32;
                 scenes[2].flag     = di;
@@ -5971,9 +5971,12 @@ float        level_frac[4];      /* 0x13e1, 0x13e5, 0x13e9, 0x13ed */
 int16_t      level_seed;         /* 0x2039 - what run_level srand()s */
 int16_t      picked_index;       /* 0x18f3 - which entity the pointer is over */
 entity_t far *picked;            /* 0x18ef - and a pointer to it */
-int16_t      g_217d;             /* 0x217d - a once-only gate on tool 0x15 */
-int16_t      g_2100;             /* 0x2100 - what the level script last set */
-int16_t      g_dab;              /* 0x0dab - is the flock right of the cursor */
+int16_t      skip_pick_once;    /* 0x217d - set when the detonator acts and
+                                  * cleared by the very next level_update, so
+                                  * the frame after a detonation does not
+                                  * re-pick whatever is now under the pointer */
+int16_t      script_heading;             /* 0x2100 - what the level script last set */
+int16_t      flock_is_right;              /* 0x0dab - is the flock right of the cursor */
 uint8_t      too_deep_count;     /* 0x20ff - tool_use's complaint counter */
 uint8_t      tool_prev;          /* 0x1789 - the selection last frame */
 uint8_t      tool_announce;      /* 0x178a - frames of "you have got X" */
@@ -5985,7 +5988,24 @@ int16_t      level_timer;        /* 0x2003 - counts down at one per [0x2001] */
 int16_t      can_finish;         /* 0x2009 - decides one of the four endings */
 int16_t      can_finish_alt;     /* 0x200b - and another */
 int16_t      level_outcome;      /* 0x200d - what run_level returns == 2 */
-int16_t      g_2018, g_1fd8, g_1fda;
+/* 0x1fd8, 0x1fda. The two halves of "a tool is in progress", which is what the
+ * frame tests before it will accept input and what makes the cursor
+ * ENTITY_CURSOR_INACTIVE.
+ *
+ * tool_busy is tool_use's own flag: it goes up on entry and every arm that
+ * finishes within the frame puts it straight back down, so only the bridges
+ * leave it standing - and tool_step, which runs a growing bridge on, refuses to
+ * do anything unless it is set. bridge_grow then rewrites it from whether
+ * either end is still live, which is how a bridge stops.
+ *
+ * tool_falling is the other kind of unfinished: an ordinary tool dropped into
+ * scene 3 and still on its way down. While it is set the frame steps scene 3
+ * with `applying` and the camera follows it rather than the leader, and it is
+ * cleared where the falling tool lands and tool_use fires. */
+int16_t      tool_busy, tool_falling;
+int16_t      rocket_lost;        /* 0x2018 - a rocket left the level, which the
+                                  * endings report as its own reason for
+                                  * failing (0x0e04d) */
 int16_t      play_log;           /* 0x51d - the fprintf gate, cleared here and
                                   * nothing has been seen to set it */
 
@@ -6424,7 +6444,7 @@ void far tool_click_at(int16_t x, int16_t y)
             }
         }
         scenes[3].count = 0;                       /* 0x0d258 - drop the highlight */
-        g_217d = 1;
+        skip_pick_once = 1;
         break;
 
     case TOOL_PICK_LEADER:                         /* 0x0d267 - choose a leader */
@@ -6458,7 +6478,7 @@ void far tool_click_at(int16_t x, int16_t y)
         break;
 
     case TOOL_EXTRA_DUCK:                          /* 0x0d37a - another duck */
-        if (!g_2016) {
+        if (!attempt_over) {
             if (scene_add(&scenes[0], (int16_t) scenes[2].entities[0].x,
                           0x64, ENTITY_EXTRA_DUCK_ARRIVING, 0))
                 duck_count++;
@@ -6482,7 +6502,7 @@ void far tool_click_at(int16_t x, int16_t y)
         } else if (clear && tool_type != 0) {      /* 0x0d43c - an ordinary one */
             sound_play_guarded(8, 1);
             scene_add(&scenes[3], x, y, tool_type, 5);
-            g_1fda = 1;
+            tool_falling = 1;
         } else {
             sound_play_guarded(0x17, 1);
         }
@@ -6718,7 +6738,7 @@ static void bridge_grow(void)
     int16_t still_left  = bridge_step_end(&bridge_left, -1);
     int16_t still_right = bridge_step_end(&bridge_right, 1);
 
-    g_1fd8 = (bridge_left_live || bridge_right_live) ? 1 : 0;   /* 0x0771e */
+    tool_busy = (bridge_left_live || bridge_right_live) ? 1 : 0;   /* 0x0771e */
 
     if (bridge_left_live)                          /* 0x07736 */
         stamp_sprite_into(lx, ly,
@@ -6741,12 +6761,12 @@ static void bridge_grow(void)
  */
 void far tool_step(void)
 {
-    if (!g_1fd8 || g_1fda)                         /* 0x078a9 */
+    if (!tool_busy || tool_falling)                         /* 0x078a9 */
         return;
     if (tool_in_use == 0x0c || tool_in_use == 0x19)
         bridge_grow();                             /* 0x078c7 */
     else
-        g_1fd8 = 0;                                /* 0x078cc */
+        tool_busy = 0;                                /* 0x078cc */
 }
 
 /* ========================================================= 0x07a36: tool_use
@@ -6762,7 +6782,7 @@ void far tool_step(void)
 void far tool_use(int16_t x, int16_t y, int16_t tool)
 {
     tool_in_use = tool;                            /* 0x07a44 */
-    g_1fd8      = 1;
+    tool_busy      = 1;
 
     switch (tool) {
     /* 0x07a74. The bomb and the balloon: leave the thing itself in scene 1 as a
@@ -6774,7 +6794,7 @@ void far tool_use(int16_t x, int16_t y, int16_t tool)
         sound_play_guarded(9, 1);
         scene_add(&scenes[1], x, y, 0x17, 0);
         blast_terrain(x, y, anim_script[ENTITY_EXPLOSION][0]);
-        g_1fd8 = 0;
+        tool_busy = 0;
         break;
 
     /* 0x07aad. The two bridges, and the only arm that stays busy across frames:
@@ -6803,14 +6823,14 @@ void far tool_use(int16_t x, int16_t y, int16_t tool)
      * own - and differ only in which sound they make. 0x0739c is not written. */
     case 0x0e:
         sound_play_guarded(0x22, 1);
-        g_1fd8 = 0;
+        tool_busy = 0;
         stamp_sprite_into(x, y, &sprite_table.base[anim_script[tool][0]],
                           &backdrop);
         break;
 
     default:
         sound_play_guarded(0x0e, 1);
-        g_1fd8 = 0;
+        tool_busy = 0;
         stamp_sprite_into(x, y, &sprite_table.base[anim_script[tool][0]],
                           &backdrop);
         break;
@@ -6868,7 +6888,7 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         e->vy = -2;
         break;
     case ENTITY_DUCK_IN_BUBBLE:                   /* 0x07d64 */
-        if (g_2016)
+        if (attempt_over)
             duck_dies(e, 1, 0);
         step   = -1;
         active = 1;
@@ -6888,7 +6908,7 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         break;
     case 1:                                        /* 0x07dc6 - the hero */
         if (scripted) {                            /* [bp+0xc] */
-            e->vx = (int8_t) g_2100;
+            e->vx = (int8_t) script_heading;
             active = e->vx != 0;
         } else {
             /* 0x07dec. One 32-bit signed compare of x against the cursor, twice
@@ -7012,7 +7032,7 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
     default:                                       /* 0x080bb */
         if (type_flags[e->type] & 1) {
             if (e->vx == 0)
-                e->vx = (int8_t) ((g_dab << 1) - 1);
+                e->vx = (int8_t) ((flock_is_right << 1) - 1);
             active = 1;
         } else {
             active = 0;
@@ -7117,7 +7137,7 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         if (applying) {                            /* 0x0834b - [bp+0xa] */
             tool_use((int16_t) e->x, (int16_t) e->y, e->type);
             entity_set_type(e, ENTITY_NONE);
-            g_1fda = 0;
+            tool_falling = 0;
         } else {
             switch (e->type) {
             case 1: case 2: case ENTITY_DUCK_IDLE: /* 0x083d2 */
@@ -7141,10 +7161,10 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
                     e->vx = 0;
                 }
                 break;
-            case ENTITY_MONSTER_WALKING:           /* 0x0845e */
+            case ENTITY_ALIEN_WALKING:           /* 0x0845e */
                 if (e->fall > 8) {
                     sound_play_guarded(0x18, 1);
-                    entity_set_type(e, ENTITY_MONSTER_LANDING);
+                    entity_set_type(e, ENTITY_ALIEN_LANDING);
                     eaten_countdown = 0;
                 }
                 break;
@@ -7161,10 +7181,10 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
                     e->vx = 0;
                 }
                 break;
-            case ENTITY_MONSTER_LANDING:           /* 0x0845e via the table */
+            case ENTITY_ALIEN_LANDING:           /* 0x0845e via the table */
                 if (e->fall > 8) {
                     sound_play_guarded(0x18, 1);
-                    entity_set_type(e, ENTITY_MONSTER_LANDING);
+                    entity_set_type(e, ENTITY_ALIEN_LANDING);
                     eaten_countdown = 0;
                 }
                 break;
@@ -7201,7 +7221,7 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         switch (e->type) {
         case ENTITY_ROCKET_1: case ENTITY_ROCKET_2:
         case ENTITY_ROCKET_3: case ENTITY_ROCKET_4: case ENTITY_ROCKET_5:
-            g_2018 = 1;                            /* 0x085f8 */
+            rocket_lost = 1;                            /* 0x085f8 */
             break;
         case 1: case 2: case ENTITY_DUCK_IDLE:
         case ENTITY_LEADER_SOMERSAULT_RIGHT:
@@ -7222,14 +7242,14 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
             break;
         case TOOL_EXTRA_DUCK:                      /* 0x0862d */
             entity_set_type(e, ENTITY_DUCK_BALL);
-            if (!g_2016
+            if (!attempt_over
                 && !scene_add(&scenes[0], (int16_t) scenes[2].entities[0].x,
                               0x64, ENTITY_EXTRA_DUCK_ARRIVING, 0))
                 duck_count--;
             break;
-        case ENTITY_MONSTER_EATING_RIGHT: case ENTITY_MONSTER_LANDING:
-        case ENTITY_MONSTER_WALKING:
-        case ENTITY_MONSTER_EATING_LEFT:             /* 0x08665 */
+        case ENTITY_ALIEN_EATING_RIGHT: case ENTITY_ALIEN_LANDING:
+        case ENTITY_ALIEN_WALKING:
+        case ENTITY_ALIEN_EATING_LEFT:             /* 0x08665 */
             sound_play_guarded(0x19, 1);
             score += 0x19;
             message_post(menu_text[45], 0);
@@ -7240,7 +7260,7 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         }
         entity_set_type(e, ENTITY_NONE);                     /* 0x0869b */
         if (applying)
-            g_1fda = 0;
+            tool_falling = 0;
     }
 }
 
@@ -7356,10 +7376,10 @@ void far level_update(void)
         scene_pick_nearest(&scenes[2], 1);
         break;
     case TOOL_DETONATOR:
-        if (!g_1fd8 && !g_1fda) {
-            if (!g_217d)
+        if (!tool_busy && !tool_falling) {
+            if (!skip_pick_once)
                 scene_pick_nearest(&scenes[5], 1);
-            g_217d = 0;
+            skip_pick_once = 0;
         }
         break;
     default:
@@ -7689,7 +7709,7 @@ int16_t far run_level(int16_t demo)
 
     bg_scroll_reset();
     warp_step       = level_flags[LEVEL_FAST_WARP] ? 7 : 1;   /* 0x0db4c */
-    g_2016          = 0;
+    attempt_over          = 0;
     blink_toggle    = 0;
     blink_countdown = 0x28;
     level_clock     = 0;
@@ -7716,7 +7736,7 @@ int16_t far run_level(int16_t demo)
     if (!particle_array)
         particle_cap = 0;
     particle_count = 0;
-    g_1fda = g_1fd8 = level_outcome = g_2018 = 0;
+    tool_falling = tool_busy = level_outcome = rocket_lost = 0;
 
     fade_level     = 0;
     fade_direction = 1;
@@ -7740,7 +7760,7 @@ int16_t far run_level(int16_t demo)
          * when its frame number EQUALS level_clock, so a clock that never moves
          * is a demo where nothing is ever clicked. It was set to 0 in the setup
          * and incremented nowhere, which is why the attract mode showed a level
-         * with gravity and monsters in it and no player. */
+         * with gravity and aliens in it and no player. */
         if ((game_rand() & 0x7f) == 0)             /* 0x0dcce */
             ambience_random();                     /* 0x0dcd3 */
         level_clock++;                             /* 0x0dcd8, [0x201a] */
@@ -7756,16 +7776,16 @@ int16_t far run_level(int16_t demo)
          *
          * Which rain a level gets is decided by what is in it:
          *   an ENTITY_CATCHER_ROCKET first in scene 2  ducks fall to be caught
-         *   TOOL_BDG9000 in hand                       monsters fall
+         *   TOOL_BDG9000 in hand                       aliens fall
          * Level 200 has the rocket, level 201's only tool is the BDG9000, and
          * they are the two halves of this. Both drop at y = 2 with x random
-         * across 0x20..0x11f, and a monster also gets a random facing. */
+         * across 0x20..0x11f, and an alien also gets a random facing. */
         if (in_secret_level) {
             /* 0x0dce6. Reading entity 0 of scene 2 without checking the count
              * is the original's - the array is allocated either way. */
             if (scenes[2].entities[0].type == ENTITY_CATCHER_ROCKET
                 && level_outcome == 0                  /* 0x0dcf1 */
-                && !g_2016                             /* 0x0dcf8 */
+                && !attempt_over                             /* 0x0dcf8 */
                 && (game_rand() & 0xf) + 1 > scenes[0].count) {
                 scene_add(&scenes[0],
                           (int16_t) ((game_rand() & 0xff) + 0x20), 2,
@@ -7777,7 +7797,7 @@ int16_t far run_level(int16_t demo)
                 && (game_rand() & 0xf) + 1 > scenes[2].count) {
                 scene_add(&scenes[2],
                           (int16_t) ((game_rand() & 0xff) + 0x20), 2,
-                          ENTITY_MONSTER_WALKING, 0);  /* 0x0dd45 */
+                          ENTITY_ALIEN_WALKING, 0);  /* 0x0dd45 */
                 /* 0x0dd62. The one just added, which scene_add has already
                  * counted - the original indexes past the new entity and
                  * reaches back 0x15 bytes to land on its vx. */
@@ -7786,13 +7806,13 @@ int16_t far run_level(int16_t demo)
             }
         }
 
-        /* 0x0dd83. The monster's meal ends. eaten_countdown is set to 0x32
+        /* 0x0dd83. The alien's meal ends. eaten_countdown is set to 0x32
          * when one swallows a duck and was decremented NOWHERE in the port, so
-         * scenes[2].flag - the monster that did it - never came back. */
+         * scenes[2].flag - the alien that did it - never came back. */
         if (eaten_countdown && --eaten_countdown == 0) {
             sound_play_guarded(0x26, 1);               /* 0x0dd95 */
             entity_set_type(&scenes[2].entities[scenes[2].flag],
-                            ENTITY_MONSTER_LANDING);   /* 0x0ddb6 */
+                            ENTITY_ALIEN_LANDING);   /* 0x0ddb6 */
         }
 
         /* 0x0ddbc. The demo's OTHER table, and the one that walks the hero.
@@ -7825,7 +7845,7 @@ int16_t far run_level(int16_t demo)
             if (at >= script_count)
                 at = script_count - 1;             /* see above - not the
                                                     * original's, which reads on */
-            g_2100 = (int8_t) (script_table[at * 3 + 2] - 5);   /* 0x0ddf4 */
+            script_heading = (int8_t) (script_table[at * 3 + 2] - 5);   /* 0x0ddf4 */
         }
 
         /* 0x0ddfe. The clock. `tick` is the frames left in the current second
@@ -7845,7 +7865,7 @@ int16_t far run_level(int16_t demo)
                 if (--level_timer == 0)            /* 0x0de16 */
                     sound_play_guarded(0x1c, 1);
             }
-        } else if (!g_2016 && in_secret_level) {            /* 0x0de2e */
+        } else if (!attempt_over && in_secret_level) {            /* 0x0de2e */
             kill_all_ducks();                      /* 0x0de3d */
         }
 
@@ -7861,7 +7881,7 @@ int16_t far run_level(int16_t demo)
             /* 0x0de5c. Once the ducks are gone - or [0x2016] says the level is
              * over - a counter runs for 0x20 frames and then sets the outcome to
              * 3, which is what fades out a level that has run out of ducks. */
-            if (duck_count == 0 || g_2016)
+            if (duck_count == 0 || attempt_over)
                 over++;
             if (over >= 0x20)
                 level_outcome = 3;
@@ -7888,10 +7908,10 @@ int16_t far run_level(int16_t demo)
              * the arrow pointing at the flock for a mirrored
              * tool, ENTITY_CURSOR otherwise, and ENTITY_CURSOR_INACTIVE while
              * one is being used. */
-            if (!g_1fd8 && !g_1fda) {              /* 0x0deaa */
+            if (!tool_busy && !tool_falling) {              /* 0x0deaa */
                 entity_set_type(cursor_scene.entities,
                                 (type_flags[tool_type] & 2)
-                                    ? g_dab + ENTITY_ARROW_LEFT
+                                    ? flock_is_right + ENTITY_ARROW_LEFT
                                     : ENTITY_CURSOR);
                 if (demo)
                     demo_events();                 /* 0x0def3 */
@@ -7932,9 +7952,9 @@ int16_t far run_level(int16_t demo)
          * outcome, which is why the panel keeps counting and the player is the
          * one who decides to give up.
          *
-         * Skipped entirely for a demo (0x0df70), and while g_2016 or in_secret_level say
+         * Skipped entirely for a demo (0x0df70), and while attempt_over or in_secret_level say
          * the level is already over. */
-        if (!ending_said && !g_2016 && !demo && !in_secret_level) {
+        if (!ending_said && !attempt_over && !demo && !in_secret_level) {
             if (scenes[0].flag == 0xff && can_finish) {         /* 0x0df83 */
                 message_post(menu_text[76], menu_text[80]);
                 ending_said = 1;
@@ -7953,7 +7973,7 @@ int16_t far run_level(int16_t demo)
                 message_post(menu_text[78], menu_text[80]);
                 ending_said = 1;
             }
-            if (g_2018) {                                       /* 0x0e04d */
+            if (rocket_lost) {                                       /* 0x0e04d */
                 message_post(menu_text[79], menu_text[80]);
                 ending_said = 1;
             }
@@ -8004,7 +8024,7 @@ int16_t far run_level(int16_t demo)
                 avg_x = sum_x;
                 avg_y = sum_y;
             }
-            g_dab = avg_x > mouse_x;               /* 0x0e21c */
+            flock_is_right = avg_x > mouse_x;               /* 0x0e21c */
         }
 
         /* 0x0e2c9. The other three scenes, and then the entity a tool is being
@@ -8013,7 +8033,7 @@ int16_t far run_level(int16_t demo)
         scene_update_all(&scenes[2]);
         scene_update_all(&scenes[1]);
         scene_update_all(&scenes[5]);
-        if (g_1fda)                                /* 0x0e2ea */
+        if (tool_falling)                                /* 0x0e2ea */
             entity_update(scenes[3].entities, 1, 0);
 
         /* 0x0e304. The retire pass, over all six scenes - the only place an
@@ -8040,7 +8060,7 @@ int16_t far run_level(int16_t demo)
         } else {
             /* Word stores in the original: the low half of each position, and
              * then sign-extended back to a long for scroll_follow. */
-            if (g_1fda) {
+            if (tool_falling) {
                 hold = 0x14;
                 follow_x = (int16_t) scenes[3].entities[0].x;
                 follow_y = (int16_t) scenes[3].entities[0].y;

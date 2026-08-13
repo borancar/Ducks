@@ -187,7 +187,7 @@ void far game_main(menu_t far *menu)      /* main passes ds:0x1916, the main men
                     release_sounds();
                     cutscene_photos();
                     f_147c5(...);
-                    cutscene_night_monster();
+                    cutscene_night_alien();
                     release_sounds();
                     dac_set_black(0, 0);
                     input_poll(320, 200);

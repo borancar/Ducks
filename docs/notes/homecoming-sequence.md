@@ -12,7 +12,7 @@ turned out - and this is what they draw.
 | `0x1394a` | `cutscene_doorstep` `0x0f9fd` | `0x37`, `0x38` | a lit doorway: a duck in silhouette, then the same door with the duck revealed |
 | `0x1394e` | `cutscene_welcome_home` `0x0f825` | `0x36` | the flock under a **"Welcome Home!"** banner |
 | `0x13957` | `cutscene_photos` `0x0f913` | `0x3a`, `0x3b`, `0x3c` | three polaroids, one more on each screen, each arriving on a DAC-white flash and a sound |
-| `0x1396e` | `cutscene_night_monster` `0x100f4` | — | **an animation**: at night, a monster runs towards the house. Added 2026-08-01; see below |
+| `0x1396e` | `cutscene_night_alien` `0x100f4` | — | **an animation**: at night, an alien runs towards the house. Added 2026-08-01; see below |
 
 `release_sounds` (`0x146cd`) runs between the fourth and the fifth and again
 after the sixth, and `0x147c5` twice earlier in the block. In call order the
@@ -130,7 +130,7 @@ screen is what came next. Two breakpoints say otherwise.
   `0x139a5` is the return from `0x139a2 call 0x11d54`, not from `0x1396e`.
 - Breaking on `0x100f4` itself, the far return on its own stack frame reads
   `05da:ecd1` = image **`0x13971`**, so it really is the call at `0x1396e` - and
-  what it draws is **an animation: at night, a monster running towards the
+  what it draws is **an animation: at night, an alien running towards the
   house**, watched on the way past. It is the only animated screen in the
   sequence; the other five hold a still.
 
@@ -278,10 +278,10 @@ band at `y - 0x95`, each clipped to its own band, which is what stops the
 reflection appearing in the sky. Below the waterline only the reflection is
 drawn.
 
-**`cutscene_night_monster`** loads `0x32` - the same starfield the first screen
+**`cutscene_night_alien`** loads `0x32` - the same starfield the first screen
 uses - with its palette at 0xf0, having blacked 0 to 0xef first, so only the
 sixteen colours the picture brought are lit. That is the night, and it costs one
-loop rather than a second image. The monster is a one-entity scene walking left
+loop rather than a second image. The alien is a one-entity scene walking left
 from x = 0xfa, and the two things that happen to it are a switch on its position
 compiled to a two-entry table at `cs:0xb62b`: at 0xdc it is heard (sound 0x18),
 at 0x78 `fade_direction` goes to -1. The loop ends when `fade_level` reaches 0,
