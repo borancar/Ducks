@@ -28,6 +28,8 @@ Current, and kept current. Where these disagree with
   call: the ending, gated on finishing the last episode
 - [episode-index](episode-index.md) — the egg's directory: episode names and
   readme titles, every string shifted by one
+- [file-formats](file-formats.md) — every byte on disk: the egg's directory and
+  its eighteen block types, `settings.dat`, and the save slots
 - [open-episode-index](open-episode-index.md) — the 303-slice index built
   from MAIN.EGG at startup, worth extracting; and why `snap` cannot capture there
 - [open-game-speed](open-game-speed.md) — the game's `[<]`/`[>]` speed control
