@@ -1204,12 +1204,12 @@ static void far particle_retire(int16_t i)
  *
  * Terrain is a hit, not a wall. The particle is stopped only in the sense that
  * vy is forced to 8 - straight down and fast - and its life comes down by one;
- * f0d is 1 or 2 from the spawner, so it survives one or two landings and then
+ * landings_left is 1 or 2 from the spawner, so it survives one or two landings and then
  * goes. What it leaves behind is the stain at 0x0aab3: the particle's own
  * colour written into the terrain, which is FLYING BLOOD, and is why that
  * setting gates it.
  *
- * The retire at 0x0aaf3 - the f0e == 0 arm - does NOT step `i` back, where the
+ * The retire at 0x0aaf3 - the stains == 0 arm - does NOT step `i` back, where the
  * other two do. So the particle swapped into the hole is skipped for one frame.
  * That is the original's, kept.
  */
@@ -1237,7 +1237,7 @@ void far particles_step(void)
         if (!terrain_at(py, px))                   /* 0x0aa73 - still in the air */
             continue;
 
-        if (!p->f0e) {                             /* 0x0aa87 */
+        if (!p->stains) {                             /* 0x0aa87 */
             particle_retire(i);                    /* 0x0aaf5, and no i-- */
             continue;
         }
@@ -1251,7 +1251,7 @@ void far particles_step(void)
             backdrop.rows[py][px] = p->colour;     /* 0x0aab3 */
 
         p->vy = 8;                                 /* 0x0aac1 */
-        if (--p->f0d == 0) {                       /* 0x0aad2, 0x0aae1 */
+        if (--p->landings_left == 0) {                       /* 0x0aad2, 0x0aae1 */
             particle_retire(i);                    /* 0x0aaea */
             i--;
         }
@@ -5558,8 +5558,8 @@ void far particles_spawn(int16_t x, int16_t y, int16_t n)
         p->vx     = (int16_t) ((game_rand() & 15) - 7);
         p->vy     = (int16_t) (-7 - (game_rand() & 15));
         p->colour = particle_colours[game_rand() & 7];
-        p->f0d    = (uint8_t) ((game_rand() & 1) + 1);
-        p->f0e    = 1;
+        p->landings_left    = (uint8_t) ((game_rand() & 1) + 1);
+        p->stains    = 1;
         particle_count++;
     }
 }
