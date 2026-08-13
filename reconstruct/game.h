@@ -237,8 +237,19 @@ typedef struct {
     int32_t x, y;               /* 1/8-pixel fixed point */
     int16_t vx, vy;             /* +0x08, +0x0a - vy is always upward */
     uint8_t colour;             /* +0x0c */
-    uint8_t f0d;                /* +0x0d - (rand & 1) + 1 */
-    int16_t f0e;                /* +0x0e - 1 when spawned */
+    uint8_t landings_left;      /* +0x0d - how many landings it survives, 1 or
+                                 *         2 from the spawner. Each one stains
+                                 *         the terrain and takes one off this;
+                                 *         at zero the particle is retired */
+    int16_t stains;             /* +0x0e - whether touching the ground marks it
+                                 *         or merely ends the particle. ALWAYS
+                                 *         1: the only writes in the whole image
+                                 *         are the 1 at 0x0788f and the copy
+                                 *         particle_retire makes at 0x0a94e,
+                                 *         which propagates it, so the `!stains`
+                                 *         arm at 0x0aa87 is unreachable. The
+                                 *         other kind of particle exists in the
+                                 *         code and is never made */
 } particle_t;                   /* 16 bytes, as in the original */
 
 /* ------------------------------------------------------------------ sound
