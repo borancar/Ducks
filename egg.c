@@ -175,7 +175,7 @@ char far *far egg_read_string(void far *s)
  *
  * Both counts are UNSIGNED, as Borland's size_t is. They were int16_t here, and
  * a sound is the one caller that can exceed 32767 - the biggest sample in this
- * egg is 45,818 bytes - so the length arrived negative, the product became
+ * egg is 57,363 bytes, and four more are over 32767 - so the length arrived negative, the product became
  * astronomical, `cursor + want` wrapped past the guard, and the memcpy either
  * ran wild or clamped to "the rest of the egg" and poured 1.7 MB into a 45 KB
  * buffer. That smashed every allocation after it: the sounds loaded next were
