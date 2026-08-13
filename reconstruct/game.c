@@ -5972,7 +5972,7 @@ int16_t      level_seed;         /* 0x2039 - what run_level srand()s */
 int16_t      picked_index;       /* 0x18f3 - which entity the pointer is over */
 entity_t far *picked;            /* 0x18ef - and a pointer to it */
 int16_t      skip_pick_once;    /* 0x217d - set when the detonator acts and
-                                  * cleared by the very next level_update, so
+                                  * cleared by the very next highlight_for_tool, so
                                   * the frame after a detonation does not
                                   * re-pick whatever is now under the pointer */
 int16_t      script_heading;             /* 0x2100 - what the level script last set */
@@ -7312,19 +7312,24 @@ void far scene_retire(scene_t far *s)
     }
 }
 
-/* --------------------------------------------------- 0x0af95: scene_pick_nearest
+/* --------------------------------------------------- 0x0af95: highlight_nearest
+ *
+ * `mark` is never 0. All three callers in the image - 0x0d51a, 0x0d529 and
+ * 0x0d54d - push 1, so the branch that picks without highlighting is dead, and
+ * the name says what the function does rather than what its signature allows.
  *
  * Which entity of a scene the pointer is over, by nearest in the taxicab sense
  * with the pointer taken six pixels lower than it is, and only within twelve.
- * The answer goes to three globals: the index at [0x18f3] or -1, and a pointer to
- * the entity at [0x18ef].
+ * The answer goes to picked_index - or -1 - and to picked, a pointer to the
+ * same entity.
  *
- * With `mark` set it also puts the highlight on it - scene 3's single entity
- * becomes ENTITY_HIGHLIGHT and moves to the picked entity's position - and [0x0d89] ends
- * up saying whether anything is highlighted at all. That is scene 3's whole job:
- * one entity that follows whatever the pointer is closest to.
+ * It then puts the highlight on it: scene 3's single entity becomes
+ * ENTITY_HIGHLIGHT and moves to the picked entity's position, and
+ * scenes[3].count ends up saying whether anything is highlighted at all. That
+ * is scene 3's whole job - one entity that follows whatever the pointer is
+ * closest to.
  */
-void far scene_pick_nearest(scene_t far *s, int16_t mark)
+void far highlight_nearest(scene_t far *s, int16_t mark)
 {
     int32_t best = 0xc;                            /* twelve, and no further */
     int16_t found = -1;
@@ -7360,26 +7365,30 @@ void far scene_pick_nearest(scene_t far *s, int16_t mark)
     scenes[3].count = (mark && picked) ? 1 : 0;
 }
 
-/* ---------------------------------------------------- 0x0d4fc: level_update
+/* ------------------------------------------------ 0x0d4fc: highlight_for_tool
  *
- * One call a frame, and all it does is decide which scene the pointer is picking
- * from, which depends on the tool in hand: the ducks for 0x12, the objects for
- * 0x50, and for 0x15 the mirrored-entity scene, but only while no tool is in
- * progress and only until [0x217d] says it has been done once.
- */
-void far level_update(void)
+ * One call a frame, and every branch of it is highlight_nearest with `mark`
+ * set - which is what puts ENTITY_HIGHLIGHT on whatever it finds. So all this
+ * decides is which scene the highlight follows, and that depends on the tool in
+ * hand: the ducks for TOOL_PICK_LEADER, the objects for TOOL_BDG9000, and for
+ * TOOL_DETONATOR the mirrored-entity scene, that one only while no tool is in
+ * progress and not on the frame after a detonation.
+ *
+ * It was called level_update until 2026-08-13, which claimed a great deal more
+ * than it does: it steps nothing and updates no level. */
+void far highlight_for_tool(void)
 {
     switch (tool_type) {                           /* 0x0d4ff */
     case TOOL_PICK_LEADER:
-        scene_pick_nearest(&scenes[0], 1);
+        highlight_nearest(&scenes[0], 1);
         break;
     case TOOL_BDG9000:
-        scene_pick_nearest(&scenes[2], 1);
+        highlight_nearest(&scenes[2], 1);
         break;
     case TOOL_DETONATOR:
         if (!tool_busy && !tool_falling) {
             if (!skip_pick_once)
-                scene_pick_nearest(&scenes[5], 1);
+                highlight_nearest(&scenes[5], 1);
             skip_pick_once = 0;
         }
         break;
@@ -8045,7 +8054,7 @@ int16_t far run_level(int16_t demo)
 
         /* 0x0e346. Which entity the pointer is over, per the tool in hand, and
          * then every duck against every object. */
-        level_update();
+        highlight_for_tool();
         collide_scenes();                          /* 0x0e34b */
 
         /* 0x0e34e. The cursor entity takes the mouse, and then the camera

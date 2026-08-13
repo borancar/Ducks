@@ -497,8 +497,8 @@ void far entity_set_type(entity_t far *e, int16_t type);
 void far animate_scene(scene_t far *scene);
 void far scene_alloc(scene_t far *s, int16_t capacity);
 void far scene_retire(scene_t far *s);              /* 0x0981b */
-void far scene_pick_nearest(scene_t far *s, int16_t mark);  /* 0x0af95 */
-void far level_update(void);                        /* 0x0d4fc */
+void far highlight_nearest(scene_t far *s, int16_t mark);  /* 0x0af95 */
+void far highlight_for_tool(void);                        /* 0x0d4fc */
 extern int16_t       picked_index;                  /* 0x18f3 */
 extern entity_t far *picked;                        /* 0x18ef */
 extern int16_t       skip_pick_once;                        /* 0x217d */
@@ -1194,7 +1194,7 @@ extern solid_t far *solids;              /* 0x202d */
 #define ENTITY_ROCKET_DUCK_ENTERING 0x1a
 #define ENTITY_ROCKET_DUCK_ENTERED  0x1b
 
-/* The selection brackets. scene_pick_nearest with `mark` set puts scene 3's one
+/* The selection brackets. highlight_nearest with `mark` set puts scene 3's one
  * entity at whatever the pointer is nearest and makes it this, so it marks the
  * hovered entity for whichever tool is in hand - not for the leader picker
  * alone. scenes[3].count is how draw_entities knows whether to draw it. */
