@@ -5971,12 +5971,27 @@ float        level_frac[4];      /* 0x13e1, 0x13e5, 0x13e9, 0x13ed */
 int16_t      level_seed;         /* 0x2039 - what run_level srand()s */
 int16_t      picked_index;       /* 0x18f3 - which entity the pointer is over */
 entity_t far *picked;            /* 0x18ef - and a pointer to it */
-int16_t      skip_pick_once;    /* 0x217d - set when the detonator acts and
-                                  * cleared by the very next highlight_for_tool, so
-                                  * the frame after a detonation does not
-                                  * re-pick whatever is now under the pointer */
-int16_t      script_heading;             /* 0x2100 - what the level script last set */
-int16_t      flock_is_right;              /* 0x0dab - is the flock right of the cursor */
+int16_t      skip_pick_once;     /* 0x217d - raised by TOOL_DETONATOR's arm at
+                                  * 0x0d258, in the same breath as
+                                  * `scenes[3].count = 0` dropping the
+                                  * highlight, and lowered unconditionally by
+                                  * the next highlight_for_tool - which skips
+                                  * its pick when it was up.
+                                  *
+                                  * TODO: rename. This says what the ONE READER
+                                  * does with it, not what it holds. The state
+                                  * is "the detonator just fired"; skipping a
+                                  * pick is that state's consequence, and if a
+                                  * second reader is ever found the name will
+                                  * describe neither. detonator_just_fired is
+                                  * the candidate. Same complaint as
+                                  * tool_falling above, from the other
+                                  * direction: that one names an inferred
+                                  * mechanism, this one names an effect */
+int16_t      script_heading;     /* 0x2100 - what the demo's walk table last
+                                  * set as the hero's heading */
+int16_t      flock_is_right;     /* 0x0dab - `avg_x > mouse_x`, and the arrow
+                                  * the cursor shows points at the flock */
 uint8_t      too_deep_count;     /* 0x20ff - tool_use's complaint counter */
 uint8_t      tool_prev;          /* 0x1789 - the selection last frame */
 uint8_t      tool_announce;      /* 0x178a - frames of "you have got X" */
@@ -5998,10 +6013,24 @@ int16_t      level_outcome;      /* 0x200d - what run_level returns == 2 */
  * do anything unless it is set. bridge_grow then rewrites it from whether
  * either end is still live, which is how a bridge stops.
  *
- * tool_falling is the other kind of unfinished: an ordinary tool dropped into
- * scene 3 and still on its way down. While it is set the frame steps scene 3
- * with `applying` and the camera follows it rather than the leader, and it is
- * cleared where the falling tool lands and tool_use fires. */
+ * tool_falling is the other kind of unfinished: an ordinary tool has been put
+ * into scene 3 by tool_click_at (0x0d43c) and has not been applied yet. While
+ * it is set the frame steps scene 3 with `applying` (0x0e2ea) and the camera
+ * follows that entity instead of the leader, and it is cleared in the two
+ * places that end the flight - 0x0834b, where the entity is blocked and
+ * tool_use fires where it stopped, and the leaves-the-level arm.
+ *
+ * It is also what says SCENE 3 HOLDS A TOOL RATHER THAN A HIGHLIGHT. Scene 3 is
+ * dual-purpose: highlight_nearest puts ENTITY_HIGHLIGHT there, and
+ * tool_click_at's detonator arm clears scenes[3].count to drop it. That is why
+ * highlight_for_tool refuses to pick while this is set, and it is a better
+ * justification for the flag than the falling is.
+ *
+ * TODO: rename. Nothing in the image says the tool FALLS - that was deduced
+ * from scene_add zeroing the velocity, entity_update applying gravity, and the
+ * flag clearing on `blocked`. True, most likely, but it is a mechanism inferred
+ * in three steps standing in for the state actually held, which is "placed and
+ * not yet applied". tool_dropping or tool_unapplied are the candidates. */
 int16_t      tool_busy, tool_falling;
 int16_t      rocket_lost;        /* 0x2018 - a rocket left the level, which the
                                   * endings report as its own reason for
@@ -7746,7 +7775,10 @@ int16_t far run_level(int16_t demo)
     if (!particle_array)
         particle_cap = 0;
     particle_count = 0;
-    tool_falling = tool_busy = level_outcome = rocket_lost = 0;
+    tool_falling   = 0;
+    tool_busy      = 0;
+    level_outcome  = 0;
+    rocket_lost    = 0;
 
     fade_level     = 0;
     fade_direction = 1;
