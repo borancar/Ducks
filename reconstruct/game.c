@@ -731,9 +731,9 @@ int16_t far scene_add(scene_t far *s, int16_t x, int16_t y, int16_t type,
 
     e = &s->entities[s->count];
     e->x = x;  e->y = y;                       /* both 32-bit, high half zeroed */
-    e->f14 = 0;  e->f15 = 0;  e->f16 = 0;
+    e->vx = 0;  e->vy = 0;  e->flock_facing = 0;
     e->frame = 0;
-    e->f21 = 0;  e->f23 = 0;  e->f27 = 0;
+    e->fall = 0;  e->counter = 0;  e->last_type = 0;
     e->type  = type;
     e->param = param;
     s->count++;
@@ -1293,13 +1293,15 @@ void far animate_scene(scene_t far *scene)
 
         switch (e->type) {
         case ENTITY_EXTRA_DUCK_ARRIVING:       /* 0x0a5e0 - face either way */
-            e->f14 = (int8_t) ((game_rand() & 2) - 1);
+            e->vx = (int8_t) ((game_rand() & 2) - 1);
             break;
-        case 0x47:                             /* 0x0a602 */
-            e->f14 = 1;
+        /* The eat ends facing the way it ate, which is the other half of
+         * `ENTITY_MONSTER_EATING_LEFT + (o->vx == 1)` choosing it. */
+        case ENTITY_MONSTER_EATING_RIGHT:      /* 0x0a602 */
+            e->vx = 1;
             break;
-        case 0x46:                             /* 0x0a61a */
-            e->f14 = -1;
+        case ENTITY_MONSTER_EATING_LEFT:       /* 0x0a61a */
+            e->vx = -1;
             break;
         case ENTITY_SPARK_SWITCH_FLIPPING:     /* 0x0a632 */
             scene_swap_pair();
@@ -1308,7 +1310,7 @@ void far animate_scene(scene_t far *scene)
         /* 0x0a639. A duck has just gone into the rocket: give it a nudge
          * upward, and the default then walks it on to the ENTERED state. */
         case ENTITY_ROCKET_DUCK_ENTERING:
-            e->f15 = 0xfc;                     /* -4 */
+            e->vy = -4;
             break;
 
         /* 0x0a651. The teleporter's far end, which the 0x37 arm of
@@ -1316,9 +1318,9 @@ void far animate_scene(scene_t far *scene)
         case ENTITY_TELEPORT_OUT:
             e->x   = (int16_t) teleport_to_x;
             e->y   = (int16_t) teleport_to_y;
-            e->f15 = 0;
-            e->f21 = 0;
-            e->f16 = 0;
+            e->vy = 0;
+            e->fall = 0;
+            e->flock_facing = 0;
             break;
 
         case ENTITY_STOMPER_SPRUNG:            /* 0x0a6d3 */
@@ -1413,7 +1415,7 @@ void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour)
                               || e->type == ENTITY_TOOL_SLOT);
 
         switch (e->type) {
-        case 0x36:                                 /* 0x0ac53 */
+        case TOOL_BALLOON:                         /* 0x0ac53 */
             index = anim_script[e->type][e->frame >> 1];
             if (e->param != 1)                     /* +0x17 */
                 y += 8;
@@ -1426,20 +1428,20 @@ void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour)
              * 2..13 the orange duck, 14..25 the green leader. LEFT HANDED
              * flips the facing term, which is the whole difference here. */
             if (cheat_state[6])
-                index = (2 - e->type) * 12 + e->f14 * 4 + walk_phase + 6;
+                index = (2 - e->type) * 12 + e->vx * 4 + walk_phase + 6;
             else
-                index = (2 - e->type) * 12 + 6 - e->f14 * 4 + walk_phase;
+                index = (2 - e->type) * 12 + 6 - e->vx * 4 + walk_phase;
             break;
 
         case ENTITY_DUCK_IDLE:                     /* 0x0ad4c */
-            if (e->f14)
-                index = 0x7b + (e->f14 < 0);       /* two fixed sprites */
+            if (e->vx)
+                index = 0x7b + (e->vx < 0);       /* two fixed sprites */
             else
                 index = anim_script[ENTITY_DUCK_IDLE][e->frame >> 1];
             break;
 
         case ENTITY_STOMPER_RISING:                /* 0x0adb0 */
-            y -= e->f23;                           /* the climb is DRAWN */
+            y -= e->counter;                           /* the climb is DRAWN */
             index = anim_script[ENTITY_STOMPER_RISING][e->frame >> 1];
             break;
 
@@ -1454,7 +1456,7 @@ void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour)
             if (type_flags[e->type] & 4) {
                 /* The mirrored script lives in the next slot, and which of the
                  * two is used depends on the facing matching the handedness. */
-                int16_t mirror = (e->f14 == (cheat_state[6] ? -1 : 1));
+                int16_t mirror = (e->vx == (cheat_state[6] ? -1 : 1));
 
                 index = anim_script[e->type + mirror][e->frame >> 1];
             } else {
@@ -3178,7 +3180,7 @@ void far cutscene_night_monster(void)
 
     scene_alloc(&scene, 1);                        /* 0x10154 */
     scene_add(&scene, 0xfa, 0x80, ENTITY_MONSTER_WALKING, 5);  /* 0x1016a */
-    scene.entities[0].f14 = (int8_t) 0xff;         /* 0x10173 - walking left */
+    scene.entities[0].vx = (int8_t) 0xff;         /* 0x10173 - walking left */
 
     /* 0x1019b. The ROCKET, stamped into the picture rather than drawn every
      * frame - it never moves. An earlier note here called it a doorway and
@@ -5284,9 +5286,9 @@ void far scroll_follow(int32_t x, int32_t y)
  * front, and make *it* the head. Rank is the position in the line.
  *
  * The three fields it writes are exactly the three that type 2 reads back in
- * entity_update: `f19` is whether it walks at all (and doubles as "already in
- * the line"), `f1a` is how far behind to hold, and `lead` is who to hold behind.
- * So without this the ducks have f19 == 0 for ever and the flock never moves, no
+ * entity_update: `rank` is whether it walks at all (and doubles as "already in
+ * the line"), `follow_gap` is how far behind to hold, and `lead` is who to hold behind.
+ * So without this the ducks have rank == 0 for ever and the flock never moves, no
  * matter what the hero does.
  *
  * The distance is `|dx| + |dy| / 2` on the **low words** of x and y - the guest
@@ -5297,9 +5299,9 @@ void far flock_chain(entity_t far *head, int32_t reach)
 {
     int16_t rank;
 
-    if (head->f14 != 0)                            /* 0x0956d - a facing sticks */
-        head->f16 = (uint8_t) head->f14;
-    if (head->f16 == 0)                            /* 0x09585 */
+    if (head->vx != 0)                            /* 0x0956d - a facing sticks */
+        head->flock_facing = head->vx;
+    if (head->flock_facing == 0)                            /* 0x09585 */
         return;
 
     for (rank = 1; rank <= scenes[0].count; rank++) {
@@ -5320,7 +5322,7 @@ void far flock_chain(entity_t far *head, int32_t reach)
             d  = (int16_t) (dx + (dy >> 1));       /* 0x09603 - then cdq */
             if (d >= best)                         /* 0x09610 - strictly nearer */
                 continue;
-            if (o->f19)                            /* 0x09629 - already in line */
+            if (o->rank)                            /* 0x09629 - already in line */
                 continue;
             pick = i;
             best = d;
@@ -5334,9 +5336,9 @@ void far flock_chain(entity_t far *head, int32_t reach)
 
             if (e->type == 4)                      /* 0x0965d - a loose duck joins */
                 entity_set_type(e, 2);
-            e->f16  = head->f16;
-            e->f1a  = 8;
-            e->f19  = (uint8_t) rank;
+            e->flock_facing  = head->flock_facing;
+            e->follow_gap  = 8;
+            e->rank  = (uint8_t) rank;
             e->lead = head;
             head    = e;                           /* 0x096eb - and it leads next */
         }
@@ -5359,7 +5361,7 @@ void far flock_link(void)
     for (i = 0; i < scenes[0].count; i++) {
         entity_t far *e = &scenes[0].entities[i];
 
-        e->f19 = 0;
+        e->rank = 0;
         if (e->type == 2)
             entity_set_type(e, 4);
     }
@@ -5474,13 +5476,13 @@ void far entity_copy(scene_t far *s, int16_t from, int16_t to)
 
     b->x     = a->x;
     b->y     = a->y;
-    b->f14   = a->f14;
-    b->f21   = a->f21;
-    b->f16   = a->f16;
-    b->f15   = a->f15;
+    b->vx   = a->vx;
+    b->fall   = a->fall;
+    b->flock_facing   = a->flock_facing;
+    b->vy   = a->vy;
     b->frame = a->frame;
-    b->f23   = a->f23;
-    b->f27   = a->f27;
+    b->counter   = a->counter;
+    b->last_type   = a->last_type;
     b->type  = a->type;
     b->param = a->param;
 }
@@ -5585,7 +5587,7 @@ void far duck_dies(entity_t far *e, int16_t force, int16_t noisy)
     if (noisy)
         sound_play_guarded(5, 1);
     entity_set_type(e, ENTITY_DUCK_CRASHING);
-    e->f14 = 0;
+    e->vx = 0;
     particles_spawn((int16_t) e->x, (int16_t) e->y, 0x28);
 }
 
@@ -5698,12 +5700,12 @@ void far collide_scenes(void)
 
             switch (o->type) {
             case ENTITY_PADDLE:                         /* 0x09a98 */
-                entity_set_type(d, 0x52);
+                entity_set_type(d, TOOL_EXTRA_DUCK);
                 /* face away from it, one step per eight pixels */
                 if (d->x > o->x)
-                    d->f14 = (int8_t) (((d->x - o->x) >> 3) + 1);
+                    d->vx = (int8_t) (((d->x - o->x) >> 3) + 1);
                 else
-                    d->f14 = (int8_t) (-(((o->x - d->x) >> 3) + 1));
+                    d->vx = (int8_t) (-(((o->x - d->x) >> 3) + 1));
                 sound_play_guarded(4, 1);
                 break;
 
@@ -5738,19 +5740,19 @@ void far collide_scenes(void)
                 entity_set_type(o, ENTITY_HOT_AIR_BALLOON_FLYING);
                 entity_set_type(d, ENTITY_DUCK_IN_HOT_AIR_BALLOON);
                 d->param = 0;
-                d->f15   = 0xfc;
+                d->vy   = -4;
                 d->y     = o->y;
                 d->x     = o->x;
                 score   += 0x1e;
                 break;
 
             case ENTITY_BUBBLE_EMPTY:                  /* 0x09d51 */
-                if (d->type == 1 || d->f14 == 0)
+                if (d->type == 1 || d->vx == 0)
                     break;
                 entity_set_type(d, ENTITY_NONE);
                 entity_set_type(o, ENTITY_DUCK_IN_BUBBLE);
-                o->f14 = (int8_t) (d->f14 > 0 ? 1 : -1);
-                o->f15 = 0xff;
+                o->vx = (int8_t) (d->vx > 0 ? 1 : -1);
+                o->vy = -1;
                 sound_play_guarded(0x14, 1);
                 score += 0x14;
                 break;
@@ -5775,7 +5777,7 @@ void far collide_scenes(void)
                 /* The same eleven-frame swallow either way; which one is the
                  * object's facing. See the-monster.md. */
                 entity_set_type(o,
-                    (int16_t) (ENTITY_MONSTER_EATING_LEFT + (o->f14 == 1)));
+                    (int16_t) (ENTITY_MONSTER_EATING_LEFT + (o->vx == 1)));
                 sound_play_guarded(0x1d, 1);
                 eaten_countdown = 0x32;
                 scenes[2].flag     = di;
@@ -5786,7 +5788,7 @@ void far collide_scenes(void)
                     break;
                 sound_play_guarded(0x0f, 1);
                 entity_set_type(d, ENTITY_DUCK_ZAPPED);
-                d->f15 = 0xfb;
+                d->vy = -5;
                 duck_count--;
                 break;
 
@@ -5795,7 +5797,7 @@ void far collide_scenes(void)
                     break;
                 entity_set_type(d, ENTITY_DUCK_CRUSHED);
                 entity_set_type(o, ENTITY_STOMPER_SPRUNG);
-                o->f23 = 0;
+                o->counter = 0;
                 break;
 
             /* 0x09f80. Ten points and the bottle becomes the "10" that
@@ -5838,9 +5840,9 @@ void far collide_scenes(void)
                 if (scene_add(&scenes[1], (int16_t) d->x,
                               (int16_t) (d->y - 10),
                               ENTITY_DUCK_HEAD_SPINNING, 0)) {
-                    scenes[1].entities[at].f15 =
+                    scenes[1].entities[at].vy =
                         (uint8_t) (0xfb - (game_rand() & 3));
-                    scenes[1].entities[at].f14 =
+                    scenes[1].entities[at].vx =
                         (int8_t) (((game_rand() & 1) << 1) - 1);
                 }
                 sound_play_guarded(0x1e, 1);
@@ -5858,8 +5860,8 @@ void far collide_scenes(void)
                                    ? ENTITY_LEADER_SOMERSAULT_LEFT
                                    : ENTITY_DUCK_SOMERSAULT_LEFT));
                 sound_play_guarded(0x1b, 1);
-                d->f15 = 0xf9;
-                d->f21 = 0;
+                d->vy = -7;
+                d->fall = 0;
                 break;
 
             case ENTITY_SPRING_RIGHT:                   /* 0x0a243 */
@@ -5868,8 +5870,8 @@ void far collide_scenes(void)
                                    ? ENTITY_LEADER_SOMERSAULT_RIGHT
                                    : ENTITY_DUCK_SOMERSAULT_RIGHT));
                 sound_play_guarded(0x1b, 1);
-                d->f15 = 0xf9;
-                d->f21 = 0;
+                d->vy = -7;
+                d->fall = 0;
                 break;
 
             case ENTITY_CATCHER_ROCKET:                 /* 0x0a2dc */
@@ -6437,7 +6439,7 @@ void far tool_click_at(int16_t x, int16_t y)
                        || picked->type == ENTITY_DUCK_IDLE)) {
             scenes[0].flag = picked_index;         /* 0x0d2d6 */
             entity_set_type(&scenes[0].entities[scenes[0].flag], 1);
-            scenes[0].entities[scenes[0].flag].f16 = 0;
+            scenes[0].entities[scenes[0].flag].flock_facing = 0;
             sound_play_guarded(0x13, 1);
         } else {
             scenes[0].flag = 0xff;                 /* 0x0d318 - nobody */
@@ -6446,7 +6448,8 @@ void far tool_click_at(int16_t x, int16_t y)
         break;
 
     case TOOL_BDG9000:                             /* 0x0d32c - cash something in */
-        if (picked && picked->type != 0x17 && picked->type != 0) {
+        if (picked && picked->type != ENTITY_EXPLOSION
+            && picked->type != ENTITY_NONE) {
             eaten_countdown = 0;
             entity_set_type(picked, ENTITY_EXPLOSION);
             score += scenes[0].count * 8;          /* eight a duck still out */
@@ -6764,7 +6767,7 @@ void far tool_use(int16_t x, int16_t y, int16_t tool)
     switch (tool) {
     /* 0x07a74. The bomb and the balloon: leave the thing itself in scene 1 as a
      * type 0x17, and blow the hole. The sprite the hole is cut with is
-     * anim_script[0x17][0] - a fixed address in the original, so it is the
+     * anim_script[ENTITY_EXPLOSION][0] - a fixed address in the original, so it is
      * bomb's own first frame whichever of the two placed it. */
     case 0x18:
     case 0x36:
@@ -6861,8 +6864,8 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
     }
 
     switch (e->type) {                             /* 0x07c10 */
-    case 0x36:                                     /* 0x07d89 */
-        e->f15 = (uint8_t) 0xfe;
+    case TOOL_BALLOON:                             /* 0x07d89 */
+        e->vy = -2;
         break;
     case ENTITY_DUCK_IN_BUBBLE:                   /* 0x07d64 */
         if (g_2016)
@@ -6871,22 +6874,22 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         active = 1;
         break;
     case ENTITY_STOMPER_DOWN:                      /* 0x07d0c */
-        if (e->f23++ == 0x20) {
+        if (e->counter++ == 0x20) {
             entity_set_type(e, ENTITY_STOMPER_RISING);
-            e->f23 = 0;
+            e->counter = 0;
         }
         break;
     case ENTITY_STOMPER_RISING:                    /* 0x07d37 */
-        e->f23 += 2;
-        if ((uint16_t) e->f23 >= 0xa) {
+        e->counter += 2;
+        if ((uint16_t) e->counter >= 0xa) {
             entity_set_type(e, ENTITY_STOMPER);
-            e->f23 = 0;
+            e->counter = 0;
         }
         break;
     case 1:                                        /* 0x07dc6 - the hero */
         if (scripted) {                            /* [bp+0xc] */
-            e->f14 = (int8_t) g_2100;
-            active = e->f14 != 0;
+            e->vx = (int8_t) g_2100;
+            active = e->vx != 0;
         } else {
             /* 0x07dec. One 32-bit signed compare of x against the cursor, twice
              * - `jg/jl` on the high words and `jae/jbe` on the low ones. An
@@ -6894,17 +6897,17 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
              * turned it into a two-axis comparison, which faces the hero the
              * wrong way whenever the cursor is above or below it. The button
              * being up in every snapshot hid it: `active` is 0 there, and the
-             * clear at 0x080ed puts f14 back to 0 before anything can tell. */
-            e->f14 = (int8_t) ((e->x < (int32_t) mouse_x)
+             * clear at 0x080ed puts vx back to 0 before anything can tell. */
+            e->vx = (int8_t) ((e->x < (int32_t) mouse_x)
                              - (e->x > (int32_t) mouse_x));
             active = button_a_down;
         }
-        e->f23 = 0;
+        e->counter = 0;
         break;
     case 2:                                        /* 0x07e83 - follows its leader */
     {
         /* imul then cwd, so the product is 16 bits sign-extended, not 32. */
-        int32_t ahead = (int16_t) (e->f1a * (int8_t) e->f16);
+        int32_t ahead = (int16_t) (e->follow_gap * e->flock_facing);
         entity_t far *lead = e->lead;
         /* 0x07ea2 reads the lead's +0x0c and +0x0e - **prev_x**, where it was
          * when the frame began, not where it is now. That is what makes a line
@@ -6918,9 +6921,9 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
          * flock_chain makes a type 2 and it always sets lead first. */
         int32_t tx = lead ? lead->prev_x - ahead : e->x;
 
-        e->f14 = (int8_t) ((e->x < tx) - (e->x > tx));
-        active = e->f19;
-        e->f23 = 0;
+        e->vx = (int8_t) ((e->x < tx) - (e->x > tx));
+        active = e->rank;
+        e->counter = 0;
         break;
     }
     case ENTITY_DUCK_IDLE:                         /* 0x07f11 - an ordinary duck */
@@ -6937,27 +6940,27 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
             int16_t slope = (terrain_at(e->y + 1, e->x + 2) == 0)
                           - (terrain_at(e->y + 1, e->x - 2) == 0);
 
-            if ((int8_t) e->f15 < 4) {             /* 0x07f94 */
+            if (e->vy < 4) {                      /* 0x07f94 */
                 if ((game_rand() & 3) == 0) {
                     if (e->param > 0) e->param--;
                     if (e->param < 0) e->param++;
                 }
             } else {
-                e->f23 = 5;
+                e->counter = 5;
             }
             e->param = (int16_t) (slope * 2 + e->param);
             if (e->param < -0xc) e->param = -0xc;
             if (e->param >  0xc) e->param =  0xc;
-            facing = (int8_t) e->f14;
-            e->f14 = (int8_t) ((e->param > 0) - (e->param < 0));
-            if ((int8_t) e->f14 != facing) {       /* it turned */
-                if (e->f23) {
-                    e->f14    = 0;
+            facing = e->vx;
+            e->vx = (int8_t) ((e->param > 0) - (e->param < 0));
+            if (e->vx != facing) {                /* it turned */
+                if (e->counter) {
+                    e->vx    = 0;
                     e->param  = 0;
                 }
-                e->f23 = 0;
-            } else if (e->f23) {
-                e->f23--;
+                e->counter = 0;
+            } else if (e->counter) {
+                e->counter--;
             }
             active = 1;
         }
@@ -6975,15 +6978,15 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
      * a sprung duck lands. Both are real; this one runs while it is in the air. */
     case ENTITY_LEADER_SOMERSAULT_RIGHT:
     case ENTITY_DUCK_SOMERSAULT_RIGHT:             /* 0x07e47 */
-        e->f14 = (int8_t) ((e->f21 < 0xf) + 1);
+        e->vx = (int8_t) ((e->fall < 0xf) + 1);
         break;
     case ENTITY_LEADER_SOMERSAULT_LEFT:
     case ENTITY_DUCK_SOMERSAULT_LEFT:              /* 0x07e64 */
-        e->f14 = (int8_t) (-(e->f21 < 0xf) - 1);
+        e->vx = (int8_t) (-(e->fall < 0xf) - 1);
         break;
     case ENTITY_CATCHER_ROCKET: case ENTITY_PADDLE:  /* 0x07d94 - the cursor */
         step   = 0;
-        e->f14 = (int8_t) (((int32_t) mouse_x + 4 - e->x) >> 3);
+        e->vx = (int8_t) (((int32_t) mouse_x + 4 - e->x) >> 3);
         active = 1;
         break;
     case ENTITY_DUCK_IN_HOT_AIR_BALLOON:           /* 0x07c80 - the ride */
@@ -6996,8 +6999,8 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
             entity_set_type(e, 2);
         }
         return;
-    case 0x52:                                     /* 0x07cf4 */
-        e->f15 = (uint8_t) 0xfc;
+    case TOOL_EXTRA_DUCK:                          /* 0x07cf4 */
+        e->vy = -4;
         active = 1;
         break;
     case ENTITY_DUCK_BALL:                         /* 0x07d04 */
@@ -7008,8 +7011,8 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         break;
     default:                                       /* 0x080bb */
         if (type_flags[e->type] & 1) {
-            if (e->f14 == 0)
-                e->f14 = (int8_t) ((g_dab << 1) - 1);
+            if (e->vx == 0)
+                e->vx = (int8_t) ((g_dab << 1) - 1);
             active = 1;
         } else {
             active = 0;
@@ -7019,21 +7022,21 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
 
     /* 0x080ed. Without a facing there is nothing to walk. */
     if (!active)
-        e->f14 = 0;
-    if ((int8_t) e->f15 < step)                    /* 0x080fb - one a frame */
-        e->f15++;
+        e->vx = 0;
+    if (e->vy < step)                             /* 0x080fb - one a frame */
+        e->vy++;
     /* 0x08117 is `sar ax, 1`, which floors - and C's / 2 truncates toward zero,
      * so the two disagree on every ODD NEGATIVE speed. -1 is the case that
-     * matters: the balloon's arm sets f15 to -2 every frame, the increment just
+     * matters: the balloon's arm sets vy to -2 every frame, the increment just
      * above takes it to -1, and the original then rises a pixel a frame where
      * `/ 2` gives 0 and it hangs in the air. Even values agree, which is why
      * everything that falls looked right. */
-    speed  = (int16_t) ((int8_t) e->f15 >> 1);     /* 0x0810f - sar, not / 2 */
-    facing = (int8_t) e->f14;
+    speed  = (int16_t) (e->vy >> 1);              /* 0x0810f - sar, not / 2 */
+    facing = e->vx;
 
     /* 0x0812a. Once per pixel of intended movement. */
     do {
-        want    = (int8_t) e->f15;
+        want    = e->vy;
         blocked = 0;
 
         if (facing == 0) {                         /* 0x08143 - standing still */
@@ -7044,17 +7047,17 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
                 entity_set_type(e, ENTITY_NONE);
                 scene_add(&scenes[0], (int16_t) e->x, (int16_t) e->y, 2, 0);
                 break;
-            case 0x52:                             /* 0x08198 */
+            case TOOL_EXTRA_DUCK:                  /* 0x08198 */
                 entity_set_type(e, ENTITY_DUCK_BALL);
                 /* fall through */
             case ENTITY_DUCK_BALL:                 /* 0x081a7 */
                 tool_use((int16_t) e->x, (int16_t) e->y, 0x18);
                 score += 5;
-                e->f14 = (int8_t) -(int8_t) e->f14;
+                e->vx = (int8_t) -e->vx;
                 break;
             default:                               /* 0x081d4 */
                 if (type_flags[e->type] & 1)
-                    e->f14 = (int8_t) -(int8_t) e->f14;
+                    e->vx = (int8_t) -e->vx;
                 break;
             }
         }
@@ -7099,14 +7102,14 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
                 if (e->x > level_w)
                     e->x = level_w - 1;
                 e->y += d;
-                e->f15 = (uint8_t) want;
-                e->f21++;
+                e->vy = (int8_t) want;
+                e->fall++;
                 d     = -5;
                 moved = 1;
             }
         }
         depth  = 0;                                /* 0x08316 */
-        facing -= (int8_t) e->f14;
+        facing -= e->vx;
     } while (!moved);
 
     /* 0x0832f. What it makes of having moved, or of being blocked. */
@@ -7118,28 +7121,28 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         } else {
             switch (e->type) {
             case 1: case 2: case ENTITY_DUCK_IDLE: /* 0x083d2 */
-                if (e->f21 > 0x32)
+                if (e->fall > 0x32)
                     duck_dies(e, 0, 1);
                 break;
             case ENTITY_LEADER_SOMERSAULT_RIGHT:
             case ENTITY_LEADER_SOMERSAULT_LEFT:    /* 0x083f0 */
-                if (e->f21 > 0x32)
+                if (e->fall > 0x32)
                     duck_dies(e, 0, 1);
                 else {
                     entity_set_type(e, 1);
-                    e->f14 = 0;
+                    e->vx = 0;
                 }
                 break;
             case ENTITY_DUCK_SOMERSAULT_RIGHT:     /* 0x08427 */
-                if (e->f21 > 0x32)
+                if (e->fall > 0x32)
                     duck_dies(e, 0, 1);
                 else {
                     entity_set_type(e, 2);
-                    e->f14 = 0;
+                    e->vx = 0;
                 }
                 break;
             case ENTITY_MONSTER_WALKING:           /* 0x0845e */
-                if (e->f21 > 8) {
+                if (e->fall > 8) {
                     sound_play_guarded(0x18, 1);
                     entity_set_type(e, ENTITY_MONSTER_LANDING);
                     eaten_countdown = 0;
@@ -7151,34 +7154,34 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
                 particles_spawn((int16_t) e->x, (int16_t) e->y, 0x28);
                 break;
             case ENTITY_DUCK_SOMERSAULT_LEFT:      /* 0x08427 via the table */
-                if (e->f21 > 0x32)
+                if (e->fall > 0x32)
                     duck_dies(e, 0, 1);
                 else {
                     entity_set_type(e, 2);
-                    e->f14 = 0;
+                    e->vx = 0;
                 }
                 break;
             case ENTITY_MONSTER_LANDING:           /* 0x0845e via the table */
-                if (e->f21 > 8) {
+                if (e->fall > 8) {
                     sound_play_guarded(0x18, 1);
                     entity_set_type(e, ENTITY_MONSTER_LANDING);
                     eaten_countdown = 0;
                 }
                 break;
             case ENTITY_DUCK_BALL:                 /* 0x084be */
-                entity_set_type(e, 0x52);
+                entity_set_type(e, TOOL_EXTRA_DUCK);
                 tool_use((int16_t) e->x, (int16_t) e->y, 0x18);
                 score += 5;
                 break;
             case ENTITY_DUCK_HEAD_SPINNING:
             case ENTITY_DUCK_HEAD_LEFT:
             case ENTITY_DUCK_HEAD_RIGHT:           /* 0x084ea - it tumbles */
-                if (e->f21 > 8) {
-                    int16_t v = (int16_t) (2 - (e->f21 >> 2) - (game_rand() & 3));
+                if (e->fall > 8) {
+                    int16_t v = (int16_t) (2 - (e->fall >> 2) - (game_rand() & 3));
 
-                    e->f15 = (uint8_t) v;
-                    if ((int8_t) e->f15 < (int8_t) 0xf8)
-                        e->f15 = (uint8_t) 0xf8;
+                    e->vy = (int8_t) v;
+                    if (e->vy < -8)
+                        e->vy = -8;
                     entity_set_type(e, ENTITY_DUCK_HEAD_SPINNING);
                 } else if (e->type == ENTITY_DUCK_HEAD_SPINNING) {
                     entity_set_type(e, (int16_t) ((game_rand() & 1)
@@ -7189,7 +7192,7 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
                 break;
             }
         }
-        e->f21 = 0;                                /* 0x0855c */
+        e->fall = 0;                                /* 0x0855c */
     }
 
     /* 0x08565. Below the level's floor, or above its ceiling, and it is gone -
@@ -7217,7 +7220,7 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         case 0x28:
             sound_play_guarded(0x24, 1);           /* 0x08620 */
             break;
-        case 0x52:                                 /* 0x0862d */
+        case TOOL_EXTRA_DUCK:                      /* 0x0862d */
             entity_set_type(e, ENTITY_DUCK_BALL);
             if (!g_2016
                 && !scene_add(&scenes[0], (int16_t) scenes[2].entities[0].x,
@@ -7265,9 +7268,9 @@ void far scene_retire(scene_t far *s)
         entity_t far *e = &s->entities[i];
 
         if (e->type != 0) {                        /* 0x098be - it lives */
-            if (e->f27 != e->type)
+            if (e->last_type != e->type)
                 e->frame = 0;                      /* restart its script */
-            e->f27 = e->type;
+            e->last_type = e->type;
             continue;
         }
 
@@ -7777,8 +7780,8 @@ int16_t far run_level(int16_t demo)
                           ENTITY_MONSTER_WALKING, 0);  /* 0x0dd45 */
                 /* 0x0dd62. The one just added, which scene_add has already
                  * counted - the original indexes past the new entity and
-                 * reaches back 0x15 bytes to land on its f14. */
-                scenes[2].entities[scenes[2].count - 1].f14 =
+                 * reaches back 0x15 bytes to land on its vx. */
+                scenes[2].entities[scenes[2].count - 1].vx =
                     (int8_t) ((game_rand() & 2) - 1);
             }
         }
@@ -7796,7 +7799,7 @@ int16_t far run_level(int16_t demo)
          * Three bytes a record - a frame and a heading - with script_at as the
          * cursor: when the record under it names this frame the cursor moves
          * on, and the record it lands on gives the heading. entity_update's
-         * type 1 arm reads that out of [0x2100] as the hero's f14, but only
+         * type 1 arm reads that out of [0x2100] as the hero's vx, but only
          * when `scripted` is set, so this is demo input and nothing else.
          *
          * event_table is the clicks - the tool - and this is the walking. Only
@@ -8042,7 +8045,7 @@ int16_t far run_level(int16_t demo)
                 follow_x = (int16_t) scenes[3].entities[0].x;
                 follow_y = (int16_t) scenes[3].entities[0].y;
             } else if (scenes[0].flag != 0xff
-                       && scenes[0].entities[scenes[0].flag].f14 != 0) {
+                       && scenes[0].entities[scenes[0].flag].vx != 0) {
                 hold = 0x14;
                 follow_x = (int16_t) scenes[0].entities[scenes[0].flag].x;
                 follow_y = (int16_t) scenes[0].entities[scenes[0].flag].y;
@@ -8964,7 +8967,7 @@ void far level_load(void)
 
     if (scenes[2].entities[0].type == ENTITY_PADDLE) {   /* 0x08d19 */
         scene_add(&scenes[0], 0xa0, 0x64, ENTITY_DUCK_BALL, 0);
-        scenes[0].entities[0].f14 = (int8_t) ((game_rand() & 2) - 1);
+        scenes[0].entities[0].vx = (int8_t) ((game_rand() & 2) - 1);
         duck_count++;
     }
     duck_count += spare_ducks / 2;
@@ -8985,7 +8988,7 @@ void far level_load(void)
     j = egg_read_byte(egg_stream);                    /* the hero's facing */
     /* 0x08e25 tests the index against 0 and nothing else, so a level with no
      * hero - flag is 0xff, which scene_alloc set and nothing replaced - passes
-     * it and the original writes entities[255].f14, well past a 16-entry array.
+     * it and the original writes entities[255].vx, well past a 16-entry array.
      * In DOS that lands in whatever follows on the heap and nobody notices.
      * Level 4 is such a level, and ASan stops on it here.
      *
@@ -8993,7 +8996,7 @@ void far level_load(void)
      * somewhere and this one does not go anywhere. Nothing can read what it
      * wrote, so nothing observable is lost - but it is a choice, not a match. */
     if (scenes[0].flag && scenes[0].flag != 0xff)     /* 0x08e25 */
-        scenes[0].entities[scenes[0].flag].f14 = (int8_t) (j - 1);
+        scenes[0].entities[scenes[0].flag].vx = (int8_t) (j - 1);
 
     ambience_on = egg_read_byte(egg_stream);
     ambience_n  = egg_read_byte(egg_stream);

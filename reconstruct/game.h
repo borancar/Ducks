@@ -147,19 +147,79 @@ typedef struct entity_s {
     int32_t prev_x, prev_y;     /* +0x0c, +0x10 - where it was when the frame
                                  *         began. scene_keep_positions copies
                                  *         x and y here before anything moves */
-    int8_t  f14;                /* +0x14 - which way the entity faces: every
-                                 *         read of it is a byte load and a cbw,
-                                 *         and draw_entities tests it for < 0 */
-    uint8_t f15, f16;           /* +0x15 - scene_add zeroes these with it */
-    int16_t param;              /* +0x17 - scene_add's last argument */
-    uint8_t f19, f1a;           /* +0x19 - type 2 reads both: whether it
-                                 * walks, and how far behind to follow */
+    int8_t  vx;                 /* +0x14 - horizontal speed, pixels a frame,
+                                 *         and NOT merely a facing. The movement
+                                 *         loop at 0x0812a starts `facing` at it
+                                 *         and subtracts it each pass, adding
+                                 *         what is left to x, so a blocked
+                                 *         entity retries with less. Magnitudes
+                                 *         above 1 are real: a somersault is
+                                 *         +-2, ENTITY_PADDLE's bounce is one
+                                 *         per eight pixels off centre, and
+                                 *         ENTITY_CATCHER_ROCKET's is the
+                                 *         distance to the cursor over eight.
+                                 *
+                                 *         Its SIGN is the facing, which is all
+                                 *         the drawing wants - and for a duck,
+                                 *         where it is only ever -1, 0 or 1, the
+                                 *         two readings coincide. That is why
+                                 *         this said "which way it faces" until
+                                 *         the entities were named. */
+    int8_t  vy;                 /* +0x15 - vertical speed, and NEGATIVE IS UP.
+                                 *         SIGNED: every read in the image is a
+                                 *         byte load and a cbw, which is what
+                                 *         makes it int8_t and not the uint8_t
+                                 *         this said until the casts were
+                                 *         counted. Gravity is `if (vy < step)
+                                 *         vy++` at 0x080fb, one a frame to a
+                                 *         terminal `step`, and every launch
+                                 *         writes a negative: the bubble -1,
+                                 *         TOOL_BALLOON -2, the rocket -4, a
+                                 *         spark -5, a spring -7, and a bouncing
+                                 *         head is clamped at -8 */
+    int8_t  flock_facing;       /* +0x16 - the direction the FLOCK is going, not
+                                 *         this entity's, and signed for the same
+                                 *         reason. flock_chain latches the
+                                 *         leader's vx here and every follower
+                                 *         copies it, so `follow_gap *
+                                 *         flock_facing` is where the next one
+                                 *         stands; a leader that has stopped
+                                 *         keeps the last value that was not 0 */
+    int16_t param;              /* +0x17 - scene_add's last argument, and every
+                                 *         type means its own thing by it: the
+                                 *         rocket's ducks still wanted, a walking
+                                 *         duck's momentum, whether the balloon's
+                                 *         passenger has been inside solid */
+    uint8_t rank;               /* +0x19 - place in the flock, 1 upward, set by
+                                 *         flock_chain. Zero is not in it, and
+                                 *         entity_update reads it as `active` -
+                                 *         an unranked duck does not move */
+    uint8_t follow_gap;         /* +0x1a - 8, the pixels between one rank and
+                                 *         the next */
     struct entity_s far *lead;  /* +0x1b - which entity type 2 follows */
     int16_t frame;              /* +0x1f - animate_scene's step, zeroed when
                                  *         the type changes */
-    int16_t f21, f23;           /* +0x21 */
+    int16_t fall;               /* +0x21 - frames spent falling, ++ once a frame
+                                 *         while airborne. Over 0x32 on landing
+                                 *         kills; over 8 starts the monster's
+                                 *         one-shot and bounces a head, whose new
+                                 *         vy is scaled by `fall >> 2`. A spring
+                                 *         and a teleport both zero it, so the
+                                 *         drop is measured from there */
+    int16_t counter;            /* +0x23 - scratch, and deliberately not named
+                                 *         for a use: the stomper counts to 0x20
+                                 *         with it and then rises in 2s, while a
+                                 *         walking duck uses it as a turn
+                                 *         debounce - 5 when falling fast, and
+                                 *         turning while it is set stops the duck
+                                 *         dead. draw_entities also subtracts it
+                                 *         from y for ENTITY_STOMPER_RISING */
     int16_t type;               /* +0x25 - a word, not a byte */
-    int16_t f27;                /* +0x27 */
+    int16_t last_type;          /* +0x27 - the type last frame. scene_retire
+                                 *         restarts the script when they differ,
+                                 *         a second path to the restart
+                                 *         entity_set_type does - for changes
+                                 *         that did not go through it */
 } entity_t;                     /* 0x29 */
 
 typedef struct {
@@ -731,7 +791,7 @@ extern solid_t far *solids;              /* 0x202d */
  * driven by type 0x2f reaching the end of its script (0x0a632), not by a clock.
  *
  * Touching a live one is fatal: the arm at 0x09eda plays sound 0x0f, turns the
- * duck into 0x35 with f15 = -5, and takes one off duck_count - unless
+ * duck into 0x35 with vy = -5, and takes one off duck_count - unless
  * cheat_state[2] is set, which is the invulnerability cheat. The gap is
  * harmless; it has no collision arm at all. */
 #define ENTITY_SPARK_GAP       0x2c
@@ -758,7 +818,7 @@ extern solid_t far *solids;              /* 0x202d */
 #define ENTITY_SPARK_SWITCH_FLIPPING 0x2f
 #define ENTITY_SPARK_SWITCH_OFF      0x30
 
-/* What a duck becomes when a live spark gets it, set at 0x09eda with f15 = -5
+/* What a duck becomes when a live spark gets it, set at 0x09eda with vy = -5
  * so it is thrown upward. The script is the electrocution: sprite 103 - the
  * ordinary duck - alternating with 161 three times, then 162..167 and 208, with
  * next_type 0, so it retires itself when the flicker is over. */
@@ -784,7 +844,7 @@ extern solid_t far *solids;              /* 0x202d */
 
 /* The two facings of the eleven-frame eat, both with next_type back to
  * ENTITY_MONSTER_WALKING. Which one is chosen is the object's own facing:
- * 0x46 + (o->f14 == 1) at 0x09e64, so f14 == 1 - travelling right - gives the
+ * 0x46 + (o->vx == 1) at 0x09e64, so vx == 1 - travelling right - gives the
  * RIGHT one. The duck is set to type 0 outright; there is no dying animation,
  * which is what makes this different from every other way a duck is lost. */
 #define ENTITY_MONSTER_EATING_LEFT  0x46
@@ -795,7 +855,7 @@ extern solid_t far *solids;              /* 0x202d */
  * next_type drops it back to rest. The throw itself is one ternary per side:
  *     0x0a12f  LEFT  -> becomes 0x3e, duck to LEADER/DUCK_SOMERSAULT_LEFT
  *     0x0a243  RIGHT -> becomes 0x3f, duck to LEADER/DUCK_SOMERSAULT_RIGHT
- * and both set f15 = -7 and clear f21, which is the fall counter - so the drop
+ * and both set vy = -7 and clear fall, which is the fall counter - so the drop
  * is measured from the spring and not from wherever the duck came in. */
 #define ENTITY_SPRING_LEFT            0x3c
 #define ENTITY_SPRING_RIGHT           0x3d
@@ -803,7 +863,7 @@ extern solid_t far *solids;              /* 0x202d */
 #define ENTITY_SPRING_RIGHT_LAUNCHING 0x3f
 
 /* The fan, and it does not merely kill: the arm at 0x0a07c retires the duck and
- * puts a 0x43 into scene 1 ten pixels above it, with a random upward f15 and a
+ * puts a 0x43 into scene 1 ten pixels above it, with a random upward vy and a
  * random facing, so what comes out is thrown debris. The level loader gives a
  * fan its own arm at 0x08bbd, which is the only thing that sets wide_scene1 -
  * scene 1 has to be bigger on a level that has one, because of the bits. */
@@ -813,7 +873,7 @@ extern solid_t far *solids;              /* 0x202d */
  * type_flags bit 0 - the only one of the three head types to have it.
  *
  * It spawns particles every frame it exists (0x080a3), so it trails as it
- * flies, and it bounces: the arm at 0x084ea gives it a fresh upward f15 on any
+ * flies, and it bounces: the arm at 0x084ea gives it a fresh upward vy on any
  * landing harder than 8, clamped to -8, and puts it back to spinning. Only a
  * soft landing lets it settle, and which way it ends up facing is a coin toss:
  * `(game_rand() & 1) + ENTITY_DUCK_HEAD_LEFT`, both single frames. Sprite 199
@@ -834,7 +894,7 @@ extern solid_t far *solids;              /* 0x202d */
  * ordinary duck reaches it - `if (d->type == 1) break`, so the LEADER cannot
  * board, the exact opposite of the spark switch, which only the leader can
  * throw. On boarding: sound 0x1f, the balloon takes the six-frame flying
- * script, and the duck becomes 0x4a with param 0, f15 = -4 and its y snapped to
+ * script, and the duck becomes 0x4a with param 0, vy = -4 and its y snapped to
  * the balloon's, which is what puts passenger and basket in the same place. */
 #define ENTITY_HOT_AIR_BALLOON_IDLE   0x48
 #define ENTITY_HOT_AIR_BALLOON_FLYING 0x49
@@ -855,9 +915,9 @@ extern solid_t far *solids;              /* 0x202d */
 /* A stomping machine, and it is a four-state CYCLE that re-arms itself:
  *     0x22  armed, one frame, looping - what levels place (16 across 13)
  *     0x23  sprung: y -= 10, one jump upward, then next_type to 0x25
- *     0x25  counts f23 to 0x20 - about half a second of staying down
- *     0x26  rises, f23 += 2 a frame, and draw_entities draws it y - f23 so the
- *           climb is in the drawing rather than the position; at f23 >= 0xa it
+ *     0x25  counts counter to 0x20 - about half a second of staying down
+ *     0x26  rises, counter += 2 a frame, and draw_entities draws it y - counter so the
+ *           climb is in the drawing rather than the position; at counter >= 0xa it
  *           becomes 0x22 again and is ready for the next duck
  * so it is not spent like the spark switch - it resets.
  *
@@ -868,8 +928,8 @@ extern solid_t far *solids;              /* 0x202d */
  * crushed, not drowned. Corrected at the site. */
 #define ENTITY_STOMPER         0x22
 #define ENTITY_STOMPER_SPRUNG  0x23   /* fires: y -= 10, once */
-#define ENTITY_STOMPER_DOWN    0x25   /* holds while f23 counts to 0x20 */
-#define ENTITY_STOMPER_RISING  0x26   /* f23 += 2 until 0xa, then armed again */
+#define ENTITY_STOMPER_DOWN    0x25   /* holds while counter counts to 0x20 */
+#define ENTITY_STOMPER_RISING  0x26   /* counter += 2 until 0xa, then armed again */
 
 /* The duck the stomper catches. Four frames and then duck_dies, and next_type
  * is 2 - which only matters under cheat_state[2], where duck_dies does nothing
@@ -892,7 +952,7 @@ extern solid_t far *solids;              /* 0x202d */
  * Both have an EMPTY script in block 0x47, because their sprite is computed
  * rather than looked up. draw_entities at 0x0acb7:
  *
- *     index = (2 - e->type) * 12 + 6 - e->f14 * 4 + walk_phase
+ *     index = (2 - e->type) * 12 + 6 - e->vx * 4 + walk_phase
  *
  * which is twelve sprites per type - three facings of four frames - with
  * `(2 - type) * 12` choosing the set: 2..13 for the duck, 14..25 for the
@@ -900,7 +960,7 @@ extern solid_t far *solids;              /* 0x202d */
  * second the same walk in green with a red one, which is what makes the leader
  * the green one and TOOL_PICK_LEADER's icon a green duck.
  *
- * The cheat_state[6] branch is LEFT HANDED flipping `- e->f14 * 4` to `+`, the
+ * The cheat_state[6] branch is LEFT HANDED flipping `- e->vx * 4` to `+`, the
  * same mirroring the type_flags bit 2 types get from their extra slot. */
 #define ENTITY_LEADER          0x01
 #define ENTITY_DUCK            0x02
@@ -953,7 +1013,7 @@ extern solid_t far *solids;              /* 0x202d */
  * play, so no amount of playing the eighty levels would have shown up the
  * absent arm. */
 /* The rocket the PLAYER flies, in a secret level, to catch falling ducks. It
- * steers itself at the cursor - `f14 = (mouse_x + 4 - e->x) >> 3` at 0x07d94,
+ * steers itself at the cursor - `vx = (mouse_x + 4 - e->x) >> 3` at 0x07d94,
  * one step per eight pixels of error - and 0x51 shares that arm, so the girder
  * in level 202 is driven the same way.
  *
@@ -977,7 +1037,7 @@ extern solid_t far *solids;              /* 0x202d */
  * the count, and gives scene 0 eight extra slots.
  *
  * The bounce is at 0x09a98 and is the real thing - the angle comes from where
- * on the paddle it lands: `f14 = ((d->x - o->x) >> 3) + 1`, one step per eight
+ * on the paddle it lands: `vx = ((d->x - o->x) >> 3) + 1`, one step per eight
  * pixels off centre, signed by which side. A duck that touches the paddle also
  * becomes the ball, so the served one is not special.
  *
@@ -1106,7 +1166,7 @@ extern solid_t far *solids;              /* 0x202d */
  * duck. At 0x09bc9 the duck is retired outright (type 0, y = -40) and it is the
  * rocket that becomes 0x1a, with param-- for the one it just took.
  *
- * 0x1a bobs the rocket upward (f15 = -4) for two frames and next_type walks it
+ * 0x1a bobs the rocket upward (vy = -4) for two frames and next_type walks it
  * to 0x1b, which decides what the rocket is now:
  *     param > 0   back to ENTITY_ROCKET_FLYING + param, so the picture shows
  *                 the new number - which is what makes ENTITY_ROCKET_N mean
@@ -1181,10 +1241,10 @@ extern solid_t far *solids;              /* 0x202d */
 /* THREE TYPE NUMBERS THAT ARE NOT TYPES. Where type_flags has bit 2, the
  * facing-RIGHT artwork lives in the NEXT slot, and draw_entities reaches it as
  * anim_script[type + mirror] - so the slot holds a script but no entity is ever
- * set to it. The direction is worth getting right: mirror is `f14 == 1`, and
- * f14 == 1 is travelling right, so the type's OWN script is the left-facing one
+ * set to it. The direction is worth getting right: mirror is `vx == 1`, and
+ * vx == 1 is travelling right, so the type's OWN script is the left-facing one
  * and the extra slot is the right. cutscene_night_monster settles it - it sets
- * f14 = -1 with the comment "walking left" and the monster draws from 0x39's
+ * vx = -1 with the comment "walking left" and the monster draws from 0x39's
  * own sprites. Exactly three types do this, and nothing in the image assigns any
  * of the three companions:
  *     0x28 TOOL_SEAGULL  -> 0x29
