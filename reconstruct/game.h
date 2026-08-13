@@ -564,7 +564,7 @@ extern uint8_t      tool_count;     /* 0x178b */
 int16_t far tool_list_has(int16_t type);
 int16_t far tool_list_any_flagged(void);
 extern int16_t      next_type[111];
-extern uint8_t      cursor_divider, cursor_phase;
+extern uint8_t      walk_divider, walk_phase;
 void far load_animations(void);
 extern void far *egg_stream, *current_buffer;
 
@@ -884,6 +884,27 @@ extern solid_t far *solids;              /* 0x202d */
  * zero-sized blit. */
 #define ENTITY_NONE            0x00
 
+/* THE DUCKS. Neither is ever a level record - the loader places
+ * ENTITY_DUCK_IDLE and promotes one to ENTITY_LEADER (0x08d7d, "which duck is
+ * the hero") - but between them they are what the whole game is about, and they
+ * appear in every level there is.
+ *
+ * Both have an EMPTY script in block 0x47, because their sprite is computed
+ * rather than looked up. draw_entities at 0x0acb7:
+ *
+ *     index = (2 - e->type) * 12 + 6 - e->f14 * 4 + walk_phase
+ *
+ * which is twelve sprites per type - three facings of four frames - with
+ * `(2 - type) * 12` choosing the set: 2..13 for the duck, 14..25 for the
+ * leader. Rendered, the first set is an orange duck in a green cap and the
+ * second the same walk in green with a red one, which is what makes the leader
+ * the green one and TOOL_PICK_LEADER's icon a green duck.
+ *
+ * The cheat_state[6] branch is LEFT HANDED flipping `- e->f14 * 4` to `+`, the
+ * same mirroring the type_flags bit 2 types get from their extra slot. */
+#define ENTITY_LEADER          0x01
+#define ENTITY_DUCK            0x02
+
 /* The explosion. The BDG9000 turns whatever it cashes in into this, and its
  * first sprite is also blast_terrain's stencil - anim_script[ENTITY_EXPLOSION][0]
  * is the shape of the hole knocked out of the terrain, so the flash and the
@@ -996,15 +1017,20 @@ extern solid_t far *solids;              /* 0x202d */
  * materialise - and next_type carries it to 0x53. */
 #define ENTITY_EXTRA_DUCK_ARRIVING 0x54
 
-/* The monster standing still, facing left. Its script is byte-identical to
- * ENTITY_MONSTER_WALKING's - the same sprites 181..184 - and the difference is
- * entirely in the flags: no bit 2, so it never reaches the right-facing mirror
- * slot, and no bit 0, so the default movement in entity_update does not apply
- * to it. It has no arm of its own anywhere in the image.
+/* A monster DANCING, and its hi-fi. The pair is the joke: level 203 places the
+ * hi-fi at (375,199) and the monster at (386,199), eleven pixels apart on the
+ * same ground line, and it is the only place either appears.
  *
- * So it is the walking monster's picture with the walking taken away, which is
- * what makes "idle" right and why one level places one. */
-#define ENTITY_MONSTER_IDLE_LEFT 0x55
+ * The dance is the walk with the walking taken away. 0x55's script is
+ * byte-identical to ENTITY_MONSTER_WALKING's - the same sprites 181..184 - and
+ * all that differs is the flags: no bit 0, so entity_update's default movement
+ * never applies and it stays where it is putting one foot in front of the
+ * other; and no bit 2, so it never reaches the right-facing mirror slot and
+ * always faces left, towards the hi-fi.
+ *
+ * Neither has an arm anywhere in the image, and neither needs one. */
+#define ENTITY_MONSTER_DANCING 0x55
+#define ENTITY_HIFI            0x56
 
 /* The teleporter, which is a PAIR OF RECORDS and not one entity. The arm at
  * 0x09fae reads o[1].x and o[1].y - the entity record *after* the entry - as

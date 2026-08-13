@@ -311,11 +311,13 @@ uint8_t    cheat_text_count;     /* 0x0504 */
  * every one of these overlaps was invisible to the one test that exists to
  * catch exactly this, which is why there were seven of them. */
 int16_t    cheat_state[10];      /* 0x0505 */
-/* 0x179d, 0x179e. The cursor's animation: a two-frame divider and a phase that
- * runs 0..3, both stepped by palette_fade_step's tail, and the phase is added to
- * the sprite index the two cursor types compute. */
-uint8_t    cursor_divider;       /* 0x179d */
-uint8_t    cursor_phase;         /* 0x179e */
+/* 0x179d, 0x179e. The DUCKS' walk: a two-frame divider and a phase that runs
+ * 0..3, both stepped by palette_fade_step's tail, and the phase is the last
+ * term of the sprite index ENTITY_LEADER and ENTITY_DUCK compute. Nothing about
+ * it is a cursor - the pointer is ENTITY_CURSOR and animates from its own
+ * script - and both of these were named for one until 2026-08-13. */
+uint8_t    walk_divider;       /* 0x179d */
+uint8_t    walk_phase;         /* 0x179e */
 table_t    sprite_table;         /* 0x18e9 - the set, not a pointer to it: every
                                   * draw_sprite call pushes ds and this offset */
 char far **tool_names;           /* 0x2106 */
@@ -1417,14 +1419,16 @@ void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour)
                 y += 8;
             break;
 
-        case 1:                                    /* 0x0acb7 - the two cursors */
-        case 2:
-            /* Left-handed swaps which side of the pen the tool sits on, which is
-             * the whole difference between the two arms. */
+        case ENTITY_LEADER:                        /* 0x0acb7 - the two DUCKS */
+        case ENTITY_DUCK:
+            /* No script: twelve sprites a type, three facings of four frames,
+             * picked by facing and walk_phase. `(2 - type) * 12` is which set -
+             * 2..13 the orange duck, 14..25 the green leader. LEFT HANDED
+             * flips the facing term, which is the whole difference here. */
             if (cheat_state[6])
-                index = (2 - e->type) * 12 + e->f14 * 4 + cursor_phase + 6;
+                index = (2 - e->type) * 12 + e->f14 * 4 + walk_phase + 6;
             else
-                index = (2 - e->type) * 12 + 6 - e->f14 * 4 + cursor_phase;
+                index = (2 - e->type) * 12 + 6 - e->f14 * 4 + walk_phase;
             break;
 
         case ENTITY_DUCK_IDLE:                     /* 0x0ad4c */

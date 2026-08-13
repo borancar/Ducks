@@ -575,9 +575,9 @@ void far palette_fade_step(int16_t arg)
      *
      * The scroll wraps against the tile's own size, which is why load_background
      * leaves those masks one less than the width and the height. */
-    if (++cursor_divider == 2) {
-        cursor_phase = (uint8_t) ((cursor_phase + 1) & 3);
-        cursor_divider = 0;
+    if (++walk_divider == 2) {
+        walk_phase = (uint8_t) ((walk_phase + 1) & 3);
+        walk_divider = 0;
     }
     bg_scroll_y = (uint8_t) ((bg_scroll_y + bg_step_y) & wrap_y);
     bg_scroll_x = (uint8_t) ((bg_scroll_x + bg_step_x) & wrap_x);
