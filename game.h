@@ -923,6 +923,16 @@ extern solid_t far *solids;              /* 0x202d */
 #define ENTITY_SPIKE           0x0b
 #define ENTITY_FLAME           0x58
 
+/* A rotating alarm light. Four frames on a loop with the glow travelling round
+ * the dome, which is the rotation; sitting next to ENTITY_FLAME in the numbering
+ * had it read as a brazier here until 2026-08-13.
+ *
+ * It has no arm anywhere in the image - no collision, no movement, no entry in
+ * either jump table - and needs none: it is scenery that turns. Five of them,
+ * in levels 45 and 73, which makes it the only one of the last few types that
+ * appears in the game proper rather than in a secret level. */
+#define ENTITY_ALARM_LIGHT     0x57
+
 /* A bottle a duck picks up, 3x7 pixels, and the floating "10" it turns into.
  * The arm at 0x09f80 is score += 10, entity_set_type(o, the popup), sound 0x2c
  * - so the popup's artwork, which is the characters "10", is literally the ten
