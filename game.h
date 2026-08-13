@@ -685,6 +685,417 @@ extern solid_t far *solids;              /* 0x202d */
 #define SCREEN_SIZE_X 320
 #define SCREEN_SIZE_Y 200
 
+/* Entity types identified by looking at the artwork in block 0x53 next to what
+ * the code does with them. The pictures are the game's, the names are ours, and
+ * each one below has a code site that agrees with the picture.
+ *
+ * The rocket is one object in six states: flying, and then showing how many
+ * ducks are still to come. A duck that reaches any of the five is home - the
+ * arm at 0x09bc9 takes all five together, as does the level loader at 0x08c04,
+ * whose jump table has four identical entries. */
+#define ENTITY_DUCK_CRASHING 0x03  /* the 7-frame fall, next_type 0 - it retires
+                                    * itself. duck_dies sets it and returns
+                                    * early if it is already set, so a duck
+                                    * cannot die twice */
+#define ENTITY_DUCK_IDLE     0x04  /* stood still, script loops on itself */
+#define ENTITY_ROCKET_FLYING 0x05  /* sprites 27 and 55, the exhaust alternating */
+#define ENTITY_ROCKET_1      0x06  /* one duck still to come */
+#define ENTITY_ROCKET_2      0x07
+#define ENTITY_ROCKET_3      0x08
+#define ENTITY_ROCKET_4      0x09
+#define ENTITY_ROCKET_5      0x0a
+
+/* The menu pointer: script 0,0,0,0,1,1,1,1 with next_type itself, so it blinks
+ * between sprites 0 and 1 forever. Set at 0x0cbe4 on cursor_scene's one entity.
+ * Not to be confused with types 1 and 2, which draw_entities calls "the two
+ * cursors" - those are the in-level pen, and their sprite is computed rather
+ * than scripted. */
+#define ENTITY_CURSOR        0x14
+
+/* The pointer while a tool is in progress: one frame, sprite 63, and the branch
+ * that sets it is also the branch that refuses input and puts tool_at back. So
+ * it is not decoration - it is the picture of the game not listening. */
+#define ENTITY_CURSOR_INACTIVE 0x16
+
+/* The cursor while a MIRRORED tool is held (type_flags bit 1) - the ones that
+ * go into scene 5 as a pair. It shows an arrow, and the arrow points at the
+ * flock: the type is g_dab + ENTITY_ARROW_LEFT, and g_dab is `avg_x > mouse_x`,
+ * so the flock being left of the cursor gives the left arrow. Kept as an
+ * addition rather than a ternary because that is what the original computes. */
+#define ENTITY_ARROW_LEFT      0x2a
+#define ENTITY_ARROW_RIGHT     0x2b
+
+/* The two states of one hazard, alternating. scene_swap_pair walks scene 2 and
+ * turns every gap into a spark and every spark into a gap, so the whole level's
+ * set flips together rather than each keeping its own timer - and the flip is
+ * driven by type 0x2f reaching the end of its script (0x0a632), not by a clock.
+ *
+ * Touching a live one is fatal: the arm at 0x09eda plays sound 0x0f, turns the
+ * duck into 0x35 with f15 = -5, and takes one off duck_count - unless
+ * cheat_state[2] is set, which is the invulnerability cheat. The gap is
+ * harmless; it has no collision arm at all. */
+#define ENTITY_SPARK_GAP       0x2c
+#define ENTITY_SPARK           0x2d
+
+/* The switch being thrown: two frames, and reaching the end of them is what
+ * calls scene_swap_pair and flips every spark on the level at once.
+ *
+ * It is the middle of a one-way chain: ON -> FLIPPING -> OFF. The arm at
+ * 0x09b87 only takes the ON one if `d->type == 1` - the LEADER alone can throw
+ * it, for sound 0x0d and 20 points - and next_type then carries it to OFF,
+ * whose next_type is itself, so the switch is spent and cannot be thrown twice.
+ *
+ * The two rest states look their parts: ON animates (140, 245, 246, 140, 140),
+ * OFF is the single frame 143.
+ *
+ * OFF has no code site anywhere in the image: nothing sets it, nothing tests
+ * it, and it is only ever arrived at through next_type. That absence is not a
+ * gap in the reading - a spent switch is INERT, and having no arm is exactly
+ * how the game says so. Its name therefore rests on the egg's chain and the
+ * picture rather than on a line of C, which is a weaker footing than ON has and
+ * is recorded as such. */
+#define ENTITY_SPARK_SWITCH_ON       0x2e
+#define ENTITY_SPARK_SWITCH_FLIPPING 0x2f
+#define ENTITY_SPARK_SWITCH_OFF      0x30
+
+/* What a duck becomes when a live spark gets it, set at 0x09eda with f15 = -5
+ * so it is thrown upward. The script is the electrocution: sprite 103 - the
+ * ordinary duck - alternating with 161 three times, then 162..167 and 208, with
+ * next_type 0, so it retires itself when the flicker is over. */
+#define ENTITY_DUCK_ZAPPED   0x35
+
+/* The "i" sign on the level information screen - the SECOND pre-level screen,
+ * which only appears when the level has a text page. run_level's other screens
+ * never place it: the one scene_add is inside `if (has_page)` at 0x1131f. */
+#define ENTITY_INFO_SIGN     0x34
+
+/* The monster prowling: sprites 181..184, next_type itself, so it loops until
+ * something else moves it on. It is the state everything else about the monster
+ * returns to - 0x46 and 0x47, the two facings of the eleven-frame eat, both
+ * have next_type 0x39, as does 0x4b.
+ *
+ * type_flags bit 2 is set, so its RIGHT-facing artwork is the mirror slot 0x3a
+ * (sprites 226..229) and no entity is ever set to that; 181..184, this type's
+ * own, are the monster facing left. cutscene_night_monster
+ * places one directly - scene_add(..., 0x39, 5) at 0x1016a - which is the one
+ * place the monster appears outside a level. See docs/notes/the-monster.md,
+ * where the frame trace showed it entering and leaving this state. */
+#define ENTITY_MONSTER_WALKING 0x39
+
+/* The two facings of the eleven-frame eat, both with next_type back to
+ * ENTITY_MONSTER_WALKING. Which one is chosen is the object's own facing:
+ * 0x46 + (o->f14 == 1) at 0x09e64, so f14 == 1 - travelling right - gives the
+ * RIGHT one. The duck is set to type 0 outright; there is no dying animation,
+ * which is what makes this different from every other way a duck is lost. */
+#define ENTITY_MONSTER_EATING_LEFT  0x46
+#define ENTITY_MONSTER_EATING_RIGHT 0x47
+
+/* The springs, two of each because a spring throws one way only. The resting
+ * one is a single frame; touching it swaps it for the four-frame launch, whose
+ * next_type drops it back to rest. The throw itself is one ternary per side:
+ *     0x0a12f  LEFT  -> becomes 0x3e, duck to LEADER/DUCK_SOMERSAULT_LEFT
+ *     0x0a243  RIGHT -> becomes 0x3f, duck to LEADER/DUCK_SOMERSAULT_RIGHT
+ * and both set f15 = -7 and clear f21, which is the fall counter - so the drop
+ * is measured from the spring and not from wherever the duck came in. */
+#define ENTITY_SPRING_LEFT            0x3c
+#define ENTITY_SPRING_RIGHT           0x3d
+#define ENTITY_SPRING_LEFT_LAUNCHING  0x3e
+#define ENTITY_SPRING_RIGHT_LAUNCHING 0x3f
+
+/* The fan, and it does not merely kill: the arm at 0x0a07c retires the duck and
+ * puts a 0x43 into scene 1 ten pixels above it, with a random upward f15 and a
+ * random facing, so what comes out is thrown debris. The level loader gives a
+ * fan its own arm at 0x08bbd, which is the only thing that sets wide_scene1 -
+ * scene 1 has to be bigger on a level that has one, because of the bits. */
+#define ENTITY_FAN                    0x42
+
+/* What the fan throws: the duck's head, spinning. Four frames on a loop, and
+ * type_flags bit 0 - the only one of the three head types to have it.
+ *
+ * It spawns particles every frame it exists (0x080a3), so it trails as it
+ * flies, and it bounces: the arm at 0x084ea gives it a fresh upward f15 on any
+ * landing harder than 8, clamped to -8, and puts it back to spinning. Only a
+ * soft landing lets it settle, and which way it ends up facing is a coin toss:
+ * `(game_rand() & 1) + ENTITY_DUCK_HEAD_LEFT`, both single frames. Sprite 199
+ * is both this one's first frame and the whole of the left one, which is how
+ * the same head stays recognisable across all three.
+ *
+ * A settled head is not finished: it is in the tumble arm too, so kicking it
+ * hard enough sends it back to spinning. */
+#define ENTITY_DUCK_HEAD_SPINNING     0x43
+#define ENTITY_DUCK_HEAD_LEFT         0x44
+#define ENTITY_DUCK_HEAD_RIGHT        0x45
+
+/* The hot air balloon, which is NOT TOOL_BALLOON. The tool's 0x36 is the small
+ * red one that goes off on impact; this is the big one with a basket, and it
+ * carries a duck away.
+ *
+ * Idle is the single frame 223, and it waits. The arm at 0x09c72 fires when an
+ * ordinary duck reaches it - `if (d->type == 1) break`, so the LEADER cannot
+ * board, the exact opposite of the spark switch, which only the leader can
+ * throw. On boarding: sound 0x1f, the balloon takes the six-frame flying
+ * script, and the duck becomes 0x4a with param 0, f15 = -4 and its y snapped to
+ * the balloon's, which is what puts passenger and basket in the same place. */
+#define ENTITY_HOT_AIR_BALLOON_IDLE   0x48
+#define ENTITY_HOT_AIR_BALLOON_FLYING 0x49
+
+/* The passenger. No level places one - the only way in is boarding, at 0x09c72
+ * - and the arm at 0x07c80 is the whole ride:
+ *     e->y -= 1                    a pixel a frame, always upward
+ *     y == 0                       out of the top, and it becomes an ordinary
+ *                                  duck (type 2) wherever it got to
+ *     terrain_at(y, x) != 0        passing through something solid: param = 1
+ *     param already set, now clear  it has come out the far side, so let go
+ * That middle pair is what lets a ceiling be passed through rather than
+ * blocking: param remembers having been inside solid ground, and leaving it is
+ * what ends the ride. `return` rather than `break`, so none of the ordinary
+ * movement below applies to it. */
+#define ENTITY_DUCK_IN_HOT_AIR_BALLOON 0x4a
+
+/* A stomping machine, and it is a four-state CYCLE that re-arms itself:
+ *     0x22  armed, one frame, looping - what levels place (16 across 13)
+ *     0x23  sprung: y -= 10, one jump upward, then next_type to 0x25
+ *     0x25  counts f23 to 0x20 - about half a second of staying down
+ *     0x26  rises, f23 += 2 a frame, and draw_entities draws it y - f23 so the
+ *           climb is in the drawing rather than the position; at f23 >= 0xa it
+ *           becomes 0x22 again and is ready for the next duck
+ * so it is not spent like the spark switch - it resets.
+ *
+ * The duck it catches becomes ENTITY_DUCK_CRUSHED, whose four frames end in
+ * duck_dies at
+ * 0x0a6f0. The port labelled that arm "Drowned" for a long time, which was a
+ * guess made before anything here had a name and is simply wrong - the duck is
+ * crushed, not drowned. Corrected at the site. */
+#define ENTITY_STOMPER         0x22
+#define ENTITY_STOMPER_SPRUNG  0x23   /* fires: y -= 10, once */
+#define ENTITY_STOMPER_DOWN    0x25   /* holds while f23 counts to 0x20 */
+#define ENTITY_STOMPER_RISING  0x26   /* f23 += 2 until 0xa, then armed again */
+
+/* The duck the stomper catches. Four frames and then duck_dies, and next_type
+ * is 2 - which only matters under cheat_state[2], where duck_dies does nothing
+ * and the duck has to be given somewhere to go; that is what `chain` is doing
+ * in the arm at 0x0a6f0. Without the cheat the type is already
+ * ENTITY_DUCK_CRASHING by then and the default must not run. */
+#define ENTITY_DUCK_CRUSHED    0x24
+
+/* Nothing. entity_set_type(e, ENTITY_NONE) is how anything is removed, and the
+ * retire pass then drops the record. Its script is sprite 37, which is 0x0 with
+ * no pixels at all - so "retired" is drawn, not skipped, and costs one
+ * zero-sized blit. */
+#define ENTITY_NONE            0x00
+
+/* The explosion. The BDG9000 turns whatever it cashes in into this, and its
+ * first sprite is also blast_terrain's stencil - anim_script[ENTITY_EXPLOSION][0]
+ * is the shape of the hole knocked out of the terrain, so the flash and the
+ * damage are the same picture. next_type 0, so it clears itself. */
+#define ENTITY_EXPLOSION       0x17
+
+/* The two touch-and-die hazards. The arm at 0x09e07 is one line, duck_dies,
+ * and both share it - so all that separates them is the picture and the reach
+ * anim_a gives each: 3 for the spike, 7 for the flame, so the flame catches a
+ * duck from more than twice as far away.
+ *
+ * Levels place 77 of these across 34 of them, which makes it the commonest
+ * object in the game - as a plain hazard should be. (An earlier guess here had
+ * it as the duck source on the strength of that count alone. Ducks come from
+ * 0x4f, which is what sets spare_ducks.) */
+#define ENTITY_SPIKE           0x0b
+#define ENTITY_FLAME           0x58
+
+/* A bottle a duck picks up, 3x7 pixels, and the floating "10" it turns into.
+ * The arm at 0x09f80 is score += 10, entity_set_type(o, the popup), sound 0x2c
+ * - so the popup's artwork, which is the characters "10", is literally the ten
+ * points just scored.
+ *
+ * Both were missing from the port until 2026-08-13, and each hid the other: the
+ * collision arm was skipped in transcription, and because nothing then set the
+ * popup, the popup looked like unreachable artwork. The jump table at cs:0x56bb
+ * is what found it - it has an entry per type for 0x39..0x59, and 0x59's was
+ * the one target the port had no arm for.
+ *
+ * Both belong to a SECRET LEVEL and are seen nowhere else. Only level 203
+ * places bottles - 23 of them, and none of 1..80 has a single one - and 203 is
+ * reached from level 52, whose next_level names it. So the route to seeing
+ * either is: find the invisible ENTITY_SECRET in level 52 with the leader.
+ *
+ * That is also why both went missing for so long. Neither can appear in normal
+ * play, so no amount of playing the eighty levels would have shown up the
+ * absent arm. */
+/* The rocket the PLAYER flies, in a secret level, to catch falling ducks. It
+ * steers itself at the cursor - `f14 = (mouse_x + 4 - e->x) >> 3` at 0x07d94,
+ * one step per eight pixels of error - and 0x51 shares that arm, so the girder
+ * in level 202 is driven the same way.
+ *
+ * Catching a duck is scored as getting one home: the arm at 0x0a2dc is the
+ * rocket's own arm at 0x09bc9 with the counting taken out - duck_count--,
+ * quota_left--, the duck retired to y = -40, carry_bonus() and the same
+ * combo_lo. It has no param to decrement and no leader test, and the sound is
+ * 0x14 rather than 4.
+ *
+ * The level loader gives it its own arm, and it is the only thing that sets
+ * spare_ducks - 0x10, half of which is how many ducks get scattered. So this
+ * type is where a catching level's falling ducks come from as well as what
+ * catches them. Only level 200 has one. */
+#define ENTITY_CATCHER_ROCKET  0x4f
+
+/* ARKANOID, in a secret level. The paddle is flown with the cursor - it shares
+ * ENTITY_CATCHER_ROCKET's steering arm at 0x07d94 - and the ball is a duck.
+ *
+ * The loader builds the game when scene 2's first entity is a paddle (0x08d19):
+ * it serves one ball at x 0xa0, y 0x64 with a random direction, adds a duck to
+ * the count, and gives scene 0 eight extra slots.
+ *
+ * The bounce is at 0x09a98 and is the real thing - the angle comes from where
+ * on the paddle it lands: `f14 = ((d->x - o->x) >> 3) + 1`, one step per eight
+ * pixels off centre, signed by which side. A duck that touches the paddle also
+ * becomes the ball, so the served one is not special.
+ *
+ * The bricks are the TERRAIN. Every time the ball comes to rest it calls
+ * tool_use(x, y, TOOL_BOMB) and scores 5 - so it blasts a hole where it lands
+ * and the level is eaten away. The two ball types are one object in two spins,
+ * each landing turning it into the other (0x081a7 and 0x084be), and 0x52 is
+ * also TOOL_EXTRA_DUCK, which is the same duck the tool places in an ordinary
+ * level. */
+#define ENTITY_PADDLE          0x51
+#define ENTITY_DUCK_BALL       0x53
+
+#define ENTITY_BOTTLE          0x59
+#define ENTITY_SCORE_POPUP     0x5a
+
+/* A seagull knocked out of the air by the detonator, and what it becomes on
+ * landing: the arm at 0x0848b plays sound 0x10 on voice 3, spawns particles and
+ * moves it on. The falling one loops; the landed one runs five frames and
+ * retires. */
+#define ENTITY_SEAGULL_FALLING 0x31
+#define ENTITY_SEAGULL_SPLAT   0x32
+
+/* The monster's one-shot after a landing harder than 8 (sound 0x18 at 0x0845e).
+ * Mouth wide open, three frames, and next_type is ENTITY_MONSTER_WALKING, so it
+ * always returns to prowling. Its right-facing artwork is the mirror slot
+ * 0x4c. */
+#define ENTITY_MONSTER_LANDING 0x4b
+
+/* The secret, and it is INVISIBLE: its only frame is sprite 37, the same 0x0
+ * empty one ENTITY_NONE uses. Only the LEADER can find it - `d->type == 1` at
+ * 0x09e27 - for sound 0x2a, and the duck then becomes the second type here,
+ * whose script ending wins the level outright (level_outcome = 1) by a
+ * different route from filling the rocket.
+ *
+ * secret_from_level remembers which level it was found in, and the loader will
+ * not place another there - `cheat_state[9] || level_attempted !=
+ * secret_from_level` - which is what the YOUINTSEENME cheat overrides. An
+ * invisible object named "you ain't seen me" is the joke.
+ *
+ * Where it leads is run_level's tail: the level's own next_level byte, so
+ * 19, 46, 71 and 52 open 200..203, while 29 and 62 show a page instead. */
+#define ENTITY_SECRET             0x4d
+#define ENTITY_DUCK_FOUND_SECRET  0x4e
+
+/* The extra spinning duck arriving, placed by TOOL_EXTRA_DUCK at a fixed y of
+ * 0x64. It shares its whole script with ENTITY_TELEPORT_IN - the same
+ * materialise - and next_type carries it to 0x53. */
+#define ENTITY_EXTRA_DUCK_ARRIVING 0x54
+
+/* The monster standing still, facing left. Its script is byte-identical to
+ * ENTITY_MONSTER_WALKING's - the same sprites 181..184 - and the difference is
+ * entirely in the flags: no bit 2, so it never reaches the right-facing mirror
+ * slot, and no bit 0, so the default movement in entity_update does not apply
+ * to it. It has no arm of its own anywhere in the image.
+ *
+ * So it is the walking monster's picture with the walking taken away, which is
+ * what makes "idle" right and why one level places one. */
+#define ENTITY_MONSTER_IDLE_LEFT 0x55
+
+/* The teleporter, which is a PAIR OF RECORDS and not one entity. The arm at
+ * 0x09fae reads o[1].x and o[1].y - the entity record *after* the entry - as
+ * where the duck comes out, so the exit is found by position in the level file
+ * rather than by any link between them.
+ *
+ * That is a contract the levels keep: all 23 entries in the egg are immediately
+ * followed by an exit, with no exceptions across the 84 level blocks, and the
+ * two are placed 23 times each in the same 17 levels. Reordering those records
+ * would silently send ducks to whatever happened to be next.
+ *
+ * Touching the exit does nothing unless it is the LEADER (`d->type == 1`), and
+ * then it plays its own arrival animation. */
+#define ENTITY_TELEPORTER_ENTRY       0x37
+#define ENTITY_TELEPORTER_EXIT        0x38
+#define ENTITY_TELEPORTER_EXIT_ACTIVE 0x3b
+
+/* A duck riding inside a bubble - NOT a balloon. Three different things in this
+ * game carry or resemble one, and the names have to keep them apart:
+ *   TOOL_BALLOON 0x36            the small red one, goes off on impact
+ *   ENTITY_HOT_AIR_BALLOON_IDLE  the big one with a basket, carries a duck away
+ *   this pair                    a bubble a duck gets into, which drifts and
+ *                                then pops open where it lands
+ *
+ * The code has its whole life:
+ *   0x09d51  a moving duck that is not the leader touches an empty one (0x1f):
+ *            the duck is retired and the balloon becomes this, inheriting the
+ *            duck's facing and drifting
+ *   0x07d64  it moves each frame, and g_2016 set kills the passenger
+ *   0x08160  when it comes to a stop it "lands and hatches" - sound 1, the
+ *            balloon retires, and a fresh duck of type 2 is added where it sat
+ * It is in the list at 0x085f8 that costs a duck for leaving the level, which
+ * is right: there is a duck inside it. */
+#define ENTITY_DUCK_IN_BUBBLE 0x1e
+
+/* The empty one, waiting to be got into: the arm at 0x09d51 fires when a moving
+ * duck that is not the leader touches it. Levels place it 18 times across 10 of
+ * them; the occupied one is never placed, because it is a state. */
+#define ENTITY_BUBBLE_EMPTY   0x1f
+
+/* A somersaulting leader, thrown rightward. Two arms describe it and they agree:
+ * at 0x07e47 it sets its own facing positive while in the air, and at 0x083f0 it
+ * lands - dying if it fell more than 0x32, and otherwise becoming type 1, the
+ * leader, which is what makes this the LEADER's somersault and not a duck's.
+ *
+ * One of four, and the spring that throws them proves the grid rather than
+ * leaving it to be inferred from the landing:
+ *     0x0a243  the right-hand spring: d->type == 1 ? 0x1c : 0x40
+ *     0x0a12f  the left-hand spring:  d->type == 1 ? 0x33 : 0x41
+ * so the leader/duck split and the left/right split are each written once, in
+ * one ternary. Landing agrees: 0x1c and 0x33 come back as type 1, 0x40 and 0x41
+ * as type 2, and any of them dies on a fall of more than 0x32.
+ *
+ * The dispatch for 0x40..0x53 is a jump table at cs:0x3a9a - `sub bx, 0x40` -
+ * not the compare chain, which is why 0x41's landing arm sits apart from the
+ * other three. */
+#define ENTITY_LEADER_SOMERSAULT_RIGHT 0x1c
+#define ENTITY_LEADER_SOMERSAULT_LEFT  0x33
+#define ENTITY_DUCK_SOMERSAULT_RIGHT   0x40
+#define ENTITY_DUCK_SOMERSAULT_LEFT    0x41
+
+/* A duck going into the rocket - but the type belongs to the ROCKET, not to the
+ * duck. At 0x09bc9 the duck is retired outright (type 0, y = -40) and it is the
+ * rocket that becomes 0x1a, with param-- for the one it just took.
+ *
+ * 0x1a bobs the rocket upward (f15 = -4) for two frames and next_type walks it
+ * to 0x1b, which decides what the rocket is now:
+ *     param > 0   back to ENTITY_ROCKET_FLYING + param, so the picture shows
+ *                 the new number - which is what makes ENTITY_ROCKET_N mean
+ *                 "param == N" rather than merely looking like it
+ *     param == 0  ENTITY_ROCKET_FLYING, "Rocket launched!", and if it was the
+ *                 last on the level, outcome 1 - the win */
+#define ENTITY_ROCKET_DUCK_ENTERING 0x1a
+#define ENTITY_ROCKET_DUCK_ENTERED  0x1b
+
+/* The selection brackets. scene_pick_nearest with `mark` set puts scene 3's one
+ * entity at whatever the pointer is nearest and makes it this, so it marks the
+ * hovered entity for whichever tool is in hand - not for the leader picker
+ * alone. scenes[3].count is how draw_entities knows whether to draw it. */
+#define ENTITY_HIGHLIGHT     0x11
+
+/* The box behind the tool in the pen, which is tool_scene entity 0 - entity 1
+ * is the tool's own icon sitting on top of it. Selected is the one with the lit
+ * border; the plain one is sprite 42, the empty slot.
+ *
+ * draw_entities keys its halo off them: an entity of either type sets
+ * halo_next, so the entity drawn AFTER the box gets outlined. That is how the
+ * icon is outlined without the icon's own type having to know about it. */
+#define ENTITY_TOOL_SLOT          0x0f
+#define ENTITY_TOOL_SLOT_SELECTED 0x10
+
 /* Two entity types that are a duck's state rather than an object, so they carry
  * no tool name and no level ever lists them. They are the two halves of one
  * move, and the animation records say so: 0x20 is sprites 103,104,105,106 with
@@ -726,10 +1137,27 @@ extern solid_t far *solids;              /* 0x202d */
 #define TOOL_HORIZONTAL_BRIDGE 0x19   /* "Horizontal bridge" */
 #define TOOL_STOP_SIGN         0x1d   /* "Stop sign" */
 #define TOOL_TREE              0x27   /* "Tree" */
-#define TOOL_SEAGULL           0x28   /* "Seagull" */
+#define TOOL_SEAGULL           0x28   /* "Seagull"; 0x29 is its mirror, below */
 #define TOOL_BALLOON           0x36   /* "Balloon" */
 #define TOOL_BDG9000           0x50   /* "BDG9000" */
 #define TOOL_EXTRA_DUCK        0x52   /* "Extra spinning duck" */
+
+/* THREE TYPE NUMBERS THAT ARE NOT TYPES. Where type_flags has bit 2, the
+ * facing-RIGHT artwork lives in the NEXT slot, and draw_entities reaches it as
+ * anim_script[type + mirror] - so the slot holds a script but no entity is ever
+ * set to it. The direction is worth getting right: mirror is `f14 == 1`, and
+ * f14 == 1 is travelling right, so the type's OWN script is the left-facing one
+ * and the extra slot is the right. cutscene_night_monster settles it - it sets
+ * f14 = -1 with the comment "walking left" and the monster draws from 0x39's
+ * own sprites. Exactly three types do this, and nothing in the image assigns any
+ * of the three companions:
+ *     0x28 TOOL_SEAGULL  -> 0x29
+ *     0x39               -> 0x3a
+ *     0x4b               -> 0x4c
+ * They are worth knowing precisely because the sheet shows them as types with
+ * their own picture, which invites a name they must not be given. The saucer is
+ * NOT one of them: type_flags[0x13] is 0x03, bit 2 clear, and 0x14 is the
+ * cursor - a single script, drawn the same way whichever way it travels. */
 
 enum {
     LEVEL_LIGHTNING = 0, LEVEL_SLIPPERY = 1, LEVEL_WARP = 2, LEVEL_SPARKLE = 3,
@@ -739,7 +1167,8 @@ extern int16_t     level_flags[7];       /* 0x201e */
 extern uint8_t     scenery_count;        /* 0x2000 - a byte */
 extern int16_t     level_outcome;        /* 0x200d - 1 = won, and run_level
                                           * turns that into the 2 it returns */
-extern int16_t     g_1ffa, g_1ffc;       /* what a 0x4e win hands to the menu */
+extern int16_t     secret_from_level, secret_found;
+extern int16_t     in_secret_level;
 extern int16_t     teleport_to_x, teleport_to_y;  /* 0x1ff2, 0x1ff4 */
 extern int16_t     timer_period;         /* 0x2001 */
 extern uint8_t     next_level;           /* 0x2102 */

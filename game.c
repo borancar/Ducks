@@ -233,7 +233,16 @@ int16_t    attract_choice;       /* 0x21ae - 0 demos, non-zero shows a screen */
 int16_t    game_in_progress;   /* 0x2177 - a game is under way, so no idle demo */
 /* The rest of the flags that block declared. [0x509] and [0x50b] left it when
  * they turned out to be cheat_state[2] and [3]. */
-int16_t    g_1ffa, g_1ffc, g_1ffe;
+int16_t    secret_found;         /* 0x1ffc - the leader reached an
+                                  * ENTITY_SECRET this level */
+int16_t    in_secret_level;      /* 0x1ffe - run_level's copy of the above,
+                                  * taken at 0x0d876: "this level IS the
+                                  * secret one" */
+int16_t    secret_from_level;    /* 0x1ffa - the level it was found in, and
+                                  * therefore the one to come back to. Also
+                                  * what stops the loader placing a second
+                                  * secret there (0x08bdb) and one of the
+                                  * bytes a saved game carries */
 /* 0x18e1 - the presses of whatever MOUSE BUTTONS has bound to slot 2, which
  * is USE TOOL. Written by input_poll from p.n[button_map[2]], beside the
  * cycle button below, and read in one place: the frame applies the tool at
@@ -1281,7 +1290,7 @@ void far animate_scene(scene_t far *scene)
             continue;
 
         switch (e->type) {
-        case 0x54:                             /* 0x0a5e0 - face either way */
+        case ENTITY_EXTRA_DUCK_ARRIVING:       /* 0x0a5e0 - face either way */
             e->f14 = (int8_t) ((game_rand() & 2) - 1);
             break;
         case 0x47:                             /* 0x0a602 */
@@ -1290,13 +1299,13 @@ void far animate_scene(scene_t far *scene)
         case 0x46:                             /* 0x0a61a */
             e->f14 = -1;
             break;
-        case 0x2f:                             /* 0x0a632 */
+        case ENTITY_SPARK_SWITCH_FLIPPING:     /* 0x0a632 */
             scene_swap_pair();
             break;
 
         /* 0x0a639. A duck has just gone into the rocket: give it a nudge
-         * upward, and the default then walks it on to 0x1b. */
-        case 0x1a:
+         * upward, and the default then walks it on to the ENTERED state. */
+        case ENTITY_ROCKET_DUCK_ENTERING:
             e->f15 = 0xfc;                     /* -4 */
             break;
 
@@ -1310,24 +1319,26 @@ void far animate_scene(scene_t far *scene)
             e->f16 = 0;
             break;
 
-        case 0x23:                             /* 0x0a6d3 */
+        case ENTITY_STOMPER_SPRUNG:            /* 0x0a6d3 */
             e->y -= 10;
             break;
 
-        /* 0x0a6f0. Drowned. duck_dies has already set the type to 3, so the
-         * default must not run - unless cheat_state[2] says ducks do not die, in which
-         * case duck_dies did nothing and the type still has to move on. */
-        case 0x24:
+        /* 0x0a6f0. Crushed by an ENTITY_STOMPER - this said "Drowned" for a
+         * long time, which was a guess and is wrong. duck_dies has already set
+         * the type to ENTITY_DUCK_CRASHING, so the default must not run -
+         * unless cheat_state[2] says ducks do not die, in which case duck_dies
+         * did nothing and the type still has to move on. */
+        case ENTITY_DUCK_CRUSHED:
             duck_dies(e, 0, 1);
             chain = cheat_state[2];
             break;
 
         /* 0x0a71d. The other way a level is won. */
-        case 0x4e:
+        case ENTITY_DUCK_FOUND_SECRET:
             duck_count--;
             level_outcome = 1;
-            g_1ffc        = 1;
-            g_1ffa        = level_attempted;
+            secret_found        = 1;
+            secret_from_level        = level_attempted;
             break;
 
         /* 0x0a736: THE ROCKET, and the whole of filling one up.
@@ -1344,14 +1355,15 @@ void far animate_scene(scene_t far *scene)
          * is won: outcome 1, which the frame turns into 2 and returns.
          *
          * The type set here survives the default because next_type is the
-         * identity for 5 and for 6..0x0a. */
-        case 0x1b:
-            entity_set_type(e, (int16_t) (e->param + 5));
+         * identity for ENTITY_ROCKET_FLYING and for the five numbered ones. */
+        case ENTITY_ROCKET_DUCK_ENTERED:
+            entity_set_type(e,
+                            (int16_t) (e->param + ENTITY_ROCKET_FLYING));
             if (e->param > 0)                  /* 0x0a780 - still wants ducks */
                 break;
             if (--scenery_count == 0)          /* 0x0a787 */
                 level_outcome = 1;
-            entity_set_type(e, 5);             /* 0x0a799 - launched */
+            entity_set_type(e, ENTITY_ROCKET_FLYING);   /* 0x0a799 */
             message_post(menu_text[44], NULL); /* "Rocket launched!" */
             score += 0x19;
             sound_play_guarded(0x0c, 1);
@@ -1395,7 +1407,8 @@ void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour)
         /* Worked out before the switch, and only taken up after this entity has
          * been drawn: a scene usually holds one highlighted entity, and it is
          * the entity *after* it that gets the halo. */
-        int16_t  halo_next = (e->type == 0x10 || e->type == 0x0f);
+        int16_t  halo_next = (e->type == ENTITY_TOOL_SLOT_SELECTED
+                              || e->type == ENTITY_TOOL_SLOT);
 
         switch (e->type) {
         case 0x36:                                 /* 0x0ac53 */
@@ -1414,23 +1427,23 @@ void far draw_entities(scene_t far *scene, viewport_t view, uint8_t colour)
                 index = (2 - e->type) * 12 + 6 - e->f14 * 4 + cursor_phase;
             break;
 
-        case 4:                                    /* 0x0ad4c */
+        case ENTITY_DUCK_IDLE:                     /* 0x0ad4c */
             if (e->f14)
                 index = 0x7b + (e->f14 < 0);       /* two fixed sprites */
             else
-                index = anim_script[4][e->frame >> 1];
+                index = anim_script[ENTITY_DUCK_IDLE][e->frame >> 1];
             break;
 
-        case 0x26:                                 /* 0x0adb0 */
-            y -= e->f23;
-            index = anim_script[0x26][e->frame >> 1];
+        case ENTITY_STOMPER_RISING:                /* 0x0adb0 */
+            y -= e->f23;                           /* the climb is DRAWN */
+            index = anim_script[ENTITY_STOMPER_RISING][e->frame >> 1];
             break;
 
         case 5:                                    /* 0x0adf2 */
             /* A 32-bit signed compare against zero, and only the high word
              * decides it: y == 0 is not retired. */
             if (e->y < 0)
-                entity_set_type(e, 0);             /* type 0 is retired */
+                entity_set_type(e, ENTITY_NONE);             /* type 0 is retired */
             /* FALL THROUGH */
 
         default:                                   /* 0x0ae36 */
@@ -1956,7 +1969,7 @@ void far episode_page(int16_t ordinal, int16_t egg)
     if (resource_load(&page, 0x4d, 7, 0, 1, 0xff, 1)) {        /* 0x11c15 */
         text_colour[0] = 1;                        /* 0x11c1f */
         load_text_page(&page, 0x45, (uint8_t) ordinal, 1, 0x10e, egg);
-        entity_set_type(cursor_scene.entities, 0); /* 0x11c48 */
+        entity_set_type(cursor_scene.entities, ENTITY_NONE); /* 0x11c48 */
         show_resource_loop(&page, 0);              /* 0x11c56 */
         resource_release(&page);
     }
@@ -2432,7 +2445,7 @@ item_t far *far run_screen(menu_t far *menu, void far *chosen, int16_t owns)
 
     viewport_game.scroll_x = 0;                    /* 0x0c913 */
     viewport_game.scroll_y = 0;
-    entity_set_type(&cursor_scene.entities[0], 0x14);   /* the mouse pointer */
+    entity_set_type(&cursor_scene.entities[0], ENTITY_CURSOR);
     cursor_to_centre(&backdrop);
     mouse_y = drawn * 0x18 + menu_top + 0x23;
     if (*menu->item[drawn].visible == 0)           /* a title cannot be chosen */
@@ -3160,13 +3173,18 @@ void far cutscene_night_monster(void)
     palette_upload();
 
     scene_alloc(&scene, 1);                        /* 0x10154 */
-    scene_add(&scene, 0xfa, 0x80, 0x39, 5);        /* 0x1016a */
+    scene_add(&scene, 0xfa, 0x80, ENTITY_MONSTER_WALKING, 5);  /* 0x1016a */
     scene.entities[0].f14 = (int8_t) 0xff;         /* 0x10173 - walking left */
 
-    /* 0x1019b. The doorway is stamped into the picture rather than drawn every
-     * frame: it never moves, and this way the monster can be clipped by it. */
+    /* 0x1019b. The ROCKET, stamped into the picture rather than drawn every
+     * frame - it never moves. An earlier note here called it a doorway and
+     * explained that the monster could then be clipped by it, which was a
+     * guess dressed as a reason: anim_script[5][0] is sprite 27, and sprite 27
+     * is the rocket with its exhaust lit. It goes down at x 0xfa, the same x
+     * the monster starts from and walks left away from. */
     stamp_sprite_into(0xfa, 0x82,
-                      &sprite_table.base[anim_script[5][0]], &pic);
+                      &sprite_table.base[anim_script[ENTITY_ROCKET_FLYING][0]],
+                      &pic);
 
     image_fill_rect(0, 0x80, SCREEN_SIZE_X, SCREEN_SIZE_Y, &pic, 0);
                                               /* 0x101b4 - the ground */
@@ -3590,7 +3608,7 @@ item_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
             } else if (pick_random_demo()) {       /* 0x126db: rand() % [0x2038] */
                 level_load();                  /* 0x088fa */
                 free(level_text);
-                scroll_shift = 5;  g_1ffc = 0;
+                scroll_shift = 5;  secret_found = 0;
                 saved = cheat_state[2];  cheat_state[2] = 0;     /* switched off for the demo */
                 run_level(1);                  /* 0x1279d - it IS the game */
                 cheat_state[2] = saved;
@@ -3618,7 +3636,7 @@ item_t far *menu_screen_driver(menu_t far *menu, void far *a, int16_t b)
                  * demo picked at random frees. */
                 level_load();                      /* 0x12817 */
                 free(level_text);
-                scroll_shift = 5;  g_1ffc = 0;
+                scroll_shift = 5;  secret_found = 0;
                 saved = cheat_state[2];  cheat_state[2] = 0;
                 run_level(1);                  /* 0x1283a */
                 cheat_state[2] = saved;
@@ -3690,7 +3708,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
             break;
 
         case 1:                                    /* START: unpack the episode */
-            g_1ffc = 0;  g_1ffa = 0;           /* 0x1377b */
+            secret_found = 0;  secret_from_level = 0;           /* 0x1377b */
             menu = &menu_play;
             i = r->param;                          /* the episode ordinal */
             level_attempted   = episode_index[i].first;
@@ -3710,7 +3728,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
 
         case 2:                                    /* 0x137f6: play, tally, repeat */
             for (;;) {
-                if (g_1ffc) {
+                if (secret_found) {
                     sound_play_guarded(0x29, 1);
                     show_splash(menu_text[40], 200);   /* "SECRET LEVEL!" */
                 }
@@ -3724,7 +3742,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                 scroll_shift = 2;
 
                 if (shareware_limit < level_attempted      /* 0x13841 */
-                    && !registered && !g_1ffc) {
+                    && !registered && !secret_found) {
                     level_free();                  /* 0x13856 */
                     egg_load_one(0xfc, 0x48, 0xff);
                     menu = &main_menu;
@@ -3755,7 +3773,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                     goto play_tail;                    /* 0x139b0 */
                 }
 
-                if (g_1ffc || g_1ffe)          /* 0x1388b, 0x13895 */
+                if (secret_found || in_secret_level)          /* 0x1388b, 0x13895 */
                     goto play_tail;            /* 0x13892, 0x1389c */
 
                 level_completed = 1;        /* the level was completed */
@@ -3816,7 +3834,7 @@ void far game_main(menu_t far *menu)               /* main passes &main_menu */
                  * PLAY NEXT LEVEL before the driver draws it again. */
                 if (game_in_progress)
                     menus_resume();                /* 0x13a3a */
-                if (!g_1ffc && !g_1ffe)            /* 0x13a3e, 0x13a48 */
+                if (!secret_found && !in_secret_level)            /* 0x13a3e, 0x13a48 */
                     break;                         /* 0x13a52 */
             }
             break;
@@ -4466,8 +4484,8 @@ void far high_score_screen(void)
 
     show_splash(menu_text[48], 100);               /* "GAME OVER" */
     release_sounds();
-    g_1ffc = 0;
-    g_1ffe = 0;
+    secret_found = 0;
+    in_secret_level = 0;
     sprintf(line, "%s: %i", menu_text[50], score);        /* "SCORE" */
     show_splash(line, 100);
 
@@ -4716,7 +4734,7 @@ int16_t far load_game_screen(void)
     lives           = fgetc(fp);
     level_completed = fgetc(fp);
     if (v12)
-        g_1ffa      = fgetc(fp);
+        secret_from_level      = fgetc(fp);
 
     menus_resume();
     loaded = 1;
@@ -4782,7 +4800,7 @@ void far save_game_screen(void)
     fputc(level_attempted, fp);
     fputc(lives, fp);
     fputc(level_completed, fp);
-    fputc(g_1ffa, fp);
+    fputc(secret_from_level, fp);
     fclose(fp);
 
 done:
@@ -5375,10 +5393,10 @@ void far scene_swap_pair(void)
     for (i = 0; i < scenes[2].count; i++) {
         entity_t far *e = &scenes[2].entities[i];
 
-        if (e->type == 0x2c)
-            entity_set_type(e, 0x2d);
-        else if (e->type == 0x2d)
-            entity_set_type(e, 0x2c);
+        if (e->type == ENTITY_SPARK_GAP)
+            entity_set_type(e, ENTITY_SPARK);
+        else if (e->type == ENTITY_SPARK)
+            entity_set_type(e, ENTITY_SPARK_GAP);
     }
 }
 
@@ -5547,22 +5565,22 @@ void far particles_spawn(int16_t x, int16_t y, int16_t n)
  * and cheat_state[2] is SET. cheat_state[2] is therefore "ducks do not die", and
  * menu_screen_driver clears it for the duration of a demo - which is exactly
  * when they do. Getting it backwards made both sides of the comparison silent
- * for object types 0x0b and 0x58.
+ * for the two touch-and-die hazards, ENTITY_SPIKE and ENTITY_FLAME.
  *
- * Type 3 is dead. Note that this is not how the monster kills - that sets the
+ * ENTITY_DUCK_CRASHING is dead. Note that this is not how the monster kills - that sets the
  * type to 0 and lets the retire pass drop the record; see docs/notes/the-monster.md.
  */
 void far duck_dies(entity_t far *e, int16_t force, int16_t noisy)
 {
     if (!force && cheat_state[2])
         return;
-    if (e->type == 3)
+    if (e->type == ENTITY_DUCK_CRASHING)
         return;
 
     duck_count--;
     if (noisy)
         sound_play_guarded(5, 1);
-    entity_set_type(e, 3);
+    entity_set_type(e, ENTITY_DUCK_CRASHING);
     e->f14 = 0;
     particles_spawn((int16_t) e->x, (int16_t) e->y, 0x28);
 }
@@ -5659,7 +5677,9 @@ void far collide_scenes(void)
         entity_t far *d = &scenes[0].entities[si];
 
         if (d->type != 1 && d->type != 2 && d->type != 4 &&
-            d->type != 0x40 && d->type != 0x41 && d->type != 0x53)
+            d->type != ENTITY_DUCK_SOMERSAULT_RIGHT
+            && d->type != ENTITY_DUCK_SOMERSAULT_LEFT
+            && d->type != ENTITY_DUCK_BALL)
             continue;
 
         for (di = 0; di < scenes[2].count; di++) {
@@ -5673,7 +5693,7 @@ void far collide_scenes(void)
                 continue;
 
             switch (o->type) {
-            case 0x51:                                  /* 0x09a98 */
+            case ENTITY_PADDLE:                         /* 0x09a98 */
                 entity_set_type(d, 0x52);
                 /* face away from it, one step per eight pixels */
                 if (d->x > o->x)
@@ -5683,34 +5703,36 @@ void far collide_scenes(void)
                 sound_play_guarded(4, 1);
                 break;
 
-            case 0x2e:                                  /* 0x09b87 */
+            case ENTITY_SPARK_SWITCH_ON:                /* 0x09b87 */
                 if (d->type == 1) {
                     sound_play_guarded(0x0d, 1);
-                    entity_set_type(o, 0x2f);
+                    entity_set_type(o, ENTITY_SPARK_SWITCH_FLIPPING);
                     score += 0x14;
                 }
                 break;
 
-            case 6: case 7: case 8: case 9: case 0x0a:  /* 0x09bc9 - got home */
+            case ENTITY_ROCKET_1: case ENTITY_ROCKET_2:
+            case ENTITY_ROCKET_3: case ENTITY_ROCKET_4:
+            case ENTITY_ROCKET_5:                   /* 0x09bc9 - got home */
                 if (d->type == 1)
                     break;
                 duck_count--;
                 quota_left--;
-                entity_set_type(d, 0);
+                entity_set_type(d, ENTITY_NONE);
                 d->y = -40;
-                entity_set_type(o, 0x1a);
+                entity_set_type(o, ENTITY_ROCKET_DUCK_ENTERING);
                 o->param--;
                 sound_play_guarded(4, 1);
                 score += carry_bonus();
                 combo_lo = 0xa0;
                 break;
 
-            case 0x48:                                  /* 0x09c72 */
+            case ENTITY_HOT_AIR_BALLOON_IDLE:           /* 0x09c72 */
                 if (d->type == 1)
                     break;
                 sound_play_guarded(0x1f, 1);
-                entity_set_type(o, 0x49);
-                entity_set_type(d, 0x4a);
+                entity_set_type(o, ENTITY_HOT_AIR_BALLOON_FLYING);
+                entity_set_type(d, ENTITY_DUCK_IN_HOT_AIR_BALLOON);
                 d->param = 0;
                 d->f15   = 0xfc;
                 d->y     = o->y;
@@ -5718,84 +5740,100 @@ void far collide_scenes(void)
                 score   += 0x1e;
                 break;
 
-            case 0x1f:                                  /* 0x09d51 */
+            case ENTITY_BUBBLE_EMPTY:                  /* 0x09d51 */
                 if (d->type == 1 || d->f14 == 0)
                     break;
-                entity_set_type(d, 0);
-                entity_set_type(o, 0x1e);
+                entity_set_type(d, ENTITY_NONE);
+                entity_set_type(o, ENTITY_DUCK_IN_BUBBLE);
                 o->f14 = (int8_t) (d->f14 > 0 ? 1 : -1);
                 o->f15 = 0xff;
                 sound_play_guarded(0x14, 1);
                 score += 0x14;
                 break;
 
-            case 0x0b: case 0x58:                       /* 0x09e07 */
+            case ENTITY_SPIKE: case ENTITY_FLAME:       /* 0x09e07 */
                 duck_dies(d, 0, 1);
                 break;
 
-            case 0x4d:                                  /* 0x09e27 */
+            case ENTITY_SECRET:                         /* 0x09e27 */
                 if (d->type == 1) {
-                    entity_set_type(d, 0x4e);
+                    entity_set_type(d, ENTITY_DUCK_FOUND_SECRET);
                     sound_play_guarded(0x2a, 1);
                 }
                 break;
 
-            case 0x39: case 0x4b:                       /* 0x09e64 - eaten */
+            case ENTITY_MONSTER_WALKING:
+            case ENTITY_MONSTER_LANDING:                /* 0x09e64 - eaten */
                 if (cheat_state[2])
                     break;
-                entity_set_type(d, 0);
+                entity_set_type(d, ENTITY_NONE);
                 duck_count--;
-                /* 0x46 and 0x47 are the same eleven-frame swallow, mirrored;
-                 * which one is the object's facing. See the-monster.md. */
-                entity_set_type(o, (int16_t) (0x46 + (o->f14 == 1)));
+                /* The same eleven-frame swallow either way; which one is the
+                 * object's facing. See the-monster.md. */
+                entity_set_type(o,
+                    (int16_t) (ENTITY_MONSTER_EATING_LEFT + (o->f14 == 1)));
                 sound_play_guarded(0x1d, 1);
                 eaten_countdown = 0x32;
                 scenes[2].flag     = di;
                 break;
 
-            case 0x2d:                                  /* 0x09eda */
+            case ENTITY_SPARK:                          /* 0x09eda */
                 if (cheat_state[2])
                     break;
                 sound_play_guarded(0x0f, 1);
-                entity_set_type(d, 0x35);
+                entity_set_type(d, ENTITY_DUCK_ZAPPED);
                 d->f15 = 0xfb;
                 duck_count--;
                 break;
 
-            case 0x22:                                  /* 0x09f20 */
+            case ENTITY_STOMPER:                           /* 0x09f20 */
                 if (d->type == 1)
                     break;
-                entity_set_type(d, 0x24);
-                entity_set_type(o, 0x23);
+                entity_set_type(d, ENTITY_DUCK_CRUSHED);
+                entity_set_type(o, ENTITY_STOMPER_SPRUNG);
                 o->f23 = 0;
                 break;
 
-            case 0x37:                                  /* 0x09fae */
+            /* 0x09f80. Ten points and the bottle becomes the "10" that
+             * floats off it. This arm was missing entirely until 2026-08-13,
+             * found by walking the jump table at cs:0x56bb against the arms
+             * the port had: every other entry was accounted for and this one
+             * was not. Only level 203 has bottles, which is why nothing in
+             * normal play ever showed it up. */
+            case ENTITY_BOTTLE:                         /* 0x09f80 */
+                score += 10;
+                entity_set_type(o, ENTITY_SCORE_POPUP);
+                sound_play_guarded(0x2c, 1);
+                break;
+
+            case ENTITY_TELEPORTER_ENTRY:               /* 0x09fae */
                 if (d->type != 1)
                     break;
                 d->x    = o->x;
-                /* the NEXT record's x and y, read straight past this one */
+                /* the NEXT record's x and y, read straight past this one -
+                 * always an ENTITY_TELEPORTER_EXIT; see game.h */
                 teleport_to_x  = (int16_t) o[1].x;
                 teleport_to_y  = (int16_t) o[1].y;
                 entity_set_type(d, ENTITY_TELEPORT_OUT);
                 sound_play_guarded(0x0a, 1);
                 break;
 
-            case 0x38:                                  /* 0x0a04a */
+            case ENTITY_TELEPORTER_EXIT:                /* 0x0a04a */
                 if (d->type == 1)
-                    entity_set_type(o, 0x3b);
+                    entity_set_type(o, ENTITY_TELEPORTER_EXIT_ACTIVE);
                 break;
 
-            case 0x42: {                                /* 0x0a07c */
+            case ENTITY_FAN: {                          /* 0x0a07c */
                 int16_t at;
 
                 if (cheat_state[2])
                     break;
-                entity_set_type(d, 0);
+                entity_set_type(d, ENTITY_NONE);
                 duck_count--;
                 at = scenes[1].count;
                 if (scene_add(&scenes[1], (int16_t) d->x,
-                              (int16_t) (d->y - 10), 0x43, 0)) {
+                              (int16_t) (d->y - 10),
+                              ENTITY_DUCK_HEAD_SPINNING, 0)) {
                     scenes[1].entities[at].f15 =
                         (uint8_t) (0xfb - (game_rand() & 3));
                     scenes[1].entities[at].f14 =
@@ -5805,30 +5843,35 @@ void far collide_scenes(void)
                 break;
             }
 
-            case 0x3c:                                  /* 0x0a12f */
-                if (d->type == 0x40 || d->type == 0x41)
+            case ENTITY_SPRING_LEFT:                    /* 0x0a12f */
+                if (d->type == ENTITY_DUCK_SOMERSAULT_RIGHT
+                    || d->type == ENTITY_DUCK_SOMERSAULT_LEFT)
                     break;
                 d->y = o->y;
                 d->x = o->x;
-                entity_set_type(o, 0x3e);
-                entity_set_type(d, (int16_t) (d->type == 1 ? 0x33 : 0x41));
+                entity_set_type(o, ENTITY_SPRING_LEFT_LAUNCHING);
+                entity_set_type(d, (int16_t) (d->type == 1
+                                   ? ENTITY_LEADER_SOMERSAULT_LEFT
+                                   : ENTITY_DUCK_SOMERSAULT_LEFT));
                 sound_play_guarded(0x1b, 1);
                 d->f15 = 0xf9;
                 d->f21 = 0;
                 break;
 
-            case 0x3d:                                  /* 0x0a243 */
-                entity_set_type(o, 0x3f);
-                entity_set_type(d, (int16_t) (d->type == 1 ? 0x1c : 0x40));
+            case ENTITY_SPRING_RIGHT:                   /* 0x0a243 */
+                entity_set_type(o, ENTITY_SPRING_RIGHT_LAUNCHING);
+                entity_set_type(d, (int16_t) (d->type == 1
+                                   ? ENTITY_LEADER_SOMERSAULT_RIGHT
+                                   : ENTITY_DUCK_SOMERSAULT_RIGHT));
                 sound_play_guarded(0x1b, 1);
                 d->f15 = 0xf9;
                 d->f21 = 0;
                 break;
 
-            case 0x4f:                                  /* 0x0a2dc */
+            case ENTITY_CATCHER_ROCKET:                 /* 0x0a2dc */
                 duck_count--;
                 quota_left--;
-                entity_set_type(d, 0);
+                entity_set_type(d, ENTITY_NONE);
                 d->y = -40;
                 sound_play_guarded(0x14, 1);
                 score += carry_bonus();
@@ -6080,11 +6123,11 @@ void far tool_selected(int16_t slot)
              * sitting on the OLD slot, drawing the same picture the HUD drew
              * there once at level start, so nothing is damaged.
              *
-             * Setting entity 1 instead paints 0x0f - which is sprite 42, the
+             * Setting entity 1 instead paints ENTITY_TOOL_SLOT - sprite 42, the
              * empty slot - over the old tool's icon for three frames, and then
              * the pair moves away and leaves the hole. That is exactly how "the
              * HUD clears the other tools" was reported. */
-            entity_set_type(&tool_scene.entities[0], 0x0f);
+            entity_set_type(&tool_scene.entities[0], ENTITY_TOOL_SLOT);
             sound_play_guarded(3, 1);
         }
     }
@@ -6362,10 +6405,10 @@ void far tool_click_at(int16_t x, int16_t y)
             switch (picked->type) {
             case TOOL_SAUCER:                      /* 0x0d1ec */
                 tool_use((int16_t) picked->x, (int16_t) picked->y, TOOL_BOMB);
-                entity_set_type(picked, 0);
+                entity_set_type(picked, ENTITY_NONE);
                 break;
             case TOOL_SEAGULL:                     /* 0x0d217 */
-                entity_set_type(picked, 0x31);
+                entity_set_type(picked, ENTITY_SEAGULL_FALLING);
                 particles_spawn((int16_t) picked->x, (int16_t) picked->y, 0x28);
                 sound_play_guarded(6, 3);
                 break;
@@ -6386,7 +6429,8 @@ void far tool_click_at(int16_t x, int16_t y)
             break;                                 /* the old one is not a leader */
         if (scenes[0].flag != 0xff)
             entity_set_type(&scenes[0].entities[scenes[0].flag], 2);
-        if (picked && (picked->type == 2 || picked->type == 4)) {
+        if (picked && (picked->type == 2
+                       || picked->type == ENTITY_DUCK_IDLE)) {
             scenes[0].flag = picked_index;         /* 0x0d2d6 */
             entity_set_type(&scenes[0].entities[scenes[0].flag], 1);
             scenes[0].entities[scenes[0].flag].f16 = 0;
@@ -6400,7 +6444,7 @@ void far tool_click_at(int16_t x, int16_t y)
     case TOOL_BDG9000:                             /* 0x0d32c - cash something in */
         if (picked && picked->type != 0x17 && picked->type != 0) {
             eaten_countdown = 0;
-            entity_set_type(picked, 0x17);
+            entity_set_type(picked, ENTITY_EXPLOSION);
             score += scenes[0].count * 8;          /* eight a duck still out */
             sound_play_guarded(9, 1);
         }
@@ -6409,7 +6453,7 @@ void far tool_click_at(int16_t x, int16_t y)
     case TOOL_EXTRA_DUCK:                          /* 0x0d37a - another duck */
         if (!g_2016) {
             if (scene_add(&scenes[0], (int16_t) scenes[2].entities[0].x,
-                          0x64, 0x54, 0))
+                          0x64, ENTITY_EXTRA_DUCK_ARRIVING, 0))
                 duck_count++;
             else
                 sound_play_guarded(0x17, 1);
@@ -6722,7 +6766,7 @@ void far tool_use(int16_t x, int16_t y, int16_t tool)
     case 0x36:
         sound_play_guarded(9, 1);
         scene_add(&scenes[1], x, y, 0x17, 0);
-        blast_terrain(x, y, anim_script[0x17][0]);
+        blast_terrain(x, y, anim_script[ENTITY_EXPLOSION][0]);
         g_1fd8 = 0;
         break;
 
@@ -6816,22 +6860,22 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
     case 0x36:                                     /* 0x07d89 */
         e->f15 = (uint8_t) 0xfe;
         break;
-    case 0x1e:                                     /* 0x07d64 */
+    case ENTITY_DUCK_IN_BUBBLE:                   /* 0x07d64 */
         if (g_2016)
             duck_dies(e, 1, 0);
         step   = -1;
         active = 1;
         break;
-    case 0x25:                                     /* 0x07d0c */
+    case ENTITY_STOMPER_DOWN:                      /* 0x07d0c */
         if (e->f23++ == 0x20) {
-            entity_set_type(e, 0x26);
+            entity_set_type(e, ENTITY_STOMPER_RISING);
             e->f23 = 0;
         }
         break;
-    case 0x26:                                     /* 0x07d37 */
+    case ENTITY_STOMPER_RISING:                    /* 0x07d37 */
         e->f23 += 2;
         if ((uint16_t) e->f23 >= 0xa) {
-            entity_set_type(e, 0x22);
+            entity_set_type(e, ENTITY_STOMPER);
             e->f23 = 0;
         }
         break;
@@ -6875,7 +6919,7 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         e->f23 = 0;
         break;
     }
-    case 4:                                        /* 0x07f11 - an ordinary duck */
+    case ENTITY_DUCK_IDLE:                         /* 0x07f11 - an ordinary duck */
         if (!level_flags[LEVEL_SLIPPERY]) {
             active = 0;
             break;
@@ -6914,7 +6958,8 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
             active = 1;
         }
         break;
-    /* 0x40 and 0x41 share these two, and that is the whole of the spring's
+    /* The two duck somersaults share these two, and that is the whole of the
+     * spring's
      * horizontal kick. The dispatch for types 0x40..0x53 is a JUMP TABLE at
      * cs:0x3a9a, not the compare chain above it - `sub bx, 0x40` at 0x07c6e -
      * and reading only the chain is how they came to be missing here. An
@@ -6924,18 +6969,20 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
      *
      * They also appear in the settled switch below, at 0x08427, which is where
      * a sprung duck lands. Both are real; this one runs while it is in the air. */
-    case 0x1c: case 0x40:                          /* 0x07e47 */
+    case ENTITY_LEADER_SOMERSAULT_RIGHT:
+    case ENTITY_DUCK_SOMERSAULT_RIGHT:             /* 0x07e47 */
         e->f14 = (int8_t) ((e->f21 < 0xf) + 1);
         break;
-    case 0x33: case 0x41:                          /* 0x07e64 */
+    case ENTITY_LEADER_SOMERSAULT_LEFT:
+    case ENTITY_DUCK_SOMERSAULT_LEFT:              /* 0x07e64 */
         e->f14 = (int8_t) (-(e->f21 < 0xf) - 1);
         break;
-    case 0x4f: case 0x51:                          /* 0x07d94 - toward the cursor */
+    case ENTITY_CATCHER_ROCKET: case ENTITY_PADDLE:  /* 0x07d94 - the cursor */
         step   = 0;
         e->f14 = (int8_t) (((int32_t) mouse_x + 4 - e->x) >> 3);
         active = 1;
         break;
-    case 0x4a:                                     /* 0x07c80 - sinks and settles */
+    case ENTITY_DUCK_IN_HOT_AIR_BALLOON:           /* 0x07c80 - the ride */
         e->y -= 1;
         if (e->y == 0) {
             entity_set_type(e, 2);
@@ -6949,10 +6996,10 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         e->f15 = (uint8_t) 0xfc;
         active = 1;
         break;
-    case 0x53:                                     /* 0x07d04 */
+    case ENTITY_DUCK_BALL:                         /* 0x07d04 */
         active = 1;
         break;
-    case 0x43:                                     /* 0x080a3 */
+    case ENTITY_DUCK_HEAD_SPINNING:                /* 0x080a3 */
         particles_spawn(e->x, e->y, 1);
         break;
     default:                                       /* 0x080bb */
@@ -6988,15 +7035,15 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         if (facing == 0) {                         /* 0x08143 - standing still */
             moved = 1;
             switch (e->type) {
-            case 0x1e:                             /* 0x08160 - it lands and hatches */
+            case ENTITY_DUCK_IN_BUBBLE:           /* 0x08160 - lands, hatches */
                 sound_play_guarded(1, 1);
-                entity_set_type(e, 0);
+                entity_set_type(e, ENTITY_NONE);
                 scene_add(&scenes[0], (int16_t) e->x, (int16_t) e->y, 2, 0);
                 break;
             case 0x52:                             /* 0x08198 */
-                entity_set_type(e, 0x53);
+                entity_set_type(e, ENTITY_DUCK_BALL);
                 /* fall through */
-            case 0x53:                             /* 0x081a7 */
+            case ENTITY_DUCK_BALL:                 /* 0x081a7 */
                 tool_use((int16_t) e->x, (int16_t) e->y, 0x18);
                 score += 5;
                 e->f14 = (int8_t) -(int8_t) e->f14;
@@ -7062,15 +7109,16 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
     if (e->type != 0 && blocked) {
         if (applying) {                            /* 0x0834b - [bp+0xa] */
             tool_use((int16_t) e->x, (int16_t) e->y, e->type);
-            entity_set_type(e, 0);
+            entity_set_type(e, ENTITY_NONE);
             g_1fda = 0;
         } else {
             switch (e->type) {
-            case 1: case 2: case 4:                /* 0x083d2 */
+            case 1: case 2: case ENTITY_DUCK_IDLE: /* 0x083d2 */
                 if (e->f21 > 0x32)
                     duck_dies(e, 0, 1);
                 break;
-            case 0x1c: case 0x33:                  /* 0x083f0 */
+            case ENTITY_LEADER_SOMERSAULT_RIGHT:
+            case ENTITY_LEADER_SOMERSAULT_LEFT:    /* 0x083f0 */
                 if (e->f21 > 0x32)
                     duck_dies(e, 0, 1);
                 else {
@@ -7078,7 +7126,7 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
                     e->f14 = 0;
                 }
                 break;
-            case 0x40:                             /* 0x08427 */
+            case ENTITY_DUCK_SOMERSAULT_RIGHT:     /* 0x08427 */
                 if (e->f21 > 0x32)
                     duck_dies(e, 0, 1);
                 else {
@@ -7086,19 +7134,19 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
                     e->f14 = 0;
                 }
                 break;
-            case 0x39:                             /* 0x0845e */
+            case ENTITY_MONSTER_WALKING:           /* 0x0845e */
                 if (e->f21 > 8) {
                     sound_play_guarded(0x18, 1);
-                    entity_set_type(e, 0x4b);
+                    entity_set_type(e, ENTITY_MONSTER_LANDING);
                     eaten_countdown = 0;
                 }
                 break;
-            case 0x31:                             /* 0x0848b */
-                entity_set_type(e, 0x32);
+            case ENTITY_SEAGULL_FALLING:           /* 0x0848b */
+                entity_set_type(e, ENTITY_SEAGULL_SPLAT);
                 sound_play_guarded(0x10, 3);
                 particles_spawn((int16_t) e->x, (int16_t) e->y, 0x28);
                 break;
-            case 0x41:                             /* 0x08427 via the table */
+            case ENTITY_DUCK_SOMERSAULT_LEFT:      /* 0x08427 via the table */
                 if (e->f21 > 0x32)
                     duck_dies(e, 0, 1);
                 else {
@@ -7106,28 +7154,31 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
                     e->f14 = 0;
                 }
                 break;
-            case 0x4b:                             /* 0x0845e via the table */
+            case ENTITY_MONSTER_LANDING:           /* 0x0845e via the table */
                 if (e->f21 > 8) {
                     sound_play_guarded(0x18, 1);
-                    entity_set_type(e, 0x4b);
+                    entity_set_type(e, ENTITY_MONSTER_LANDING);
                     eaten_countdown = 0;
                 }
                 break;
-            case 0x53:                             /* 0x084be */
+            case ENTITY_DUCK_BALL:                 /* 0x084be */
                 entity_set_type(e, 0x52);
                 tool_use((int16_t) e->x, (int16_t) e->y, 0x18);
                 score += 5;
                 break;
-            case 0x43: case 0x44: case 0x45:       /* 0x084ea - it tumbles */
+            case ENTITY_DUCK_HEAD_SPINNING:
+            case ENTITY_DUCK_HEAD_LEFT:
+            case ENTITY_DUCK_HEAD_RIGHT:           /* 0x084ea - it tumbles */
                 if (e->f21 > 8) {
                     int16_t v = (int16_t) (2 - (e->f21 >> 2) - (game_rand() & 3));
 
                     e->f15 = (uint8_t) v;
                     if ((int8_t) e->f15 < (int8_t) 0xf8)
                         e->f15 = (uint8_t) 0xf8;
-                    entity_set_type(e, 0x43);
-                } else if (e->type == 0x43) {
-                    entity_set_type(e, (int16_t) ((game_rand() & 1) + 0x44));
+                    entity_set_type(e, ENTITY_DUCK_HEAD_SPINNING);
+                } else if (e->type == ENTITY_DUCK_HEAD_SPINNING) {
+                    entity_set_type(e, (int16_t) ((game_rand() & 1)
+                                       + ENTITY_DUCK_HEAD_LEFT));
                 }
                 break;
             default:
@@ -7141,12 +7192,18 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
      * with whatever that means for its type on the way out. */
     if ((int32_t) e->y >= level_h + 8 || e->y <= 1) {
         switch (e->type) {
-        case 6: case 7: case 8: case 9: case 0x0a:
+        case ENTITY_ROCKET_1: case ENTITY_ROCKET_2:
+        case ENTITY_ROCKET_3: case ENTITY_ROCKET_4: case ENTITY_ROCKET_5:
             g_2018 = 1;                            /* 0x085f8 */
             break;
-        case 1: case 2: case 4: case 0x1c: case 0x1e:
+        case 1: case 2: case ENTITY_DUCK_IDLE:
+        case ENTITY_LEADER_SOMERSAULT_RIGHT:
+        case ENTITY_DUCK_IN_BUBBLE:
         case ENTITY_TELEPORT_OUT: case ENTITY_TELEPORT_IN:
-        case 0x33: case 0x40: case 0x41: case 0x4a:
+        case ENTITY_LEADER_SOMERSAULT_LEFT:
+        case ENTITY_DUCK_SOMERSAULT_RIGHT:
+        case ENTITY_DUCK_SOMERSAULT_LEFT:
+        case ENTITY_DUCK_IN_HOT_AIR_BALLOON:
             sound_play_guarded(7, 1);              /* 0x08601 */
             duck_count--;
             break;
@@ -7157,13 +7214,15 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
             sound_play_guarded(0x24, 1);           /* 0x08620 */
             break;
         case 0x52:                                 /* 0x0862d */
-            entity_set_type(e, 0x53);
+            entity_set_type(e, ENTITY_DUCK_BALL);
             if (!g_2016
                 && !scene_add(&scenes[0], (int16_t) scenes[2].entities[0].x,
-                              0x64, 0x54, 0))
+                              0x64, ENTITY_EXTRA_DUCK_ARRIVING, 0))
                 duck_count--;
             break;
-        case 0x47: case 0x4b: case 0x39: case 0x46:  /* 0x08665 */
+        case ENTITY_MONSTER_EATING_RIGHT: case ENTITY_MONSTER_LANDING:
+        case ENTITY_MONSTER_WALKING:
+        case ENTITY_MONSTER_EATING_LEFT:             /* 0x08665 */
             sound_play_guarded(0x19, 1);
             score += 0x19;
             message_post(menu_text[45], 0);
@@ -7172,7 +7231,7 @@ void far entity_update(entity_t far *e, int16_t applying, int16_t scripted)
         default:
             break;
         }
-        entity_set_type(e, 0);                     /* 0x0869b */
+        entity_set_type(e, ENTITY_NONE);                     /* 0x0869b */
         if (applying)
             g_1fda = 0;
     }
@@ -7233,7 +7292,7 @@ void far scene_retire(scene_t far *s)
  * the entity at [0x18ef].
  *
  * With `mark` set it also puts the highlight on it - scene 3's single entity
- * becomes type 0x11 and moves to the picked entity's position - and [0x0d89] ends
+ * becomes ENTITY_HIGHLIGHT and moves to the picked entity's position - and [0x0d89] ends
  * up saying whether anything is highlighted at all. That is scene 3's whole job:
  * one entity that follows whatever the pointer is closest to.
  */
@@ -7260,7 +7319,7 @@ void far scene_pick_nearest(scene_t far *s, int16_t mark)
         if (mark) {                                /* 0x0b055 */
             entity_t far *high = scenes[3].entities;
 
-            entity_set_type(high, 0x11);
+            entity_set_type(high, ENTITY_HIGHLIGHT);
             high->x = picked->x;
             high->y = picked->y;
         }
@@ -7564,8 +7623,8 @@ int16_t far run_level(int16_t demo)
 
     sprite_set_load(sprite_set_id, 0x43, &level_sprites, episode_egg_index);
     too_deep_count = 0;
-    g_1ffe = g_1ffc;                               /* 0x0d876 */
-    g_1ffc = 0;
+    in_secret_level = secret_found;                               /* 0x0d876 */
+    secret_found = 0;
     game_srand((unsigned) level_seed);                  /* 0x0d886 - the level's own */
     clear_vram();
     resource_load(&panel, 0x4d, 0x21, 0, 1, 0xff, 1);
@@ -7576,7 +7635,7 @@ int16_t far run_level(int16_t demo)
     tool_at   = 0;
     tool_type = tool_list[0];
     scene_alloc(&tool_scene, 2);
-    scene_add(&tool_scene, 0x82, 0x10, 0x10, 5);
+    scene_add(&tool_scene, 0x82, 0x10, ENTITY_TOOL_SLOT_SELECTED, 5);
     scene_add(&tool_scene, 0x82, 0x10, tool_type, 5);
     tool_scene.entities[1].param = 1;              /* 0x0d902 */
 
@@ -7679,6 +7738,56 @@ int16_t far run_level(int16_t demo)
             ambience_random();                     /* 0x0dcd3 */
         level_clock++;                             /* 0x0dcd8, [0x201a] */
 
+        /* 0x0dcdc. THE SECRET LEVELS' SPAWNING, and none of it was here until
+         * 2026-08-13 - which is why a secret level in the port stayed empty
+         * while the original filled it. All of it hangs off in_secret_level.
+         *
+         * Two rains, each throttled the same way: `(rand & 0xf) + 1` against
+         * the scene's own count, so a spawn is likely while the scene is small
+         * and stops once it is full. The population settles around eight
+         * rather than being capped at a fixed number.
+         *
+         * Which rain a level gets is decided by what is in it:
+         *   an ENTITY_CATCHER_ROCKET first in scene 2  ducks fall to be caught
+         *   TOOL_BDG9000 in hand                       monsters fall
+         * Level 200 has the rocket, level 201's only tool is the BDG9000, and
+         * they are the two halves of this. Both drop at y = 2 with x random
+         * across 0x20..0x11f, and a monster also gets a random facing. */
+        if (in_secret_level) {
+            /* 0x0dce6. Reading entity 0 of scene 2 without checking the count
+             * is the original's - the array is allocated either way. */
+            if (scenes[2].entities[0].type == ENTITY_CATCHER_ROCKET
+                && level_outcome == 0                  /* 0x0dcf1 */
+                && !g_2016                             /* 0x0dcf8 */
+                && (game_rand() & 0xf) + 1 > scenes[0].count) {
+                scene_add(&scenes[0],
+                          (int16_t) ((game_rand() & 0xff) + 0x20), 2,
+                          ENTITY_DUCK_IDLE, 0);        /* 0x0dd0e */
+                duck_count++;                          /* 0x0dd2b */
+            }
+
+            if (tool_type == TOOL_BDG9000              /* 0x0dd2f */
+                && (game_rand() & 0xf) + 1 > scenes[2].count) {
+                scene_add(&scenes[2],
+                          (int16_t) ((game_rand() & 0xff) + 0x20), 2,
+                          ENTITY_MONSTER_WALKING, 0);  /* 0x0dd45 */
+                /* 0x0dd62. The one just added, which scene_add has already
+                 * counted - the original indexes past the new entity and
+                 * reaches back 0x15 bytes to land on its f14. */
+                scenes[2].entities[scenes[2].count - 1].f14 =
+                    (int8_t) ((game_rand() & 2) - 1);
+            }
+        }
+
+        /* 0x0dd83. The monster's meal ends. eaten_countdown is set to 0x32
+         * when one swallows a duck and was decremented NOWHERE in the port, so
+         * scenes[2].flag - the monster that did it - never came back. */
+        if (eaten_countdown && --eaten_countdown == 0) {
+            sound_play_guarded(0x26, 1);               /* 0x0dd95 */
+            entity_set_type(&scenes[2].entities[scenes[2].flag],
+                            ENTITY_MONSTER_LANDING);   /* 0x0ddb6 */
+        }
+
         /* 0x0ddbc. The demo's OTHER table, and the one that walks the hero.
          * Three bytes a record - a frame and a heading - with script_at as the
          * cursor: when the record under it names this frame the cursor moves
@@ -7729,7 +7838,7 @@ int16_t far run_level(int16_t demo)
                 if (--level_timer == 0)            /* 0x0de16 */
                     sound_play_guarded(0x1c, 1);
             }
-        } else if (!g_2016 && g_1ffe) {            /* 0x0de2e */
+        } else if (!g_2016 && in_secret_level) {            /* 0x0de2e */
             kill_all_ducks();                      /* 0x0de3d */
         }
 
@@ -7769,17 +7878,21 @@ int16_t far run_level(int16_t demo)
 
             /* The events only fire while no tool is in progress, which is the
              * guard at 0x0deaa, and the cursor entity's type follows the tool:
-             * 0x2a plus which side of the cursor the flock is on for a mirrored
-             * tool, 0x14 otherwise, and 0x16 while one is being used. */
+             * the arrow pointing at the flock for a mirrored
+             * tool, ENTITY_CURSOR otherwise, and ENTITY_CURSOR_INACTIVE while
+             * one is being used. */
             if (!g_1fd8 && !g_1fda) {              /* 0x0deaa */
                 entity_set_type(cursor_scene.entities,
-                                (type_flags[tool_type] & 2) ? g_dab + 0x2a : 0x14);
+                                (type_flags[tool_type] & 2)
+                                    ? g_dab + ENTITY_ARROW_LEFT
+                                    : ENTITY_CURSOR);
                 if (demo)
                     demo_events();                 /* 0x0def3 */
                 else if (tool_apply_button)
                     tool_click_at((int16_t) mouse_x, (int16_t) mouse_y);
             } else {
-                entity_set_type(cursor_scene.entities, 0x16);
+                entity_set_type(cursor_scene.entities,
+                                ENTITY_CURSOR_INACTIVE);
                 tool_at = tool_prev;               /* 0x0df24 - put it back */
             }
         }
@@ -7812,9 +7925,9 @@ int16_t far run_level(int16_t demo)
          * outcome, which is why the panel keeps counting and the player is the
          * one who decides to give up.
          *
-         * Skipped entirely for a demo (0x0df70), and while g_2016 or g_1ffe say
+         * Skipped entirely for a demo (0x0df70), and while g_2016 or in_secret_level say
          * the level is already over. */
-        if (!ending_said && !g_2016 && !demo && !g_1ffe) {
+        if (!ending_said && !g_2016 && !demo && !in_secret_level) {
             if (scenes[0].flag == 0xff && can_finish) {         /* 0x0df83 */
                 message_post(menu_text[76], menu_text[80]);
                 ending_said = 1;
@@ -8058,7 +8171,8 @@ int16_t far run_level(int16_t demo)
             int16_t x = (int16_t) (tool_at * 16 + 0x82);
 
             message_post(menu_text[7], tool_names[anim_c[tool_type]]);
-            entity_set_type(&tool_scene.entities[0], 0x10);
+            entity_set_type(&tool_scene.entities[0],
+                            ENTITY_TOOL_SLOT_SELECTED);
             entity_set_type(&tool_scene.entities[1], tool_type);
             tool_scene.entities[0].x = x;
             tool_scene.entities[1].x = x;
@@ -8085,7 +8199,47 @@ int16_t far run_level(int16_t demo)
      * drawn 0x90 up the palette and are not there. */
     text_colour[0] += 0x70;
 
-    return level_outcome == 2;
+    /* 0x0e822. THE SECRET LEVEL, and all of this was missing here until
+     * 2026-08-13. secret_found is set by ENTITY_DUCK_FOUND_SECRET - the leader
+     * reaching the invisible ENTITY_SECRET - and this is what that leads to.
+     *
+     * Two outcomes, and the egg has both:
+     *   next_level set   go there. Levels 19, 46, 71 and 52 name 200, 201, 202
+     *                    and 203, which is the whole of why those four blocks
+     *                    exist outside the 1..80 the episodes cover.
+     *   next_level zero  levels 29 and 62, which also hide a secret but have
+     *                    nowhere to send you: they show a page instead, and
+     *                    blocks 0x59 and 0x41 exist for exactly those two
+     *                    indices and no others.
+     *
+     * `mov al` at 0x0e846 loads only the low byte, but ah still holds the high
+     * byte from the word read at 0x0e829, so the argument is the whole of
+     * level_attempted and it is written as such. */
+    if (secret_found) {
+        secret_from_level = level_attempted;                  /* 0x0e829 */
+        if (next_level) {                          /* 0x0e82f */
+            level_attempted = next_level;          /* 0x0e836 */
+        } else {
+            egg_load_one(level_attempted, 0x59, episode_egg_index);
+            show_resource(0x41, (uint8_t) level_attempted, 0, 0xff);
+            secret_found = 0;                            /* 0x0e863 */
+        }
+    }
+
+    /* 0x0e86f. Coming back OUT of one: in_secret_level is the copy run_level took of
+     * secret_found at 0x0d876, so it says "this level was the secret one". The level
+     * that sent us here is restored and the outcome forced to 2 - a win - so a
+     * secret level cannot be failed, only visited. */
+    if (in_secret_level) {
+        level_attempted = secret_from_level;
+        level_outcome   = 2;
+    }
+
+    /* 0x0e882. TODO: fclose on the play log's FILE * at [0x51f]/[0x521]
+     * (0:0x3007), gated on play_log. The port never opens that file - see the
+     * TODO in tool_click_at - so there is nothing here to close. */
+
+    return level_outcome == 2;                     /* 0x0e899 */
 }
 
 /* --------------------------------------------------- 0x1102a: level_screens
@@ -8217,7 +8371,7 @@ int16_t far level_screens(int16_t level_completed)
 
     if (has_page) {                                /* 0x1131f - the second screen */
         scene_alloc(&scene, 1);
-        scene_add(&scene, 0xa0, 0x3c, 0x34, 5);
+        scene_add(&scene, 0xa0, 0x3c, ENTITY_INFO_SIGN, 5);
         resource_release(&pic);
         if (!resource_load(&pic, 0x4d, 1, 0x80, 1, 0xff, 1))
             fatal("Can't load level information screen", 0);   /* d+0x24e4 */
@@ -8755,22 +8909,24 @@ void far level_load(void)
         layer = 5;
 
         switch (type) {
-        case 0x51:                                    /* 0x08b85 */
+        case ENTITY_PADDLE:                           /* 0x08b85 */
             scene_add(&scenes[2], x, y, type, layer);
             continue;
-        case 0x4f:                                    /* 0x08b9f */
+        case ENTITY_CATCHER_ROCKET:                   /* 0x08b9f */
             scene_add(&scenes[2], x, y, type, layer);
             spare_ducks = 0x10;
             continue;
-        case 0x42:                                    /* 0x08bbd */
+        case ENTITY_FAN:                              /* 0x08bbd */
             scene_add(&scenes[2], x, y, type, layer);
             wide_scene1 = 1;
             continue;
-        case 0x4d:                                    /* 0x08bdb */
-            if (cheat_state[9] || level_attempted != g_1ffa)
+        case ENTITY_SECRET:                           /* 0x08bdb */
+            if (cheat_state[9] || level_attempted != secret_from_level)
                 scene_add(&scenes[2], x, y, type, layer);
             continue;
-        case 6: case 7: case 8: case 9: case 0x0a:    /* 0x08c04 - all one arm,
+        case ENTITY_ROCKET_1: case ENTITY_ROCKET_2:
+        case ENTITY_ROCKET_3: case ENTITY_ROCKET_4:
+        case ENTITY_ROCKET_5:                         /* 0x08c04 - all one arm,
                                                        * the jump table at image
                                                        * 0x9321 has four entries
                                                        * and they are the same */
@@ -8792,7 +8948,8 @@ void far level_load(void)
 
     duck_count = egg_read_byte(egg_stream);           /* 0x08c63 */
     scene_alloc(&scenes[0], duck_count + spare_ducks
-                            + (scenes[2].entities[0].type == 0x51 ? 8 : 0));
+                            + (scenes[2].entities[0].type == ENTITY_PADDLE
+                               ? 8 : 0));
     scene_alloc(&scenes[1], wide_scene1 ? duck_count + 5 : 5);
 
     for (i = 0; i < duck_count; i++) {                /* 0x08cd4 */
@@ -8801,8 +8958,8 @@ void far level_load(void)
         scene_add(&scenes[0], x, y, 4, 0);
     }
 
-    if (scenes[2].entities[0].type == 0x51) {         /* 0x08d19 */
-        scene_add(&scenes[0], 0xa0, 0x64, 0x53, 0);
+    if (scenes[2].entities[0].type == ENTITY_PADDLE) {   /* 0x08d19 */
+        scene_add(&scenes[0], 0xa0, 0x64, ENTITY_DUCK_BALL, 0);
         scenes[0].entities[0].f14 = (int8_t) ((game_rand() & 2) - 1);
         duck_count++;
     }
