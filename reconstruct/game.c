@@ -479,6 +479,15 @@ void far load_eggs_ini(const char far *path)
             if (i == 0xff)                     /* 0x13d08 */
                 fatal("Line too long in INI file", 0);
             c = fgetc(fp);
+            /* Not in the original, and it has to be here. DOS's "rt" is a real
+             * text mode: it turns CRLF into LF before fgetc ever sees it. On a
+             * host where "rt" and "rb" are the same call, the CR survives, the
+             * section header arrives as "[EGGS]\r", the strcmp below fails, and
+             * every egg line is skipped - so the file is ignored in silence and
+             * the fallback loads MAIN.EGG alone. PickEggs writes CRLF, which is
+             * correct for DOS, so any INI it produces hits this. */
+            if (c == '\r')
+                continue;
             line[i] = (char) c;
             if (line[i] == '/')                /* 0x13d2f */
                 line[i] = '\\';
@@ -673,7 +682,8 @@ void far sprite_set_load(uint8_t index, uint8_t type, table_t far *table,
 {
     int16_t i, n, first;
 
-    if (!egg_find_block(type, index, 0xff) && !egg_find_block(type, index, egg))
+    if (!egg_find_block(type, index, EGG_ANY)
+            && !egg_find_block(type, index, egg))
         fatal("Sprite section missing", NULL);    /* ds:0x22d4 */
 
     table->count = egg_read_word(egg_stream);
@@ -1644,7 +1654,7 @@ void far font_load(void)
     uint8_t count, w, h, code;
 
     font_clear();
-    if (!egg_find_block(0x46, 0, 0xff))
+    if (!egg_find_block(0x46, 0, EGG_ANY))
         fatal("Can't find font", NULL);            /* ds:0x22ea */
 
     count = egg_read_byte(egg_stream);
@@ -3872,7 +3882,7 @@ void far load_animations(void)
 {
     int16_t types, n, i, j;
 
-    if (!egg_find_block(0x47, 0, 0xff))
+    if (!egg_find_block(0x47, 0, EGG_ANY))
         fatal("No animation data", 0);             /* d+0x2763 */
 
     types = egg_read_word(egg_stream);
