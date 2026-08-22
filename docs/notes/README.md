@@ -7,8 +7,9 @@ Current, and kept current. Where these disagree with
   four plane loops, and what "progress" means when the speedup is not the point
 - [port-io](port-io.md) — what is left on the wire: the retrace spin, then the
   palette fade, and 81% of traffic removed for no measurable speedup
-- [open-readme-crash](open-readme-crash.md) — the one open bug: the readme runs
-  out of stack, and every symptom after that follows mechanically
+- [open-readme-crash](open-readme-crash.md) — the program runs out of its 2.2 KB
+  of stack, and whether our DOS shim is what makes it short is the open question;
+  the readme is the two-second reproduction, not the cause
 - [open-dgroup-initialisers](open-dgroup-initialisers.md) — bare declarations
   over initialised data: `particle_colours` was one, and seven more need reading
 - [open-frame-comparison](open-frame-comparison.md) — every comparison here is

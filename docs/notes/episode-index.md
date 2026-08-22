@@ -134,11 +134,16 @@ and the flag is again set only on the last record.
 
 **`DUCKS OVERVIEW` runs pages 1 to 3**, and
 [open-readme-crash](open-readme-crash.md) is captured on "DUCKS OVERVIEW, Page 3
-of 3" — the last page of the first section — pressing Down. So the crash is a
-navigation step off the end of a record's page range, and this table is the thing
-the range comes from. Whether that is *why* the stack is exhausted is not
-established: the connection is that the input which breaks it is exactly the one
-that runs past `last`, which is a lead worth following rather than a conclusion.
+of 3" — the last page of the first section — pressing Down.
+
+~~So the crash is a navigation step off the end of a record's page range.~~
+**Wrong, corrected 2026-08-22.** Nothing steps off the range. `show_readme_section`
+guards it — in the original as well as in the port — with `has_next` as
+`(last != at)`, and Down with that flag clear plays the refusal sound rather than
+advancing. The footer at the capture, offering only `UP: Last Page` and
+`ESC: Done`, is that same flag already clear, so the guarded branch is provably
+the one taken. This table is still where the page range comes from and still what
+makes that footer legible; it is not the cause, and it is no longer a lead.
 
 Note also that the ranges are not contiguous — 1-3, then 11-19, then 21 — so page
 numbers are addresses into the egg, not positions in a list, and "next page" from

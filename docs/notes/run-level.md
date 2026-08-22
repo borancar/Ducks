@@ -564,13 +564,6 @@ walk is what caught the two bugs above.
   field. The guest survives that and the port does not, so the harness checks the
   state is a live level before comparing rather than crashing on it.
 
-**Still open, and pre-existing**: on level 4 the port's backdrop differs from the
-guest's in 2 of 320 rows, and the bytes there vary run to run, so they are memory
-the loader never wrote. `compare_level.py` has always reported it; it shows up
-here as `click-castle` differing on ducks standing in those rows. It is a level
-loader question, not a walking one, and the harness now says so rather than
-letting it look like a physics difference.
-
 ## The demos load, so the idle menu plays one
 
 **Written 2026-08-05**: `0x1240f` (`load_demo`), `0x126db` (`pick_random_demo`)
@@ -2071,25 +2064,3 @@ this arm.
 its holes where the original does, the terrain matches, and the bridge that
 stopped short at (183, 87) runs its full length. One missing probe accounted for
 all of it.
-
-### And a second fault in the same routine, still open
-
-`test_entity snapshots/snap003.snap` fails, and did before the fix as well as
-after - 13 fields over 176, all in the walk, all the same shape:
-
-```
-walk: button 1 at (320,96) entity 1 type 0x01  y:   port 106  guest 104
-walk: button 1 at (320,96) entity 1 type 0x01  f15: port 1    guest 252
-walk: button 1 at (320,96) entity 1 type 0x01  f21: port 1    guest 0
-```
-
-The guest leaves the entity two rows higher with `f15 = -4` and `f21` untouched;
-the port moves it two rows DOWN, increments `f21` and leaves `f15` at its
-starting value - so the port took a positive `d` where the original took a
-negative one, or took one where the original took none.
-
-**This is the case to work on next, and it is a much better one than a demo**: it
-is one call deep, reproducible in seconds, and `test_entity` already does the
-marshalling that every hand-rolled probe in this repo has got wrong. Two other
-snapshots - `snap012` and `level80-late` - are clean on the same test, so
-whatever it is needs the state `snap003` has and they do not.

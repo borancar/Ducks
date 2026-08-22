@@ -736,7 +736,7 @@ so this is architectural, not an optimisation.
 | `find_extent.py` | derives the true stored-image size |
 | `test_seg.py` | probes Unicorn's real-mode segmentation behaviour |
 
-Working notes — the current state of the drawing port, the one open bug, the
+Working notes — the current state of the drawing port, what is still open, the
 conventions, and a condensed log of each working session — live in
 [`docs/`](docs/).
 

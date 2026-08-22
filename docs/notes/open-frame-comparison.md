@@ -168,10 +168,14 @@ The landing arm at `0x08427`, which `0x40` and `0x41` do reach, is
 `if (f21 > 0x32) duck_dies(); else { type = 2; f14 = 0; }` - no horizontal term
 there either.
 
-## Still open: the hero briefly drawn as a rocket (demo 4, level 53)
+## Fixed: the hero briefly drawn as a rocket (demo 4, level 53)
 
 Reported 2026-08-08: watching main.egg's demo 4 - level 53, which has three
 `0x3c` springs - the hero sprung by a spring appears for a moment as a rocket.
+
+**Fixed the same day in `5019c9a`.** The cause is in the next section; this one is
+kept for the two dead ends it rules out, which are worth not repeating. Its
+closing guess - the sprite table - was not it either.
 
 Everything on the obvious path is verified and none of it is wrong:
 
@@ -188,11 +192,12 @@ Everything on the obvious path is verified and none of it is wrong:
   object at `0x3e`/`0x3f`, which is the guest's answer.
 
 So type, script and sprite are all correct, and the wrong picture comes from
-somewhere else. The next thing to look at is **which sprite table draw_entities
+somewhere else. ~~The next thing to look at is **which sprite table draw_entities
 indexes**: the game has the global set at `sprite_table` (d+0x18e9) and the
 level's own at `level_sprites`, and the same index means different pictures in
 each. A rocket where a tumbling duck belongs is what indexing the wrong one
-looks like.
+looks like.~~ **That was not it** - both tables were being indexed correctly. The
+dispatch never reached the arm that sets the type at all; see below.
 
 Two things not to repeat while chasing it. The types are not the suspect - that
 was checked twice. And a probe that copies scene 0 and scene 2 between the two

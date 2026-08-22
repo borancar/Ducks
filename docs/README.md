@@ -3,8 +3,8 @@
 Two kinds of thing live here.
 
 **[`notes/`](notes/)** is current and kept current: why the drawing port exists
-and where it stands, the one open bug, how to run a session and read what it
-prints, and the conventions the work follows.
+and where it stands, what is still open and how far each one got, how to run a
+session and read what it prints, and the conventions the work follows.
 
 **[`sessions/`](sessions/)** is historical — a condensed log of each working
 session, extracted from the conversation transcripts with
