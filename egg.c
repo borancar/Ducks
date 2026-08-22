@@ -52,11 +52,25 @@ typedef struct {
     uint32_t offset;            /* from the end of the directory */
 } entry_t;
 
-static uint8_t *egg;            /* the whole file; 2.4 MB is nothing now */
-static size_t   egg_len;
-static entry_t  dir[MAX_ENTRIES];
-static int      dir_count;
-static size_t   data_base;      /* where the directory ends */
+/* One of these per open egg. It used to be one set of globals, so each
+ * egg_open replaced the last and only the final egg in EGGS.INI existed - with
+ * two named, MAIN.EGG's directory was evicted by the second and font_load died
+ * on "Can't find font". The original keeps a 23-byte record per file and picks
+ * between them, which is what egg_find_block's third argument is for. */
+typedef struct {
+    uint8_t *data;              /* the whole file; 2.4 MB is nothing now */
+    size_t   len;
+    entry_t  dir[MAX_ENTRIES];
+    int      dir_count;
+    size_t   data_base;         /* where the directory ends */
+} egg_image_t;
+
+#define MAX_EGGS 5              /* load_eggs_ini refuses a sixth */
+
+static egg_image_t  eggs[MAX_EGGS];
+static int          egg_image_count;
+static egg_image_t *open_image; /* the one egg_find_block last selected, which
+                                 * is the port's stand-in for egg_stream */
 
 static size_t   cursor;         /* the open "stream" every read advances */
 int             block_open;     /* 0x20b6 - egg_find_block's lock, and
@@ -85,35 +99,46 @@ static int      have_pending;
 
 int egg_open(const char *path)
 {
-    FILE  *f = fopen(path, "rb");
-    long   n;
-    int    i;
+    FILE        *f;
+    egg_image_t *im;
+    long         n;
+    int          i;
 
+    if (egg_image_count >= MAX_EGGS)
+        return 0;
+    f = fopen(path, "rb");
     if (!f)
         return 0;
+    im = &eggs[egg_image_count];
     fseek(f, 0, SEEK_END);
     n = ftell(f);
     fseek(f, 0, SEEK_SET);
-    egg = malloc((size_t) n);
-    if (!egg || fread(egg, 1, (size_t) n, f) != (size_t) n) {
+    im->data = malloc((size_t) n);
+    if (!im->data || fread(im->data, 1, (size_t) n, f) != (size_t) n) {
+        free(im->data);
+        im->data = NULL;
         fclose(f);
         return 0;
     }
     fclose(f);
-    egg_len = (size_t) n;
+    im->len = (size_t) n;
 
-    dir_count = (egg[0] << 8) | egg[1];          /* big endian, and it is 303 */
-    if (dir_count > MAX_ENTRIES)
-        dir_count = MAX_ENTRIES;
-    for (i = 0; i < dir_count; i++) {
-        const uint8_t *e = egg + 2 + i * 7;
-        dir[i].type   = e[0];
-        dir[i].index  = e[2];
-        dir[i].offset = (uint32_t) e[3] | ((uint32_t) e[4] << 8)
-                      | ((uint32_t) e[5] << 16) | ((uint32_t) e[6] << 24);
+    im->dir_count = (im->data[0] << 8) | im->data[1];   /* big endian, 303 */
+    if (im->dir_count > MAX_ENTRIES)
+        im->dir_count = MAX_ENTRIES;
+    for (i = 0; i < im->dir_count; i++) {
+        const uint8_t *e = im->data + 2 + i * 7;
+        im->dir[i].type   = e[0];
+        im->dir[i].index  = e[2];
+        im->dir[i].offset = (uint32_t) e[3] | ((uint32_t) e[4] << 8)
+                          | ((uint32_t) e[5] << 16) | ((uint32_t) e[6] << 24);
     }
-    data_base = 2 + (size_t) dir_count * 7;
-    return dir_count;
+    im->data_base = 2 + (size_t) im->dir_count * 7;
+    egg_image_count++;
+    /* Until a block is found, reads come from the egg most recently opened -
+     * which is what the single-egg version did by construction. */
+    open_image = im;
+    return im->dir_count;
 }
 
 /* ------------------------------------------------------------ the stream */
@@ -129,7 +154,9 @@ uint8_t far egg_read_byte(void far *s)
 {
     if (s)
         return (uint8_t) fgetc((FILE *) s);
-    return cursor < egg_len ? egg[cursor++] : 0;
+    if (!open_image)
+        return 0;
+    return cursor < open_image->len ? open_image->data[cursor++] : 0;
 }
 
 /* Big endian, which is what the header and the chunk counts are. */
@@ -189,9 +216,11 @@ void far egg_fread(void far *buf, uint16_t size, uint16_t n)
 {
     size_t want = (size_t) size * (size_t) n;
 
-    if (want > egg_len - cursor)
-        want = egg_len - cursor;
-    memcpy(buf, egg + cursor, want);
+    if (!open_image)
+        return;
+    if (want > open_image->len - cursor)
+        want = open_image->len - cursor;
+    memcpy(buf, open_image->data + cursor, want);
     cursor += want;
 }
 
@@ -204,14 +233,34 @@ void far egg_block_end(void)
     block_open = 0;
 }
 
-/* 0x05232. Seeks the stream to a resource. The original walks the open egg files
- * and sets egg_stream to whichever holds it; there is one egg here, so this is
- * the directory search that was inside that. */
-int16_t far egg_find_block(uint8_t type, uint8_t index, int16_t arg)
+/* 0x05232. Seeks the stream to a resource, choosing which open egg it comes
+ * from. `from_egg` is that choice - an egg index, or EGG_ANY for all of them -
+ * and it is read off the listing at 0x05260:
+ *
+ *     cmp word [bp+0xa], 0xff / je .all
+ *     mov ax, [bp+0xa] / inc ax / mov di, ax     ; di   = from_egg + 1
+ *     mov [bp-4], ax                             ; stop = from_egg
+ *   .all:                                        ; di   = egg_file_count
+ *                                                ; stop = 0
+ *   .egg: dec di ... search egg di ...
+ *     cmp [bp-2], 0 / jne .done                  ; found?
+ *     cmp di, [bp-4] / jle .done / jmp .egg
+ *
+ * so EGG_ANY searches EVERY open egg and any other value searches exactly one,
+ * the one at that index - `di = from_egg + 1` then an immediate `dec di` is a
+ * single pass, because `di > stop` is then `from_egg > from_egg`.
+ *
+ * The direction matters and is not the obvious one: the walk runs DOWNWARDS,
+ * from egg_file_count - 1 to 0, and stops at the first hit. The last egg named
+ * in EGGS.INI therefore wins, which is how an add-on pack overrides the main
+ * one rather than being shadowed by it.
+ *
+ * It also records where it found the block, at 0x05370: [0x20b8] is
+ * current_egg, which is why the episode index knows which file an episode came
+ * from. */
+int16_t far egg_find_block(uint8_t type, uint8_t index, int16_t from_egg)
 {
-    int i;
-
-    (void) arg;
+    int di, stop, found = 0;
     /* 0x0524a, and it is FATAL, not a warning - an earlier comment here said
      * otherwise and was wrong. The listing is
      *
@@ -228,13 +277,38 @@ int16_t far egg_find_block(uint8_t type, uint8_t index, int16_t arg)
      * original refuses to continue from. */
     if (block_open)
         fatal("File slice already in use", NULL);  /* ds:0x22ae */
-    for (i = 0; i < dir_count; i++)
-        if (dir[i].type == type && dir[i].index == index) {
-            cursor = data_base + dir[i].offset;
-            block_open = 1;                      /* 0x0536d */
-            return 1;
-        }
-    return 0;
+
+    /* Transcribed rather than tidied, because the loop's shape is the
+     * behaviour: the test comes first, so nothing runs with no eggs open, and
+     * `di` survives the loop to be stored below. */
+    di   = (from_egg == EGG_ANY) ? egg_image_count          /* 0x05241 */
+                                : from_egg + 1;             /* 0x0526b */
+    stop = (from_egg == EGG_ANY) ? 0 : from_egg;            /* 0x05245, 0x05270 */
+
+    while (!found && di > stop) {                          /* 0x0535c */
+        egg_image_t *im;
+        int          j;
+
+        di--;                                              /* 0x05276 */
+        if (di < 0 || di >= egg_image_count)
+            break;                       /* the port's guard; the original
+                                          * would read past its table */
+        im = &eggs[di];
+        for (j = 0; j < im->dir_count; j++)
+            if (im->dir[j].type == type && im->dir[j].index == index) {
+                open_image = im;
+                cursor     = im->data_base + im->dir[j].offset;
+                found      = 1;                            /* 0x05340 */
+                break;
+            }
+    }
+
+    block_open  = found;                                   /* 0x0536d */
+    /* 0x05370, and it is UNCONDITIONAL - the store sits after the found test,
+     * so a miss leaves current_egg on the last egg examined rather than
+     * untouched. build_episode_index reads it straight after a run of these. */
+    current_egg = (uint8_t) (di < 0 ? 0 : di);
+    return found;
 }
 
 /* --------------------------------------------------------- the decoder */

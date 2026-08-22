@@ -516,7 +516,10 @@ void far delay(int16_t ms);
 /* stubs.c, until each is read out - see that file for what they are */
 int16_t far run_level(int16_t arg);
 item_t far *far run_screen(menu_t far *menu, void far *a, int16_t b);
-int16_t far egg_find_block(uint8_t type, uint8_t index, int16_t arg);
+/* egg_find_block's third argument selects which open egg to look in: an index,
+ * or EGG_ANY for all of them. 0xff is the original's value, at 0x05260. */
+#define EGG_ANY 0xff
+int16_t far egg_find_block(uint8_t type, uint8_t index, int16_t from_egg);
 int16_t far egg_read_word(void far *s);
 void far egg_table_alloc(int16_t n);        /* 0x05005 */
 void far load_eggs_ini(const char far *path);  /* 0x13ccd */
@@ -524,6 +527,9 @@ extern char far *egg_ini_paths[5];
 extern int16_t   egg_ini_count;             /* 0x21d0 */
 int16_t far open_egg(char far *path);       /* 0x05044 */
 extern int block_open;                      /* 0x20b6 */
+extern uint8_t current_egg;                 /* 0x20b8 - egg_find_block
+                                             * stores which egg it last
+                                             * looked at, hit or miss */
 uint8_t far egg_read_byte(void far *s);
 int16_t far alloc_image(void far *d, int16_t a, int16_t b, int16_t c, int16_t e);
 int16_t far load_demo(uint8_t index);
