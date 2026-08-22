@@ -49,19 +49,36 @@ DOS_FN = {
 }
 
 
-def host_path(dos_path):
-    """Resolve a DOS path to a real path, case-insensitively, inside GAME_DIR."""
-    p = dos_path.replace("\\", "/").lstrip("/")
+def host_path(dos_path, cwd=""):
+    """Resolve a DOS path to a real path, case-insensitively, inside GAME_DIR.
+
+    `cwd` is the guest's current directory as a GAME_DIR-relative DOS path ("" is
+    the root). A path beginning with a backslash, or with a drive letter, is
+    absolute and ignores it; anything else is relative to it, which is what makes
+    chdir mean something.
+
+    GAME_DIR is a floor, not a starting point: `..` at the root stays at the
+    root. The write jail checks this again with commonpath, deliberately - a
+    resolver that can be walked out of would make that check the only thing
+    standing between a stray `..\\..\\` and the rest of the disk.
+    """
+    raw = dos_path.replace("\\", "/")
+    absolute = raw.startswith("/") or (len(raw) > 1 and raw[1] == ":")
+    p = raw.lstrip("/")
     if len(p) > 1 and p[1] == ":":
         p = p[2:].lstrip("/")
-    cur = GAME_DIR
+    if not absolute and cwd:
+        p = cwd.replace("\\", "/").strip("/") + "/" + p
+    root = GAME_DIR
+    cur = root
     if not p:
         return cur
     for part in p.split("/"):
         if part in ("", "."):
             continue
         if part == "..":
-            cur = os.path.dirname(cur)
+            cur = cur if os.path.abspath(cur) == os.path.abspath(root) \
+                else os.path.dirname(cur)
             continue
         try:
             entries = os.listdir(cur)
@@ -96,6 +113,16 @@ class DosMachine:
         self.stdout = bytearray()
         self.handles = {}
         self.overlay = {}   # DOS path -> bytes, for files the game creates
+        # The guest's current directory, as a GAME_DIR-relative DOS path with
+        # backslashes; "" is the root. Every path the guest names is resolved
+        # against this, so chdir is the one place it changes.
+        self.cwd = ""
+        # The Disk Transfer Area, where find-first/find-next leave their result.
+        # DOS defaults it to PSP:0080, and a program that never calls AH=1Ah is
+        # relying on exactly that.
+        self.dta = (PSP_SEG, 0x0080)
+        self.finds = {}          # id -> list of pending entries
+        self.find_seq = 0
         self.file_ops = []  # always recorded, regardless of verbosity
         self.next_handle = 5
         self.dta = (PSP_SEG, 0x80)
@@ -365,6 +392,112 @@ class DosMachine:
             return
 
     # ------------------------------------------------------------------- DOS
+    @staticmethod
+    def _dos_match(name, pattern):
+        """DOS 8.3 wildcard matching, which is not fnmatch.
+
+        The difference is the one that matters here: DOS splits both sides into
+        an 8-character name and a 3-character extension and matches them
+        SEPARATELY, so `*` is name-wild with an EMPTY extension - it matches
+        README but not README.TXT. That is how a program lists subdirectories:
+        findfirst("*", FA_DIREC) works because directories have no extension.
+        Treating `*` as fnmatch does, matching everything, hands back the files
+        too - which is what put every .EGG in PickEggs' directory pane twice.
+
+        Within a field, `*` fills the rest of it with `?`, and `?` matches one
+        character or the end of the field.
+        """
+        def split(v):
+            # . and .. are directory entries whose NAME is the dots and whose
+            # extension is blank; partitioning on "." would make the extension
+            # a dot and stop `*` from matching them, which is how a browser
+            # loses the entry it climbs out by.
+            if v in (".", ".."):
+                return v, ""
+            base, dot, ext = v.partition(".")
+            return base[:8], (ext[:3] if dot else "")
+
+        def field(val, pat, width):
+            expanded = ""
+            for ch in pat:
+                if ch == "*":
+                    expanded += "?" * (width - len(expanded))
+                    break
+                expanded += ch
+            if len(expanded) < len(val):
+                return False
+            for i, pc in enumerate(expanded):
+                vc = val[i] if i < len(val) else ""
+                if pc == "?":
+                    continue
+                if vc != pc:
+                    return False
+            return True
+
+        n, e = split(name)
+        pn, pe = split(pattern)
+        return field(n, pn, 8) and field(e, pe, 3)
+
+    def _find_entries(self, pattern, attr_mask):
+        """Directory entries matching a DOS wildcard, as (name, size, mtime, dir).
+
+        The mask is a *permission* rather than a filter: DOS returns ordinary
+        files always, and directories only when bit 4 is asked for. Getting that
+        backwards hides every file behind a mask of 0.
+        """
+        p = pattern.replace("/", "\\")
+        directory, _, leaf = p.rpartition("\\")
+        base = host_path(directory, self.cwd) if directory else \
+            host_path("", self.cwd)
+        leaf = (leaf or "*.*").upper()
+        want_dirs = bool(attr_mask & 0x10)
+        out = []
+        try:
+            names = sorted(os.listdir(base))
+        except OSError:
+            return out
+        # DOS lists . and .. in any directory below the root, and a browser
+        # needs the second one to climb back out. host_path floors `..` at
+        # GAME_DIR, so following it cannot leave the game directory.
+        if want_dirs and self.cwd:
+            names = [".", ".."] + names
+        for name in names:
+            full = os.path.join(base, name)
+            is_dir = os.path.isdir(full)
+            if is_dir and not want_dirs:
+                continue
+            up = name.upper()
+            if not self._dos_match(up, leaf):
+                continue
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            out.append((up, 0 if is_dir else st.st_size, st.st_mtime, is_dir))
+        return out
+
+    def _write_dta(self, fid, entry):
+        """Fill the 43-byte find block DOS leaves at the DTA."""
+        name, size, mtime, is_dir = entry
+        import time as _time
+        t = _time.localtime(mtime)
+        dos_date = ((max(t.tm_year - 1980, 0) & 0x7F) << 9) | \
+                   (t.tm_mon << 5) | t.tm_mday
+        dos_time = (t.tm_hour << 11) | (t.tm_min << 5) | (t.tm_sec // 2)
+        blob = bytearray(43)
+        # The first 21 bytes are DOS's private search state. We only need to
+        # find our way back to the pending list, so the id goes at the front.
+        blob[0:2] = struct.pack("<H", fid)
+        blob[21] = 0x10 if is_dir else 0x20
+        blob[22:24] = struct.pack("<H", dos_time)
+        blob[24:26] = struct.pack("<H", dos_date)
+        blob[26:30] = struct.pack("<I", min(size, 0xFFFFFFFF))
+        raw = name.encode("ascii", "replace")[:12]
+        blob[30:30 + len(raw)] = raw
+        blob[30 + len(raw)] = 0
+        seg, off = self.dta
+        self.uc.mem_write(seg * 16 + off, bytes(blob))
+
     def _dos(self):
         ax = self._reg(UC_X86_REG_AX)
         ah, al = ax >> 8, ax & 0xFF
@@ -427,7 +560,8 @@ class DosMachine:
             name = self._str(ds, dx)
             key = name.replace("/", "\\").upper()
             if (ax & 0xFF) == 0:
-                exists = key in self.overlay or os.path.isfile(host_path(name))
+                exists = key in self.overlay or os.path.isfile(
+                    host_path(name, self.cwd))
                 if exists:
                     self._set(UC_X86_REG_CX, 0x20)      # archive bit
                     self._cf(False)
@@ -447,14 +581,44 @@ class DosMachine:
                 self._set(UC_X86_REG_AX, 0)
             return
         if ah == 0x47:
+            # DS:SI gets the path WITHOUT a leading backslash and without the
+            # drive, which is why the root is the empty string rather than "\\".
             self.uc.mem_write(self._reg(UC_X86_REG_DS) * 16 +
-                              self._reg(UC_X86_REG_SI), b"\x00")
+                              self._reg(UC_X86_REG_SI),
+                              self.cwd.encode("ascii", "replace") + b"\x00")
+            self._set(UC_X86_REG_AX, 0x0100)
+            return
+
+        if ah == 0x3B:
+            # Set the current directory. Answering "unsupported" to this is what
+            # left PickEggs' file browser empty: it chdirs before listing, and
+            # took the failure as "there is nothing there".
+            name = self._str(ds, dx)
+            hp = host_path(name, self.cwd)
+            root = os.path.abspath(GAME_DIR)
+            target = os.path.abspath(hp)
+            inside = (target == root or
+                      os.path.commonpath([target, root]) == root)
+            if inside and os.path.isdir(target):
+                rel = os.path.relpath(target, root)
+                # Upper case, because that is what DOS reports and what the
+                # guest then writes into its own files: EGGS.INI came out with
+                # one path spelled C:\\EGGS and the next C:\\Eggs, the second
+                # being the host directory's real name leaking through. The walk
+                # in host_path is case-insensitive, so this still resolves.
+                self.cwd = "" if rel == "." else rel.replace("/", "\\").upper()
+                self._fop(f"CHDIR {name!r} -> {self.cwd or chr(92)!r}")
+                self._cf(False)
+            else:
+                self._fop(f"CHDIR {name!r} -> NOT FOUND")
+                self._cf(True)
+                self._set(UC_X86_REG_AX, 3)      # path not found
             return
 
         # ---- file services ----
         if ah in (0x3D, 0x3C, 0x5B):
             name = self._str(ds, dx)
-            hp = host_path(name)
+            hp = host_path(name, self.cwd)
             creating = ah in (0x3C, 0x5B)
             key = name.replace("/", "\\").upper()
             if creating:
@@ -582,9 +746,34 @@ class DosMachine:
             self.overlay.pop(name.replace("/", "\\").upper(), None)
             self._fop(f"DELETE {name!r}")
             return
+        if ah == 0x1A:
+            self.dta = (ds, dx)
+            return
         if ah in (0x4E, 0x4F):
-            self._cf(True)
-            self._set(UC_X86_REG_AX, 18)      # no more files
+            # These used to answer "no more files" unconditionally, which is not
+            # the same as being unimplemented: PickEggs asks, is told the
+            # directory is empty, and draws an empty browser. Nothing appears in
+            # the unhandled-call log, so the gap reads as a program that never
+            # looked.
+            if ah == 0x4E:
+                pattern = self._str(ds, dx)
+                entries = self._find_entries(pattern, cx)
+                self.find_seq = (self.find_seq + 1) & 0xFFFF
+                fid = self.find_seq
+                self.finds[fid] = entries
+                self._fop(f"FINDFIRST {pattern!r} attr={cx:#04x} -> "
+                          f"{len(entries)} match(es) "
+                          f"{[(e[0], 'dir' if e[3] else 'file') for e in entries]}")
+            else:
+                fid = struct.unpack("<H", self._rd(*self.dta, 2))[0]
+                entries = self.finds.get(fid, [])
+            if not entries:
+                self._cf(True)
+                self._set(UC_X86_REG_AX, 18)      # no more files
+                return
+            self._write_dta(fid, entries.pop(0))
+            self._cf(False)
+            self._set(UC_X86_REG_AX, 0)
             return
         if ah in (0x4C, 0x00):
             self.finished = f"INT 21h AH={ah:02x}h exit code {al}"

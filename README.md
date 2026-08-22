@@ -56,12 +56,13 @@ skipped). Do the [Unpacking](#unpacking) step first.
 **`trace_dos.py` only ever reads the host filesystem.** It serves reads from the
 real game directory and satisfies the program's writes from an in-memory overlay,
 so nothing there is created or modified. That guarantee is what makes it safe to
-point at an unfamiliar code path, and it is why behaviour changes go in
-`native.py` instead.
+point at an unfamiliar code path.
 
-**`native.py` does persist saves**, because a save that cannot survive a restart
-is not a save. Writes land in the game directory on close, atomically via a temp
-file. Anything resolving outside that directory is refused, as is any write to an
+**`emulation.py` and everything above it do persist**, because a save that cannot
+survive a restart is not a save. Writes land in the game directory on close,
+atomically via a temp file. This used to live in `native.py`; it moved down a
+layer on 2026-08-22 so that anything running on the baseline can write, which
+`PickEggs.exe` needs in order to produce an `EGGS.INI` you can read afterwards. Anything resolving outside that directory is refused, as is any write to an
 `.exe`, `.egg` or `.com` - a write-back to the program's own image is one of the
 things this analysis set out to rule out, so an attempt is logged loudly rather
 than performed. `--read-only` restores the overlay-only behaviour.

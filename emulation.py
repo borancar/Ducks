@@ -11,9 +11,13 @@ Extends the DOS shim in trace_dos.py with:
   * live input - host keyboard fed through the BIOS INT 16h buffer, host mouse
     through INT 33h
 
-The host filesystem stays READ-ONLY, exactly as in trace_dos.py: the game's
-writes to settings.dat and save files are intercepted in memory. Nothing in the
-game directory is modified.
+Writes land in the game directory for real, atomically, when a file is closed -
+a save that cannot survive a restart is not a save, and PickEggs' EGGS.INI is
+not one either. Two guards, both in _writable_host_path: anything resolving
+outside the game directory is refused, and so is any write to an .exe, .egg or
+.com, because a write-back to the program's own image is one of the things this
+analysis set out to rule out. `--read-only` restores the overlay-only behaviour
+of trace_dos.py, which remains unable to write under any flag.
 
 Usage:
     python emulation.py                        # interactive window
@@ -31,7 +35,7 @@ from collections import Counter, deque
 import pygame
 from unicorn import *
 from unicorn.x86_const import *
-from trace_dos import DosMachine
+from trace_dos import DosMachine, GAME_DIR, host_path
 from sb import SoundBlaster
 from xms import XMS
 
@@ -118,7 +122,12 @@ PORTS = {
 
 
 class VgaDos(DosMachine):
-    def __init__(self, exe, blaster=False, **kw):
+    def __init__(self, exe, blaster=False, persist=True, **kw):
+        # Writeability lives here rather than in native.py, so that anything
+        # running on this baseline can persist - PickEggs writes EGGS.INI and is
+        # not the game. trace_dos.py underneath is still incapable of it.
+        self.persist = persist
+        self.files_persisted = {}
         self.palette = [(0, 0, 0)] * 256
         self.dac_index = 0
         self.dac_phase = 0
@@ -572,7 +581,87 @@ class VgaDos(DosMachine):
             self._set(UC_X86_REG_AX, cx)
             self._cf(False)
             return
-        return super()._dos()
+        # Capture what the call is about to consume: the parent pops the handle
+        # on close and drops the overlay entry on delete, so both are gone by
+        # the time it returns.
+        closing = deleting = None
+        if self.persist and ah == 0x3E:
+            h = self.handles.get(self._reg(UC_X86_REG_BX))
+            if h is not None and getattr(h, "key", None):
+                closing = h
+        elif self.persist and ah == 0x41:
+            deleting = self._str(self._reg(UC_X86_REG_DS),
+                                 self._reg(UC_X86_REG_DX))
+        r = super()._dos()
+        if closing is not None:
+            self._persist(closing.path, bytes(closing.data))
+        if deleting is not None:
+            self._unpersist(deleting)
+        return r
+
+    def _writable_host_path(self, name):
+        """Resolve a DOS path for writing, or None if it is out of bounds.
+
+        Two guards. Writes must land inside GAME_DIR - a path escaping it means
+        we misread it, and host_path already floors `..` there, so this is the
+        second of two. And the program has no business rewriting its own code or
+        data: per the analysis plan's negative checks, a write to an .exe or
+        .egg is a finding, not something to quietly perform.
+        """
+        hp = os.path.abspath(host_path(name, self.cwd))
+        root = os.path.abspath(GAME_DIR)
+        if os.path.commonpath([hp, root]) != root:
+            self._fop(f"REFUSED write outside game dir: {name!r} -> {hp}")
+            return None
+        if os.path.splitext(hp)[1].lower() in (".exe", ".egg", ".com"):
+            self._fop(f"REFUSED write to program/data file: {name!r}")
+            return None
+        return hp
+
+    def _persist(self, name, data):
+        """Write a closed file out for real, atomically."""
+        hp = self._writable_host_path(name)
+        if hp is None:
+            return
+        tmp = hp + ".part"
+        try:
+            os.makedirs(os.path.dirname(hp), exist_ok=True)
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, hp)
+        except OSError as e:
+            self._fop(f"SAVE FAILED {name!r}: {e}")
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            return
+        self.files_persisted[name] = len(data)
+        self._fop(f"SAVED {name!r} -> {hp} ({len(data)} bytes)")
+
+    def _unpersist(self, name):
+        hp = self._writable_host_path(name)
+        if hp is None or not os.path.isfile(hp):
+            return
+        try:
+            os.unlink(hp)
+            self._fop(f"DELETED {name!r} -> {hp}")
+            self.files_persisted.pop(name, None)
+        except OSError as e:
+            self._fop(f"DELETE FAILED {name!r}: {e}")
+
+    def flush_open_files(self):
+        """Write out anything still open, for a quit mid-write.
+
+        A program that closes its files properly never needs this - but losing a
+        save to a window closed at the wrong moment would be a confusing way to
+        find out.
+        """
+        if not self.persist:
+            return
+        for h in list(self.handles.values()):
+            if getattr(h, "key", None) and h.written:
+                self._persist(h.path, bytes(h.data))
 
     def _mouse(self):
         ax = self._reg(UC_X86_REG_AX)
@@ -1049,6 +1138,9 @@ def main():
                          "e.g. 0x2104,0x18f6")
     ap.add_argument("--text-trace", action="store_true",
                     help="log cursor moves and direct text-buffer writes")
+    ap.add_argument("--read-only", action="store_true",
+                    help="do not write to the game directory; keep every write "
+                         "in the in-memory overlay, as trace_dos.py does")
     ap.add_argument("--mouse-debug", action="store_true",
                     help="log every mouse button event and INT 33h query")
     args = ap.parse_args()
@@ -1063,13 +1155,16 @@ def main():
         os.makedirs(args.shot_dir, exist_ok=True)
 
     pygame.init()
-    m = VgaDos(args.exe, blaster=args.blaster, max_insns=1 << 62)
+    m = VgaDos(args.exe, blaster=args.blaster, max_insns=1 << 62,
+               persist=not args.read_only)
     audio = None
     if args.blaster and not args.no_audio and not headless:
         audio = AudioSink()
     print(f"=== running {args.exe} "
           f"(BLASTER {'set' if args.blaster else 'unset'}) ===")
-    print("    host filesystem READ-ONLY; writes intercepted in memory")
+    print("    host filesystem READ-ONLY; writes intercepted in memory"
+          if args.read_only else
+          "    writes land in the game directory on close (--read-only to stop)")
 
     pygame.font.init()
     CELL = (8, 16)
@@ -1322,7 +1417,11 @@ def main():
         path = m.sb.write_wav(args.wav)
         print(f"  audio written   : {path or 'nothing - no PCM produced'}")
     print(f"  files read      : {m.files_read}")
-    print(f"  files written   : {m.files_written} (intercepted)")
+    if m.persist:
+        print(f"  files written   : {m.files_written}")
+        print(f"  files persisted : {m.files_persisted}")
+    else:
+        print(f"  files written   : {m.files_written} (intercepted)")
     print(f"  files missing   : {m.files_missing}")
     if m.stdout:
         print("  console output  :")

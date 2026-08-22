@@ -8,18 +8,29 @@ trace_dos.py    DOS/BIOS shim, headless
     native.py   subclasses that, replaces I/O and game routines with Python
 ```
 
-**New behaviour goes in `native.py`.**
+**Game-specific behaviour goes in `native.py`.**
 
 `trace_dos.py`'s value is precisely that it *cannot* alter the game directory: it
 serves reads from the real files and satisfies writes from an in-memory overlay.
 That is what makes it safe to point at an unfamiliar code path. Weakening it to
-add a feature destroys the guarantee. `native.py` already overrides the hook
-points (`_dos()`, the native tables), so behaviour belongs there — including save
-persistence, which is why `native.py` writes and `trace_dos.py` does not.
+add a feature destroys the guarantee, and that has not changed.
 
 `emulation.py` (Unicorn + SDL, reaches the menu with Mode X graphics correct and
 working audio) is a reviewed working baseline. Avoid incidental edits to it;
-edit it when the task genuinely requires it — sound work is the usual reason.
+edit it when the task genuinely requires it — sound work was the usual reason.
+
+**Writeability moved here on 2026-08-22**, out of `native.py`. The test was
+`PickEggs.exe`, the egg selector shipped beside the game: it is not Ducks, so
+none of `native.py` applies to it, but it writes an `EGGS.INI` that is worthless
+if it cannot be read back afterwards. Persistence was not game-specific, so it
+belongs on the baseline rather than in the port. The two guards moved with it -
+nothing outside the game directory, nothing ending `.exe`, `.egg` or `.com` - and
+`--read-only`, now on `emulation.py` too, restores the overlay-only behaviour.
+
+**What is generic DOS goes in `trace_dos.py`.** `chdir`, find-first/find-next and
+the DTA landed there in the same change, because they are services DOS has rather
+than behaviour Ducks needs, and a shim that answers them wrongly misleads every
+layer above it. None of them writes anything.
 
 If a change to a lower layer looks unavoidable, say why rather than assuming, and
 keep the opt-out that restores the safe mode (`--read-only`).
